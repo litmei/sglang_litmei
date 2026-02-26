@@ -309,15 +309,28 @@ def forward_dsa_prepare_npu(
     else:
         fused_qkv_a_proj_out = m.fused_qkv_a_proj_with_mqa(hidden_states)[0]
         
-        q_lora, k_nope, k_pe = fused_split_qk_norm(
-            fused_qkv_a_proj_out,
-            m.q_a_layernorm,
-            m.kv_a_layernorm,
-            m.q_lora_rank,
-            m.kv_lora_rank,
-            m.qk_rope_head_dim,
-            eps=1e-6,
-        )
+        if fused_qkv_a_proj_out.shape[0] < 65535:
+            q_lora, k_nope, k_pe = fused_split_qk_norm(
+                fused_qkv_a_proj_out,
+                m.q_a_layernorm,
+                m.kv_a_layernorm,
+                m.q_lora_rank,
+                m.kv_lora_rank,
+                m.qk_rope_head_dim,
+                eps=m.q_a_layernorm.variance_epsilon,
+            )
+        else:
+            q, latent_cache = fused_qkv_a_proj_out.split(
+                [m.q_lora_rank, m.kv_lora_rank + m.qk_rope_head_dim], dim=-1
+            )
+            # overlap qk norm
+            q = m.q_a_layernorm(q)
+
+            q_lora = q.clone()  # required for topk_indices
+            k_nope, k_pe = latent_cache.unsqueeze(1).split(
+                [m.kv_lora_rank, m.qk_rope_head_dim], dim=-1
+            )
+            k_nope = m.kv_a_layernorm(k_nope)
 
         q_event = None
         if m.alt_stream is not None:
