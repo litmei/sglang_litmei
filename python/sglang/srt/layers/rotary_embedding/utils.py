@@ -18,7 +18,9 @@ if _is_npu:
     NPU_ROTARY_MUL_MAX_NUM_HEADS = 1000
     NPU_ROTARY_MUL_MAX_HEAD_SIZE = 896
 
-
+# Disable torch.compile for apply_rotary_pos_emb_native when ViT CUDA graph is enabled
+# to avoid `torch._dynamo.exc.InternalTorchDynamoError: RuntimeError: Cannot call
+# CUDAGeneratorImpl::current_seed during CUDA graph capture.`
 _disable_rotary_pos_emb_compile = envs.SGLANG_VIT_ENABLE_CUDA_GRAPH.get()
 
 
