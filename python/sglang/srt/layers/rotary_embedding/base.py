@@ -202,7 +202,13 @@ class RotaryEmbedding(MultiPlatformOp):
             positions = positions + offsets
         
         if _is_npu and query.shape[0] * query.shape[1] < 65535:
-            return fused_rope_qk_mqa(query, key, self.cos_sin_cache.index_select(0, positions), self.rotary_dim, self.is_neox_style)
+            return fused_rope_qk_mqa(
+                query,
+                key,
+                self.cos_sin_cache.index_select(0, positions),
+                self.rotary_dim,
+                self.is_neox_style,
+            )
 
         positions = positions.flatten()
         num_tokens = positions.shape[0]

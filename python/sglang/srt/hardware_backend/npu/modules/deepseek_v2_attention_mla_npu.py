@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 import torch
 import torch_npu
+from sgl_kernel_npu.norm.fused_split_qk_norm import fused_split_qk_norm
 
 from sglang.srt.hardware_backend.npu.attention.mla_preprocess import (
     NPUFusedMLAPreprocess,
@@ -14,7 +15,6 @@ from sglang.srt.layers.attention.nsa.utils import (
     nsa_use_prefill_cp,
 )
 from sglang.srt.layers.communicator import get_attn_tp_context
-from sgl_kernel_npu.norm.fused_split_qk_norm import fused_split_qk_norm
 
 if TYPE_CHECKING:
     from sglang.srt.model_executor.forward_batch_info import ForwardBatch
@@ -308,7 +308,7 @@ def forward_dsa_prepare_npu(
         )
     else:
         fused_qkv_a_proj_out = m.fused_qkv_a_proj_with_mqa(hidden_states)[0]
-        
+
         if fused_qkv_a_proj_out.shape[0] < 65535:
             q_lora, k_nope, k_pe = fused_split_qk_norm(
                 fused_qkv_a_proj_out,
