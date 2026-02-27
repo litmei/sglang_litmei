@@ -7,6 +7,7 @@ from typing import Tuple
 
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.utils import get_compiler_backend, is_npu
 
 _is_npu = is_npu()
@@ -16,6 +17,9 @@ if _is_npu:
 
     NPU_ROTARY_MUL_MAX_NUM_HEADS = 1000
     NPU_ROTARY_MUL_MAX_HEAD_SIZE = 896
+
+
+_disable_rotary_pos_emb_compile = envs.SGLANG_VIT_ENABLE_CUDA_GRAPH.get()
 
 
 def rotate_neox(x: torch.Tensor) -> torch.Tensor:
@@ -68,7 +72,11 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-@torch.compile(dynamic=True, backend=get_compiler_backend())
+@torch.compile(
+    dynamic=True,
+    backend=get_compiler_backend(),
+    disable=_disable_rotary_pos_emb_compile,
+)
 def apply_rotary_pos_emb_native(
     q: torch.Tensor,
     k: torch.Tensor,
