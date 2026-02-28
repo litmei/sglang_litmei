@@ -226,7 +226,7 @@ TEST_RETRACT_NO_PREFILL_BS = envs.SGLANG_TEST_RETRACT_NO_PREFILL_BS.get()
 _is_cuda = is_cuda()
 _is_npu = is_npu()
 if _is_npu:
-    torch.cuda = torch.npu
+    torch.cuda.synchronize = torch.npu.synchronize
 
 
 @dataclass
@@ -1164,7 +1164,7 @@ class Scheduler(
         prof_cnt = 0
         prof = None
         if enable_profiling:
-            if is_npu():
+            if _is_npu:
                 import torch_npu
 
                 experimental_config = torch_npu.profiler._ExperimentalConfig(
@@ -1196,7 +1196,7 @@ class Scheduler(
                     with_flops=False,
                     experimental_config=experimental_config,
                 )
-            elif is_cuda():
+            elif _is_cuda:
                 prof = torch.profiler.profile(
                     activities=[
                         torch.profiler.ProfilerActivity.CPU,
