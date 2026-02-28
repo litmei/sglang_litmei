@@ -314,8 +314,8 @@ class Envs:
     # prof
     MY_ENABLE_PROFILING = EnvBool(False)
     MY_PROFILING_BS = EnvInt(8)
-    MY_PROFILING_STEP = EnvStr("decode")
-    MY_PROFILING_STAGE = EnvInt(10)
+    MY_PROFILING_STAGE = EnvStr("decode")
+    MY_PROFILING_STEP = EnvInt(10)
 
     # Quantization
     SGLANG_INT4_WEIGHT = EnvBool(False)
