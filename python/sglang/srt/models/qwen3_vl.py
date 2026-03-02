@@ -30,6 +30,9 @@ from sglang.srt.configs.qwen3_vl import Qwen3VLConfig, Qwen3VLVisionConfig
 from sglang.srt.distributed import get_tensor_model_parallel_world_size
 from sglang.srt.distributed.parallel_state import get_pp_group
 from sglang.srt.environ import envs
+from sglang.srt.hardware_backend.npu.graph_runner.vit_npu_graph_runner import (
+    ViTNpuGraphRunner,
+)
 from sglang.srt.layers.attention.vision import (
     BATCH_BUCKETS,
     FLASHINFER_MAX_SEQLEN_BUCKETS,
@@ -70,7 +73,6 @@ from sglang.srt.models.utils import (
 )
 from sglang.srt.multimodal.mm_utils import run_dp_sharded_mrope_vision_model
 from sglang.srt.multimodal.vit_cuda_graph_runner import ViTCudaGraphRunner
-from sglang.srt.hardware_backend.npu.graph_runner.vit_npu_graph_runner import ViTNpuGraphRunner
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import add_prefix, get_int_env_var, is_npu, round_up
 from sglang.srt.utils.hf_transformers_utils import get_processor
@@ -318,6 +320,7 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
                 self.num_position_embeddings,
                 self.hidden_size,
                 quant_config=quant_config,
+                enable_tp=not get_global_server_args().mm_enable_dp_encoder,
                 use_attn_tp_group=is_dp_attention_enabled(),
                 prefix=add_prefix("pos_embed", prefix),
             )
