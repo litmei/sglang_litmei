@@ -21,6 +21,8 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import torch
 
 from sglang.srt.distributed import (
+    get_moe_expert_parallel_rank,
+    get_moe_expert_parallel_world_size,
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
     get_tp_group,
@@ -523,6 +525,17 @@ class LayerCommunicator:
                             output_unquantized_inp1=False,
                         )
                     else:
+                        if post_residual_addition is not None:
+                            ep_rank = get_moe_expert_parallel_rank()
+                            ep_size = get_moe_expert_parallel_world_size()
+                            assert (
+                                post_residual_addition.shape[0] % ep_size == 0
+                            ), f"post_residual_addition.shape[0] ({post_residual_addition.shape[0]}) can not be div by ep_size ({ep_size})"
+                            local_size = post_residual_addition.shape[0] // ep_size
+                            start_idx = ep_rank * local_size
+                            post_residual_addition = post_residual_addition[
+                                start_idx : start_idx + local_size
+                            ]
                         hidden_states, residual = self.input_layernorm(
                             hidden_states,
                             residual,
