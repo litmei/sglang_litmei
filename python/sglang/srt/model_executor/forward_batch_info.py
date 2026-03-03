@@ -453,17 +453,21 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
             ret.original_global_num_tokens_cpu = batch.global_num_tokens
             ret.global_num_tokens_cpu = global_num_tokens
-            ret.global_num_tokens_gpu = torch.tensor(
-                global_num_tokens, dtype=torch.int64
-            ).to(device, non_blocking=True)
-
             ret.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
-            ret.global_num_tokens_for_logprob_gpu = torch.tensor(
-                global_num_tokens_for_logprob, dtype=torch.int64
-            ).to(device, non_blocking=True)
+
+        def _post_set_device_attr():
+            # For MLP sync
+            if batch.global_num_tokens is not None:
+                ret.global_num_tokens_gpu = torch.tensor(
+                    global_num_tokens, dtype=torch.int64
+                ).to(device, non_blocking=True)
+                ret.global_num_tokens_for_logprob_gpu = torch.tensor(
+                    global_num_tokens_for_logprob, dtype=torch.int64
+                ).to(device, non_blocking=True)
 
         if ret.forward_mode.is_idle():
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
+            _post_set_device_attr()
             return ret
 
         # Override the positions with diffusion LLM or spec_info
@@ -529,6 +533,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
             model_runner.lora_manager.prepare_lora_batch(ret)
 
+        _post_set_device_attr()
         return ret
 
     def adjust_num_token_non_padded_for_attn_tp(self, server_args) -> None:
