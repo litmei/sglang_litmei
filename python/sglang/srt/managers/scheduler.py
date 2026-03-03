@@ -1235,16 +1235,15 @@ class Scheduler(
 
             # Launch the current batch
             if batch:
-                is_prof_stage = False
-                if enable_profiling:
-                    # if (prof_stage == "decode" and batch.forward_mode.is_decode()) or (
-                    #     prof_stage == "prefill" and batch.forward_mode.is_extend()
-                    # ):
-                    #     is_prof_stage = True
 
-                    if (
-                        len(batch.reqs) >= prof_bs and prof_cnt == 0
-                    ):  # and is_prof_stage:
+                if enable_profiling:
+                    is_prof_stage = False
+                    if (prof_stage == "decode" and batch.forward_mode.is_decode()) or (
+                        prof_stage == "prefill" and batch.forward_mode.is_extend()
+                    ):
+                        is_prof_stage = True
+
+                    if len(batch.reqs) >= prof_bs and prof_cnt == 0 and is_prof_stage:
                         prof.start()
                         prof_cnt += 1
                     if prof_cnt > 0:  # and is_prof_stage:
