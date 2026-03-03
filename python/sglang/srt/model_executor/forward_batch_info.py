@@ -432,7 +432,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         if enable_num_token_non_padded(model_runner.server_args):
             ret.num_token_non_padded = torch.tensor(
                 len(batch.input_ids), dtype=torch.int32
-            ).to(device, non_blocking=True)
+            )  # .to(device, non_blocking=True)
         ret.num_token_non_padded_cpu = len(batch.input_ids)
 
         # For MLP sync
@@ -451,14 +451,14 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
             ret.original_global_num_tokens_cpu = batch.global_num_tokens
             ret.global_num_tokens_cpu = global_num_tokens
-            ret.global_num_tokens_gpu = torch.tensor(
-                global_num_tokens, dtype=torch.int64
-            ).to(device, non_blocking=True)
+            # ret.global_num_tokens_gpu = torch.tensor(
+            #     global_num_tokens, dtype=torch.int64
+            # ).to(device, non_blocking=True)
 
             ret.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
-            ret.global_num_tokens_for_logprob_gpu = torch.tensor(
-                global_num_tokens_for_logprob, dtype=torch.int64
-            ).to(device, non_blocking=True)
+            # ret.global_num_tokens_for_logprob_gpu = torch.tensor(
+            #     global_num_tokens_for_logprob, dtype=torch.int64
+            # ).to(device, non_blocking=True)
 
         if ret.forward_mode.is_idle():
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
@@ -816,8 +816,8 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         # padding
         self._pad_inputs_to_size(model_runner, num_tokens, bs)
         self.global_num_tokens_cpu = global_num_tokens
-        global_num_tokens_pinned = torch.tensor(global_num_tokens, pin_memory=True)
-        self.global_num_tokens_gpu.copy_(global_num_tokens_pinned, non_blocking=True)
+        # global_num_tokens_pinned = torch.tensor(global_num_tokens, pin_memory=True)
+        # self.global_num_tokens_gpu.copy_(global_num_tokens_pinned, non_blocking=True)
 
         TboForwardBatchPreparer.prepare(
             batch=self, is_draft_worker=model_runner.is_draft_worker
