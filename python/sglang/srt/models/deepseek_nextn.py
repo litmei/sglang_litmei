@@ -20,6 +20,7 @@ from typing import Iterable, Optional, Tuple
 import torch
 from torch import nn
 from transformers import PretrainedConfig
+import os
 
 from sglang.srt.configs.model_config import is_deepseek_nsa
 from sglang.srt.distributed import get_pp_group, get_tensor_model_parallel_world_size
@@ -135,6 +136,10 @@ class DeepseekModelNextN(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
+        ###todo 查看这里怎么写
+        os.environ["SGLANG_DEEPEP_BF16_DISPATCH"] = "1"
+        os.environ["DEEP_NORMAL_MODE_USE_INT8_QUANT"] = "0"
+
         zero_allocator = BumpAllocator(
             buffer_size=2,
             dtype=torch.float32,
@@ -187,6 +192,8 @@ class DeepseekModelNextN(nn.Module):
                     torch.cuda.current_stream(),
                 )
 
+        os.environ["SGLANG_DEEPEP_BF16_DISPATCH"] = "0"
+        os.environ["DEEP_NORMAL_MODE_USE_INT8_QUANT"] = "1"
         return hidden_states
 
 
@@ -201,6 +208,7 @@ class DeepseekV3ForCausalLMNextN(DeepseekV3ForCausalLM):
         nn.Module.__init__(self)
         self.config = config
         self.tp_size = get_tensor_model_parallel_world_size()
+        quant_config = None
         self.quant_config = quant_config
         # if not set, model load will be broken in DeepseekV3ForCausalLM load_weights()
         self.pp_group = get_pp_group()

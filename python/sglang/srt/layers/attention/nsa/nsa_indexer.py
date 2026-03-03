@@ -1228,7 +1228,8 @@ class Indexer(MultiPlatformOp):
             sin, cos = forward_batch.npu_indexer_sin_cos_cache
 
         bs = x.shape[0]
-        if self.alt_stream is not None:
+        ###todo luo 双流掩盖
+        if self.alt_stream is not None and False:
             self.alt_stream.wait_stream(torch.npu.current_stream())
             with torch.npu.stream(self.alt_stream):
                 q_lora = (
@@ -1260,13 +1261,27 @@ class Indexer(MultiPlatformOp):
                 [self.rope_head_dim, self.head_dim - self.rope_head_dim],
                 dim=-1,
             )  # [bs, 64, 64 + 64]
-            q_pe = q_pe.view(bs, self.n_heads, 1, self.rope_head_dim)
-            q_pe = torch_npu.npu_rotary_mul(q_pe, cos, sin).view(
-                bs, self.n_heads, self.rope_head_dim
-            )  # [bs, n, d]
-            q = torch.cat([q_pe, q_nope], dim=-1)
 
-        if envs.SGLANG_NPU_USE_MULTI_STREAM.get():
+            k_proj = self.wk(x)[0]  # [b, s, 7168] @ [7168, 128] = [b, s, 128]
+            k = self.k_norm(k_proj)
+            k_pe, k_nope = torch.split(
+                k,
+                [self.rope_head_dim, self.head_dim - self.rope_head_dim],
+                dim=-1,
+            )  # [bs, 64 + 64]
+            
+            ###todo luo 查看为什么走的native 以及和 dsv3.2 适配
+            q_pe, k_pe = self.rotary_emb(positions, q_pe, k_pe)
+            q = torch.cat([q_pe, q_nope], dim=-1)
+            k = torch.cat([k_pe, k_nope], dim=-1)
+
+            # q_pe = q_pe.view(bs, self.n_heads, 1, self.rope_head_dim)
+            # q_pe = torch_npu.npu_rotary_mul(q_pe, cos, sin).view(
+            #     bs, self.n_heads, self.rope_head_dim
+            # )  # [bs, n, d]
+            # q = torch.cat([q_pe, q_nope], dim=-1)
+
+        if envs.SGLANG_NPU_USE_MULTI_STREAM.get() and False:
             indexer_weight_stream = get_indexer_weight_stream()
             indexer_weight_stream.wait_stream(torch.npu.current_stream())
             with torch.npu.stream(indexer_weight_stream):
@@ -1278,19 +1293,19 @@ class Indexer(MultiPlatformOp):
             x = x.view(-1, self.hidden_size)
             weights = self.weights_proj(x.float())[0].to(torch.bfloat16)
 
-        k_proj = self.wk(x)[0]  # [b, s, 7168] @ [7168, 128] = [b, s, 128]
-        k = self.k_norm(k_proj)
-        k_pe, k_nope = torch.split(
-            k,
-            [self.rope_head_dim, self.head_dim - self.rope_head_dim],
-            dim=-1,
-        )  # [bs, 64 + 64]
+        # k_proj = self.wk(x)[0]  # [b, s, 7168] @ [7168, 128] = [b, s, 128]
+        # k = self.k_norm(k_proj)
+        # k_pe, k_nope = torch.split(
+        #     k,
+        #     [self.rope_head_dim, self.head_dim - self.rope_head_dim],
+        #     dim=-1,
+        # )  # [bs, 64 + 64]
 
-        k_pe = k_pe.view(-1, 1, 1, self.rope_head_dim)
-        k_pe = torch.ops.npu.npu_rotary_mul(k_pe, cos, sin).view(
-            bs, 1, self.rope_head_dim
-        )  # [bs, 1, d]
-        k = torch.cat([k_pe, k_nope.unsqueeze(1)], dim=-1)  # [bs, 1, 128]
+        # k_pe = k_pe.view(-1, 1, 1, self.rope_head_dim)
+        # k_pe = torch.ops.npu.npu_rotary_mul(k_pe, cos, sin).view(
+        #     bs, 1, self.rope_head_dim
+        # )  # [bs, 1, d]
+        # k = torch.cat([k_pe, k_nope.unsqueeze(1)], dim=-1)  # [bs, 1, 128]
 
         if (
             is_prefill
@@ -1356,9 +1371,9 @@ class Indexer(MultiPlatformOp):
 
         past_key_states = forward_batch.token_to_kv_pool.get_index_k_buffer(layer_id)
 
-        if self.alt_stream is not None:
+        if self.alt_stream is not None and False:
             torch.npu.current_stream().wait_event(q_rope_event)
-        if envs.SGLANG_NPU_USE_MULTI_STREAM.get():
+        if envs.SGLANG_NPU_USE_MULTI_STREAM.get() and False:
             torch.npu.current_stream().wait_event(weights_event)
 
         block_table = forward_batch.attn_backend.forward_metadata.block_tables

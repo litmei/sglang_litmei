@@ -102,7 +102,9 @@ class Sampler(nn.Module):
         # Preprocess logits (custom processors and NaN handling)
         logits = self._preprocess_logits(logits, sampling_info)
 
-        if sampling_info.is_all_greedy:
+        ###todo luo 非强制走 all_greedy
+        # if sampling_info.is_all_greedy:
+        if True:
             # Use torch.argmax if all requests use greedy sampling
             batch_next_token_ids = torch.argmax(logits, -1)
             if return_logprob:
