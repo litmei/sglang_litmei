@@ -158,7 +158,8 @@ class EAGLEDraftCudaGraphRunner:
             global_num_tokens_gpu=global_num_tokens_gpu,
             global_num_tokens_for_logprob_gpu=global_num_tokens_for_logprob_gpu,
         )
-        self.buffers.share_buffers()
+        if not envs.SGLANG_ENABLE_OVERLAP_PLAN_STREAM.get():
+            self.buffers.share_buffers()
 
         # Capture
         try:
@@ -332,8 +333,9 @@ class EAGLEDraftCudaGraphRunner:
             hidden_states_backup = forward_batch.spec_info.hidden_states
 
             if self.enable_spec_overlap_reflow:
-                assert hasattr(self.eagle_worker, "draft_forward_v2"), \
-                    "Overlap reflow just support when enable overlap scheduler"
+                assert hasattr(
+                    self.eagle_worker, "draft_forward_v2"
+                ), "Overlap reflow just support when enable overlap scheduler"
                 ret = self.eagle_worker.draft_forward_v2(forward_batch)
             else:
                 ret = self.eagle_worker.draft_forward(forward_batch)
