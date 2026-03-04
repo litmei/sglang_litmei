@@ -308,18 +308,8 @@ class EagleDraftWorker(BaseDraftWorker):
     @staticmethod
     def draft_wrapper(draft_func):
         def wrapper(self, model_worker_batch: ModelWorkerBatch):
-            draft_input: EagleDraftInput = model_worker_batch.spec_info
-            forward_batch, can_cuda_graph = draft_input.prepare_for_v2_draft(
-                self.req_to_token_pool,
-                model_worker_batch,
-                self.cuda_graph_runner,
-                self.draft_runner,
-                self.topk,
-                self.speculative_num_steps,
-            )
-
-            parent_list, top_scores_index, draft_tokens = draft_func(
-                self, forward_batch, can_cuda_graph
+            parent_list, top_scores_index, draft_tokens, verified_id = draft_func(
+                self, model_worker_batch
             )
 
             if model_worker_batch.forward_mode.is_idle():
@@ -343,7 +333,7 @@ class EagleDraftWorker(BaseDraftWorker):
                 retrive_next_sibling,
                 draft_tokens,
             ) = build_tree_kernel_efficient(
-                draft_input.verified_id,
+                verified_id,
                 parent_list,
                 top_scores_index,
                 draft_tokens,
@@ -376,11 +366,25 @@ class EagleDraftWorker(BaseDraftWorker):
         return wrapper
 
     @draft_wrapper
-    def prepare_verify_reflow(self, forward_batch, can_cuda_graph):
-        return self.draft_forward(forward_batch, is_prepare_reflow=True)
+    def prepare_verify_reflow(self, model_worker_batch):
+        draft_input = model_worker_batch.spec_info
+        parent_list, top_scores_index, draft_tokens = self.draft_forward_for_prepare(
+            model_worker_batch.spec_info
+        )
+        return parent_list, top_scores_index, draft_tokens, draft_input.verified_id
 
     @draft_wrapper
-    def draft(self, forward_batch, can_cuda_graph):
+    def draft(self, model_worker_batch):
+        draft_input: EagleDraftInput = model_worker_batch.spec_info
+        forward_batch, can_cuda_graph = draft_input.prepare_for_v2_draft(
+            self.req_to_token_pool,
+            model_worker_batch,
+            self.cuda_graph_runner,
+            self.draft_runner,
+            self.topk,
+            self.speculative_num_steps,
+        )
+
         # Run draft
         if can_cuda_graph:
             parent_list, top_scores_index, draft_tokens = self.cuda_graph_runner.replay(
@@ -398,7 +402,7 @@ class EagleDraftWorker(BaseDraftWorker):
                 forward_batch
             )
 
-        return parent_list, top_scores_index, draft_tokens
+        return parent_list, top_scores_index, draft_tokens, draft_input.verified_id
 
     def draft_v2(
         self,
@@ -457,6 +461,54 @@ class EagleDraftWorker(BaseDraftWorker):
             torch.cat(ret_topk_index_list, dim=1).clone(),
             None,  # if use spec overlap reflow, we do not need to save hidden_states for target mode
         )
+
+    def draft_forward_for_prepare(self, spec_info):
+        topk_p, topk_index, hidden_states = (
+            spec_info.topk_p,
+            spec_info.topk_index,
+            spec_info.hidden_states,
+        )
+        if self.hot_token_id is not None:
+            topk_index = self.hot_token_id[topk_index]
+
+        # Forward multiple steps
+        input_ids, hidden_states, scores, tree_info = select_top_k_tokens(
+            0, topk_p, topk_index, hidden_states, None, self.topk
+        )
+
+        score_list = [
+            tree_info[0][:, :, i].unsqueeze(-1)
+            for i in range(self.speculative_num_steps)
+        ]
+        token_list = [
+            tree_info[1][:, i].unsqueeze(-1) for i in range(self.speculative_num_steps)
+        ]
+        parents_list = [tree_info[2]] + [
+            torch.full((tree_info[2].size(0), 1), i, dtype=torch.long, device="cuda")
+            for i in range(1, self.speculative_num_steps)
+        ]
+
+        # Organize the results
+        score_list = torch.cat(score_list, dim=1).flatten(
+            1
+        )  # b, n, topk; n= 1 + (num_steps-1) * self.topk
+        ss_token_list = torch.cat(
+            token_list, dim=1
+        )  # b, (self.topk + (num_steps-1) * self.topk)
+        top_scores = torch.topk(
+            score_list, self.speculative_num_draft_tokens - 1, dim=-1
+        )
+        top_scores_index = top_scores.indices
+        top_scores_index = torch.sort(top_scores_index).values
+        draft_tokens = torch.gather(ss_token_list, index=top_scores_index, dim=1)
+
+        if len(parents_list) > 1:
+            parent_list = torch.cat(parents_list[:-1], dim=1)
+        else:
+            batch_size = parents_list[0].shape[0]
+            parent_list = torch.empty(batch_size, 0, device=parents_list[0].device)
+
+        return parent_list, top_scores_index, draft_tokens
 
     def draft_forward(
         self, forward_batch: ForwardBatch, *, is_prepare_reflow: bool = False
