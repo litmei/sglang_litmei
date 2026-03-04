@@ -510,15 +510,7 @@ class EagleDraftWorker(BaseDraftWorker):
 
         return parent_list, top_scores_index, draft_tokens
 
-    def draft_forward(
-        self, forward_batch: ForwardBatch, *, is_prepare_reflow: bool = False
-    ):
-        if is_prepare_reflow:
-            assert self.enable_spec_overlap_reflow, (
-                "The case where param `is_prepare_reflow` is `True` "
-                "exists only when `SGLANG_SPEC_ENABLE_OVERLAP_REFLOW` is set to `1`."
-            )
-
+    def draft_forward(self, forward_batch: ForwardBatch):
         # Parse args
         spec_info: EagleDraftInput = forward_batch.spec_info
         out_cache_loc = forward_batch.out_cache_loc
@@ -548,23 +540,6 @@ class EagleDraftWorker(BaseDraftWorker):
             input_ids, hidden_states, scores, tree_info = select_top_k_tokens(
                 i, topk_p, topk_index, hidden_states, scores, self.topk
             )
-
-            if is_prepare_reflow:
-                score_list = [
-                    tree_info[0][:, :, i].unsqueeze(-1)
-                    for i in range(self.speculative_num_steps)
-                ]
-                token_list = [
-                    tree_info[1][:, i].unsqueeze(-1)
-                    for i in range(self.speculative_num_steps)
-                ]
-                parents_list = [tree_info[2]] + [
-                    torch.full(
-                        (tree_info[2].size(0), 1), i, dtype=torch.long, device="cuda"
-                    )
-                    for i in range(1, self.speculative_num_steps)
-                ]
-                break
 
             score_list.append(tree_info[0])
             token_list.append(tree_info[1])
