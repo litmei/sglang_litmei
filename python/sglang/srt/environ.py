@@ -311,12 +311,6 @@ class Envs:
     # Forward native implementation for gemma rms norm for model Skywork-Reward-Gemma-2-27B-v0.2
     SGLANG_NPU_FORWARD_NATIVE_GEMMA_RMS_NORM = EnvBool(False)
 
-    # prof
-    MY_ENABLE_PROFILING = EnvBool(False)
-    MY_PROFILING_BS = EnvInt(8)
-    MY_PROFILING_STEP = EnvInt(10)
-    MY_PROFILING_STAGE = EnvStr("decode")
-
     # Quantization
     SGLANG_INT4_WEIGHT = EnvBool(False)
     SGLANG_CPU_QUANTIZATION = EnvBool(False)
