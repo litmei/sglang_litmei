@@ -723,10 +723,14 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                         )
                 mrope_positions_list[batch_idx] = mrope_positions
 
-        self.mrope_positions = torch.cat(
-            [pos for pos in mrope_positions_list],
-            dim=1,
-        ).to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
+        self.mrope_positions = (
+            torch.cat(
+                [pos for pos in mrope_positions_list],
+                dim=1,
+            )
+            .pin_memory()
+            .to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
+        )
 
     def _pad_tensor_to_size(self, tensor: torch.Tensor, size: int, *, value: int = 0):
         if value == 0:
