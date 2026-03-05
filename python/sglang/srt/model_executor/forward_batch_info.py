@@ -455,8 +455,10 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             ret.global_num_tokens_cpu = global_num_tokens
             ret.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
 
+        # Use it before returning to avoid operator dispatch bottlenecks caused by host-to-device synchronization.
         def _post_set_device_attr():
             # For MLP sync
+            # TODO: The non_blocking flag here has no effect, but using pin_memory causes the process to hang.
             if batch.global_num_tokens is not None:
                 ret.global_num_tokens_gpu = torch.tensor(
                     global_num_tokens, dtype=torch.int64
@@ -722,10 +724,14 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                         )
                 mrope_positions_list[batch_idx] = mrope_positions
 
-        self.mrope_positions = torch.cat(
-            [pos for pos in mrope_positions_list],
-            dim=1,
-        ).to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
+        self.mrope_positions = (
+            torch.cat(
+                [pos for pos in mrope_positions_list],
+                dim=1,
+            )
+            .pin_memory()
+            .to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
+        )
 
     def _pad_tensor_to_size(self, tensor: torch.Tensor, size: int, *, value: int = 0):
         if value == 0:
