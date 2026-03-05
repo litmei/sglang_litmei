@@ -847,12 +847,7 @@ class CommunicateWithAllReduceAndLayerNormFn:
                     get_tp_group(),
                     disabled=not is_allocation_symmetric(),
                 ):
-                    if context.attn_tp_rank == 0:
-                        hidden_states, residual = layernorm(hidden_states, residual)
-
-                    else:
-                        residual = hidden_states
-                        hidden_states = layernorm(hidden_states)
+                    hidden_states, residual = layernorm(hidden_states, residual)
             elif context.attn_tp_rank == 0:
                 hidden_states += residual
 
