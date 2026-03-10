@@ -351,10 +351,10 @@ class BaseMultimodalProcessor(ABC):
                 }:
                     # Note: for qwen-vl, processor has some reshape issue because of dims restriction on Ascend.
                     from sglang.srt.hardware_backend.npu.modules.qwen_vl_processor import (
-                        apply_npu_preprocess_path,
+                        npu_apply_qwen_image_preprocess_patch,
                     )
 
-                    apply_npu_preprocess_path()
+                    npu_apply_qwen_image_preprocess_patch()
                 kwargs["device"] = "npu"
 
         result = processor.__call__(

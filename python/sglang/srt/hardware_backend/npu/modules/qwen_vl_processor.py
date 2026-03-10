@@ -138,9 +138,16 @@ def npu_wrapper_preprocess(func):
     return _preprocess
 
 
-def apply_npu_preprocess_path():
+_npu_preprocess_patched = False
+
+
+def npu_apply_qwen_image_preprocess_patch():
+    global _npu_preprocess_patched
+    if _npu_preprocess_patched:
+        return
     apply_module_patch(
         "transformers.models.qwen2_vl.image_processing_qwen2_vl_fast.Qwen2VLImageProcessorFast",
         "_preprocess",
         [npu_wrapper_preprocess],
     )
+    _npu_preprocess_patched = True
