@@ -245,7 +245,7 @@ class EmbeddingBatchResult:
     embeddings: torch.Tensor
     copy_done: Optional[torch.cuda.Event] = None
 
-    def copy_to_cpu(self):
+    def copy_to_cpu(self, stream: Optional[torch.cuda.Stream] = None):
         """Copy embeddings tensor to CPU in overlap scheduling."""
 
         if isinstance(self.embeddings, torch.Tensor):
@@ -261,7 +261,7 @@ class EmbeddingBatchResult:
                 emb.to("cpu", non_blocking=True) for emb in self.embeddings
             ]
 
-        self.copy_done.record()
+        self.copy_done.record(stream)
 
 
 class Scheduler(
@@ -2562,7 +2562,10 @@ class Scheduler(
                     batch_result.copy_done = self.device_module.Event()
                     if batch_result.delay_sample_func is None:
                         self.future_map.store_to_map(future_indices, batch_result)
-                        batch_result.copy_to_cpu(return_logprob=batch.return_logprob)
+                        batch_result.copy_to_cpu(
+                            return_logprob=batch.return_logprob,
+                            stream=self.forward_stream,
+                        )
                     else:
                         batch_result.future_indices = future_indices
 
@@ -2632,7 +2635,7 @@ class Scheduler(
                         model_worker_batch
                     )
                     ret = EmbeddingBatchResult(embeddings=embeddings)
-                    ret.copy_to_cpu()
+                    ret.copy_to_cpu(stream=self.forward_stream)
             else:
                 embeddings = self.tp_worker.forward_batch_embedding(model_worker_batch)
                 ret = EmbeddingBatchResult(embeddings=embeddings)
@@ -2669,7 +2672,9 @@ class Scheduler(
             _batch_result = batch_result.delay_sample_func()
             assert _batch_result is batch_result
             self.future_map.store_to_map(batch_result.future_indices, batch_result)
-            batch_result.copy_to_cpu(return_logprob=self.cur_batch.return_logprob)
+            batch_result.copy_to_cpu(
+                return_logprob=self.cur_batch.return_logprob, stream=self.forward_stream
+            )
 
     def process_batch_result(
         self,

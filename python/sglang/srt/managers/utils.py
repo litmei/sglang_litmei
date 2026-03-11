@@ -49,7 +49,9 @@ class GenerationBatchResult:
     # metrics
     expert_distribution_metrics: Optional[ExpertDistributionMetrics] = None
 
-    def copy_to_cpu(self, return_logprob: bool):
+    def copy_to_cpu(
+        self, return_logprob: bool, stream: Optional[torch.cuda.Stream] = None
+    ):
         """Copy tensors to CPU in overlap scheduling.
         Only the tensors which are needed for processing results are copied,
         e.g., next_token_ids, logits outputs
@@ -88,9 +90,17 @@ class GenerationBatchResult:
             self.accept_lens = self.accept_lens.to("cpu", non_blocking=True)
 
         if (x := self.expert_distribution_metrics) is not None:
-            x.copy_to_cpu()
+            x.copy_to_cpu(stream=stream)
 
-        self.copy_done.record()
+        # DEBUG: Log before record
+        logger.info(
+            f"[DEBUG] copy_to_cpu before record, rank={torch.cuda.current_device()}"
+        )
+        self.copy_done.record(stream)
+        # DEBUG: Log after record
+        logger.info(
+            f"[DEBUG] copy_to_cpu after record, rank={torch.cuda.current_device()}"
+        )
 
     @classmethod
     def from_pp_proxy(

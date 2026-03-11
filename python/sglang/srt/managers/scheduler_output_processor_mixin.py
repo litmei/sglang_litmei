@@ -359,7 +359,15 @@ class SchedulerOutputProcessorMixin:
         result: GenerationBatchResult,
     ):
         if result.copy_done is not None:
+            # DEBUG: Log before synchronize
+            logger.info(
+                f"[DEBUG] process_batch_result_decode before synchronize, rank={self.tp_rank}, batch_size={len(batch.reqs)}"
+            )
             result.copy_done.synchronize()
+            # DEBUG: Log after synchronize
+            logger.info(
+                f"[DEBUG] process_batch_result_decode after synchronize, rank={self.tp_rank}"
+            )
 
         logits_output, next_token_ids, can_run_cuda_graph = (
             result.logits_output,
