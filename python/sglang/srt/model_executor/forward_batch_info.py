@@ -467,6 +467,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             )
 
         if ret.forward_mode.is_idle():
+            torch.cuda.synchronize()
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
             return ret
 
