@@ -498,16 +498,21 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
             ret.original_global_num_tokens_cpu = batch.global_num_tokens
             ret.global_num_tokens_cpu = global_num_tokens
-            ret.global_num_tokens_gpu = torch.tensor(
-                global_num_tokens, dtype=torch.int64
-            ).to(device, non_blocking=True)
+            ret.global_num_tokens_gpu = (
+                torch.tensor(global_num_tokens, dtype=torch.int64)
+                .pin_memory()
+                .to(device, non_blocking=True)
+            )
 
             ret.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
-            ret.global_num_tokens_for_logprob_gpu = torch.tensor(
-                global_num_tokens_for_logprob, dtype=torch.int64
-            ).to(device, non_blocking=True)
+            ret.global_num_tokens_for_logprob_gpu = (
+                torch.tensor(global_num_tokens_for_logprob, dtype=torch.int64)
+                .pin_memory()
+                .to(device, non_blocking=True)
+            )
 
         if ret.forward_mode.is_idle():
+            torch.cuda.synchronize()
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
             return ret
 
@@ -781,10 +786,14 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                         )
                 mrope_positions_list[batch_idx] = mrope_positions
 
-        self.mrope_positions = torch.cat(
-            [pos for pos in mrope_positions_list],
-            dim=1,
-        ).to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
+        self.mrope_positions = (
+            torch.cat(
+                [pos for pos in mrope_positions_list],
+                dim=1,
+            )
+            .pin_memory()
+            .to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
+        )
 
     def _pad_tensor_to_size(self, tensor: torch.Tensor, size: int, *, value: int = 0):
         if value == 0:
