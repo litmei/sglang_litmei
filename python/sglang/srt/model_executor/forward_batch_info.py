@@ -473,13 +473,17 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         if batch.extend_input_logprob_token_ids is not None:
             ret.extend_input_logprob_token_ids_gpu = (
-                batch.extend_input_logprob_token_ids.to(device, non_blocking=True)
+                batch.extend_input_logprob_token_ids.pin_memory().to(
+                    device, non_blocking=True
+                )
             )
 
         if enable_num_token_non_padded(model_runner.server_args):
-            ret.num_token_non_padded = torch.tensor(
-                len(batch.input_ids), dtype=torch.int32
-            ).to(device, non_blocking=True)
+            ret.num_token_non_padded = (
+                torch.tensor(len(batch.input_ids), dtype=torch.int32)
+                .pin_memory()
+                .to(device, non_blocking=True)
+            )
         ret.num_token_non_padded_cpu = len(batch.input_ids)
 
         # For MLP sync
@@ -498,14 +502,18 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
             ret.original_global_num_tokens_cpu = batch.global_num_tokens
             ret.global_num_tokens_cpu = global_num_tokens
-            ret.global_num_tokens_gpu = torch.tensor(
-                global_num_tokens, dtype=torch.int64
-            ).to(device, non_blocking=True)
+            ret.global_num_tokens_gpu = (
+                torch.tensor(global_num_tokens, dtype=torch.int64)
+                .pin_memory()
+                .to(device, non_blocking=True)
+            )
 
             ret.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
-            ret.global_num_tokens_for_logprob_gpu = torch.tensor(
-                global_num_tokens_for_logprob, dtype=torch.int64
-            ).to(device, non_blocking=True)
+            ret.global_num_tokens_for_logprob_gpu = (
+                torch.tensor(global_num_tokens_for_logprob, dtype=torch.int64)
+                .pin_memory()
+                .to(device, non_blocking=True)
+            )
 
         if ret.forward_mode.is_idle():
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
@@ -513,6 +521,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 ret.mrope_positions = torch.empty(
                     (3, 0), dtype=torch.int64, device=device
                 )
+            torch.cuda.synchronize()
             return ret
 
         # Override the positions with diffusion LLM or spec_info
@@ -520,14 +529,18 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             block_size = batch.dllm_config.block_size
             # Use int64 for AMD rotary embedding kernel compatibility
             positions_dtype = torch.int64 if is_hip() or _is_npu else torch.int32
-            ret.positions = torch.tensor(
-                [
-                    i
-                    for block_offset in batch.dllm_block_offsets
-                    for i in range(block_offset, block_offset + block_size)
-                ],
-                dtype=positions_dtype,
-            ).to(device, non_blocking=True)
+            ret.positions = (
+                torch.tensor(
+                    [
+                        i
+                        for block_offset in batch.dllm_block_offsets
+                        for i in range(block_offset, block_offset + block_size)
+                    ],
+                    dtype=positions_dtype,
+                )
+                .pin_memory()
+                .to(device, non_blocking=True)
+            )
         elif (
             ret.spec_info is not None
             and getattr(ret.spec_info, "positions", None) is not None
@@ -541,12 +554,16 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         else:
             assert isinstance(batch.extend_seq_lens, list)
             assert isinstance(batch.extend_prefix_lens, list)
-            ret.extend_seq_lens = torch.tensor(
-                batch.extend_seq_lens, dtype=torch.int32
-            ).to(device, non_blocking=True)
-            ret.extend_prefix_lens = torch.tensor(
-                batch.extend_prefix_lens, dtype=torch.int32
-            ).to(device, non_blocking=True)
+            ret.extend_seq_lens = (
+                torch.tensor(batch.extend_seq_lens, dtype=torch.int32)
+                .pin_memory()
+                .to(device, non_blocking=True)
+            )
+            ret.extend_prefix_lens = (
+                torch.tensor(batch.extend_prefix_lens, dtype=torch.int32)
+                .pin_memory()
+                .to(device, non_blocking=True)
+            )
             ret.extend_num_tokens = batch.extend_num_tokens
             positions, ret.extend_start_loc = compute_position(
                 model_runner.server_args.attention_backend,
@@ -785,10 +802,14 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                         )
                 mrope_positions_list[batch_idx] = mrope_positions
 
-        self.mrope_positions = torch.cat(
-            [pos for pos in mrope_positions_list],
-            dim=1,
-        ).to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
+        self.mrope_positions = (
+            torch.cat(
+                [pos for pos in mrope_positions_list],
+                dim=1,
+            )
+            .pin_memory()
+            .to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
+        )
 
     def _pad_tensor_to_size(self, tensor: torch.Tensor, size: int, *, value: int = 0):
         if value == 0:
