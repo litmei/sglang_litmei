@@ -509,6 +509,10 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         if ret.forward_mode.is_idle():
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
+            if model_runner.model_is_mrope:
+                ret.mrope_positions = torch.empty(
+                    (3, 0), dtype=torch.int64, device=device
+                )
             return ret
 
         # Override the positions with diffusion LLM or spec_info
