@@ -1,8 +1,8 @@
 import os
 import re
+import tempfile
 import threading
 import unittest
-from pathlib import Path
 from time import sleep
 
 import requests
@@ -74,10 +74,12 @@ class TestNPULoggingBase(CustomTestCase):
             "ascend",
             "--disable-cuda-graph",
         ]
-        cls.out_log_name = "./log_requests_level_out_log.txt"
-        cls.err_log_name = "./log_requests_level_err_log.txt"
-        cls.out_log_file = open(cls.out_log_name, "w+", encoding="utf-8")
-        cls.err_log_file = open(cls.err_log_name, "w+", encoding="utf-8")
+        cls.out_log_file_obj = tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", delete=False, suffix=".txt")
+        cls.out_log_name = cls.out_log_file_obj.name
+        cls.out_log_file = cls.out_log_file_obj
+        cls.err_log_file_obj = tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", delete=False, suffix=".txt")
+        cls.err_log_name = cls.err_log_file_obj.name
+        cls.err_log_file = cls.err_log_file_obj
         cls.test_prompt = "What is the capital of France?"
         cls.expected_output = "Paris"
 
@@ -418,22 +420,6 @@ class TestNPULoggingBase(CustomTestCase):
             self.assertIn(health_message, content)
             self.assertIn(get_server_info_message, content)
 
-    def _verify_log_requests_target(self):
-        """Validate that request logs are correctly output to the target files configured via --log-requests-target."""
-        log_files = list(Path(self.temp_dir).glob("*.log"))
-        self.assertGreater(len(log_files), 0)
-
-        file_content = log_files[0].read_text()
-        self.assertIn("Receive:", file_content)
-        self.assertIn("Finish:", file_content)
-
-        log_files = list(Path(self.temp_level3_dir).glob("*.log"))
-        self.assertGreater(len(log_files), 0)
-
-        file_content = log_files[0].read_text()
-        self.assertIn("Receive:", file_content)
-        self.assertIn("Finish:", file_content)
-
     def _verify_metrics_and_bucket_boundary(
         self,
         expected_time_to_first_token_bucket=None,
@@ -497,7 +483,7 @@ class TestNPULoggingBase(CustomTestCase):
             f"{self.base_url}/generate",
             json={
                 "Content-Type": "application/json",
-                "X-Metrics-Labels": f"{self.my_label}=cunstomer_service",
+                "X-Metrics-Labels": f"{self.my_label}=customer_service",
                 "text": self.test_prompt,
                 "sampling_params": {
                     "temperature": 0,
@@ -536,19 +522,16 @@ class TestNPULoggingBase(CustomTestCase):
         max_token = 1000
 
         def send_request():
-            try:
-                requests.post(
-                    f"{self.base_url}/generate",
-                    json={
-                        "text": prompt_template,
-                        "sampling_params": {
-                            "temperature": 0,
-                            "max_new_tokens": max_token
-                        },
+            requests.post(
+                f"{self.base_url}/generate",
+                json={
+                    "text": prompt_template,
+                    "sampling_params": {
+                        "temperature": 0,
+                        "max_new_tokens": max_token
                     },
-                )
-            except Exception as e:
-                print(e)
+                },
+            )
 
         threads = []
         for _ in range(200):
@@ -566,6 +549,3 @@ class TestNPULoggingBase(CustomTestCase):
         self.assertTrue(len(content) > 0)
         self.assertIn(GC_info, content)
 
-
-if __name__ == "__main__":
-    unittest.main()

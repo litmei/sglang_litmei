@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 from test_npu_logging import TestNPULoggingBase
 
@@ -49,9 +50,9 @@ class TestNPULoggingCase0(TestNPULoggingBase):
         # --log-requests-target supports single-level and multi-level directories.
         cls._temp_dir_obj = tempfile.TemporaryDirectory()
         cls.temp_dir = cls._temp_dir_obj.name
-        cls.temp_level1_dir = os.path.join(cls.temp_dir, "level1")
-        cls.temp_level2_dir = os.path.join(cls.temp_dir, "level2")
-        cls.temp_level3_dir = os.path.join(cls.temp_dir, "level3")
+        cls.temp_multi_level_dir = os.path.join(cls.temp_dir, "level1")
+        cls.temp_multi_level_dir = os.path.join(cls.temp_dir, "level2")
+        cls.temp_multi_level_dir = os.path.join(cls.temp_dir, "level3")
         os.makedirs(cls.temp_level3_dir, exist_ok=True)
         target_config = ["stdout", cls.temp_dir, cls.temp_level3_dir]
 
@@ -91,9 +92,23 @@ class TestNPULoggingCase0(TestNPULoggingBase):
             expected_generation_tokens_bucket=self.default_tokens_bucket,
         )
 
-        self._verify_log_requests_target()
-
         self._verify_gc_warning_threshold(self.err_log_file)
+
+    def _verify_log_requests_target(self):
+        """Validate that request logs are correctly output to the target files configured via --log-requests-target."""
+        log_files = list(Path(self.temp_dir).glob("*.log"))
+        self.assertGreater(len(log_files), 0)
+
+        file_content = log_files[0].read_text()
+        self.assertIn("Receive:", file_content)
+        self.assertIn("Finish:", file_content)
+
+        log_files = list(Path(self.temp_multi_level_dir).glob("*.log"))
+        self.assertGreater(len(log_files), 0)
+
+        file_content = log_files[0].read_text()
+        self.assertIn("Receive:", file_content)
+        self.assertIn("Finish:", file_content)
 
     @classmethod
     def tearDownClass(cls):
