@@ -323,6 +323,12 @@ class Envs:
     # Delay all-gather after qlora for better performance for Deepseek v3.2
     SGLANG_USE_AG_AFTER_QLORA = EnvBool(False)
 
+    # prof
+    MY_ENABLE_PROFILING = EnvBool(False)
+    MY_PROFILING_BS = EnvInt(8)
+    MY_PROFILING_STEP = EnvInt(10)
+    MY_PROFILING_STAGE = EnvStr("decode")
+
     # Quantization
     SGLANG_INT4_WEIGHT = EnvBool(False)
     SGLANG_CPU_QUANTIZATION = EnvBool(False)
