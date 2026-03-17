@@ -29,16 +29,6 @@ on:
         type: boolean
         default: true
 
-env:
-  DAILY_BUILD_FLAG: true
-  IMAGE: 'swr.cn-southwest-2.myhuaweicloud.com/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3'
-  ref: ''
-  JOB_FILTER: 'all'
-  #  DAILY_BUILD_FLAG: ${{ inputs.daily_image_flag || true }}
-  #  IMAGE: ${{ inputs.image && inputs.image || 'swr.cn-southwest-2.myhuaweicloud.com/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3' }}
-  #  REF: ${{ inputs.ref && inputs.ref || '' }}
-  #  JOB_FILTER: ${{ inputs.job_filter && inputs.job_filter || 'all' }}
-
 concurrency:
   group: release-test-npu-${{ inputs.ref || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
@@ -49,16 +39,16 @@ jobs:
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     uses: ./.github/workflows/nightly-test-npu.yml
     with:
-      ref:  ${{ env.ref }}
-      job_filter: ${{ env.JOB_FILTER }}
-      image: ${{ env.IMAGE }}
-      is_daily_image: ${{ env.DAILY_BUILD_FLAG }}
+      ref:  ''
+      job_filter: 'all'
+      image: 'swr.cn-southwest-2.myhuaweicloud.com/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3'
+      is_daily_image: true
 
   release-1-npu-a3:
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
     container:
-      image: ${{ env.IMAGE }}
+      image: 'swr.cn-southwest-2.myhuaweicloud.com/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -73,7 +63,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ $env.DAILY_BUILD_FLAG != "true" ];then
+          if [ 'true' != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
@@ -115,7 +105,7 @@ jobs:
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
     container:
-      image: ${{ env.IMAGE }}
+      image: 'swr.cn-southwest-2.myhuaweicloud.com/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -130,7 +120,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ $env.DAILY_BUILD_FLAG != "true" ];then
+          if [ 'true' != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
@@ -172,7 +162,7 @@ jobs:
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-4
     container:
-      image: ${{ env.IMAGE }}
+      image: 'swr.cn-southwest-2.myhuaweicloud.com/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -187,7 +177,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ $env.DAILY_BUILD_FLAG != "true" ];then
+          if [ 'true' != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
@@ -229,7 +219,7 @@ jobs:
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-16
     container:
-      image: ${{ env.IMAGE }}
+      image: 'swr.cn-southwest-2.myhuaweicloud.com/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -244,7 +234,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ $env.DAILY_BUILD_FLAG != "true" ];then
+          if [ 'true' != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
