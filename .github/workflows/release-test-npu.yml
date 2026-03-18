@@ -22,34 +22,58 @@ on:
         description: 'The running docker image of the test task.'
         required: false
         type: string
-        default: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3'
+        default: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-910b-ubuntu22.04-py3.11'
       daily_image_flag:
         description: 'Identifies whether the test target is a daily build image package, defaulting to false.'
         required: false
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: release-test-npu-${{ inputs.ref || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 
 jobs:
+  set-image-config:
+    runs-on: ubuntu-latest
+    outpus:
+      image: ${{ steps.set-vars.outputs.image }}
+      daily_image_flag: ${{ steps.set-vars.outputs.daily_image_flag }}
+    steps:
+      # 默认使用社区最新代码测试
+      - name: Set image config
+        id: set-vars
+        run: |
+          if [ ${{ inputs.image }} == '' ]; then
+            echo "image=swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-910b-ubuntu22.04-py3.11" >> $GITHUB_OUTPUT
+          else
+            echo "image=${{ inputs.image }}" >> $GITHUB_OUTPUT
+          fi
+
+          if [ ${{ inputs.daily_image_flag }} == '' ]; then
+            echo "daily_image_flag=false" >> $GITHUB_OUTPUT
+          else
+            echo "daily_image_flag=${{ inputs.daily_image_flag }}" >> $GITHUB_OUTPUT
+          fi
+
   call-nighly-test-npu:
+    needs: [set-image-config]
     name: nightly-test-npu
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     uses: ./.github/workflows/nightly-test-npu.yml
     with:
-      ref:  ''
-      job_filter: 'all'
-      image: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3'
-      is_daily_image: true
+      ref:  ${{ inputs.ref }}
+      job_filter: ${{ inputs.job_filter }}
+      image: ${{ needs.set-image-config.outputs.image }}
+      is_daily_image: ${{ needs.set-image-config.outputs.daily_image_flag }}
     secrets: inherit
 
   release-1-npu-a3:
+    needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
     container:
-      image: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:main-cann8.5.0-a3'
+      image: ${{ needs.set-image-config.outputs.image }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -64,7 +88,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ 'true' != "true" ];then
+          if [ ${{ needs.set-image-config.outputs.daily_image_flag }} != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
