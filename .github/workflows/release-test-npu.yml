@@ -37,6 +37,8 @@ jobs:
   set-image-config:
     runs-on: ubuntu-latest
     outputs:
+      ref: ${{ steps.set-vars.outputs.ref }}
+      job_filter: ${{ steps.set-vars.outputs.job_filter }}
       image_a3: ${{ steps.set-vars.outputs.image_a3 }}
       daily_image_flag: ${{ steps.set-vars.outputs.daily_image_flag }}
     steps:
@@ -44,6 +46,18 @@ jobs:
       - name: Set image config
         id: set-vars
         run: |
+          if [ -z ${{ inputs.ref }} ]; then
+            echo "ref=''" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ inputs.ref }}" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -z ${{ inputs.job_filter }} ]; then
+            echo "job_filter=all" >> $GITHUB_OUTPUT
+          else
+            echo "job_filter=${{ inputs.job_filter }}" >> $GITHUB_OUTPUT
+          fi
+
           if [ -z ${{ inputs.image_a3 }} ]; then
             echo "image_a3=swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-a3-ubuntu22.04-py3.11" >> $GITHUB_OUTPUT
           else
@@ -62,8 +76,8 @@ jobs:
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     uses: ./.github/workflows/nightly-test-npu.yml
     with:
-      ref:  ${{ inputs.ref }}
-      job_filter: ${{ inputs.job_filter }}
+      ref:  ${{ needs.set-image-config.outputs.ref }}
+      job_filter: ${{ needs.set-image-config.outputs.job_filter }}
       image_a3: ${{ needs.set-image-config.outputs.image_a3 }}
       daily_image_flag: ${{ needs.set-image-config.outputs.daily_image_flag }}
     secrets: inherit
@@ -78,7 +92,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.set-image-config.outputs.ref || github.ref }}
 
       - name: Install dependencies
         run: |

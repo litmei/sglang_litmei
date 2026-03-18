@@ -41,6 +41,8 @@ jobs:
   set-image-config:
     runs-on: ubuntu-latest
     outputs:
+      ref: ${{ steps.set-vars.outputs.ref }}
+      job_filter: ${{ steps.set-vars.outputs.job_filter }}
       image_a3: ${{ steps.set-vars.outputs.image_a3 }}
       daily_image_flag: ${{ steps.set-vars.outputs.daily_image_flag }}
     steps:
@@ -48,6 +50,18 @@ jobs:
       - name: Set image config
         id: set-vars
         run: |
+          if [ -z ${{ inputs.ref }} ]; then
+            echo "ref=''" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ inputs.ref }}" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -z ${{ inputs.job_filter }} ]; then
+            echo "job_filter=all" >> $GITHUB_OUTPUT
+          else
+            echo "job_filter=${{ inputs.job_filter }}" >> $GITHUB_OUTPUT
+          fi
+
           if [ -z ${{ inputs.image_a3 }} ]; then
             echo "image_a3=swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-a3-ubuntu22.04-py3.11" >> $GITHUB_OUTPUT
           else
@@ -61,6 +75,7 @@ jobs:
           fi
 
   nightly-1-npu-a3:
+    needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
     strategy:
@@ -73,7 +88,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ steps.set-vars.outputs.ref || github.ref }}
 
       - name: Install dependencies
         run: |
@@ -122,6 +137,7 @@ jobs:
           python3 run_suite.py --hw npu --suite nightly-1-npu-a3 --nightly --continue-on-error --timeout-per-file 3600 --auto-partition-id ${{ matrix.part }} --auto-partition-size 2
 
   nightly-2-npu-a3:
+    needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
     strategy:
@@ -134,7 +150,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ steps.set-vars.outputs.ref || github.ref }}
 
       - name: Install dependencies
         run: |
@@ -182,6 +198,7 @@ jobs:
           python3 run_suite.py --hw npu --suite nightly-2-npu-a3 --nightly --continue-on-error --timeout-per-file 3600 --auto-partition-id ${{ matrix.part }} --auto-partition-size 1
 
   nightly-4-npu-a3:
+    needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-4
     strategy:
@@ -194,7 +211,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ steps.set-vars.outputs.ref|| github.ref }}
 
       - name: Install dependencies
         run: |
@@ -243,6 +260,7 @@ jobs:
           python3 run_suite.py --hw npu --suite nightly-4-npu-a3 --nightly --continue-on-error --timeout-per-file 3600 --auto-partition-id ${{ matrix.part }} --auto-partition-size 1
 
   nightly-8-npu-a3:
+    needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-8
     strategy:
@@ -255,7 +273,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ steps.set-vars.outputs.ref || github.ref }}
 
       - name: Install dependencies
         run: |
@@ -304,6 +322,7 @@ jobs:
           python3 run_suite.py --hw npu --suite nightly-8-npu-a3 --nightly --continue-on-error --timeout-per-file 3600 --auto-partition-id ${{ matrix.part }} --auto-partition-size 1
 
   nightly-16-npu-a3:
+    needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-16
     strategy:
@@ -316,7 +335,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ steps.set-vars.outputs.ref || github.ref }}
 
       - name: Install dependencies
         run: |
