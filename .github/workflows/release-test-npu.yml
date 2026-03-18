@@ -18,11 +18,11 @@ on:
         required: false
         type: string
         default: 'all'
-      image:
-        description: 'The running docker image of the test task.'
+      image_a3:
+        description: 'The a3 running docker image of the test task.'
         required: false
         type: string
-        default: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-910b-ubuntu22.04-py3.11'
+        default: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-a3-ubuntu22.04-py3.11'
       daily_image_flag:
         description: 'Identifies whether the test target is a daily build image package, defaulting to false.'
         required: false
@@ -37,17 +37,17 @@ jobs:
   set-image-config:
     runs-on: ubuntu-latest
     outputs:
-      image: ${{ steps.set-vars.outputs.image }}
+      image_a3: ${{ steps.set-vars.outputs.image_a3 }}
       daily_image_flag: ${{ steps.set-vars.outputs.daily_image_flag }}
     steps:
       # 当pr触发时，没有inputs参数，默认使用社区最新代码测试。
       - name: Set image config
         id: set-vars
         run: |
-          if [ -z ${{ inputs.image }} ]; then
-            echo "image=swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-910b-ubuntu22.04-py3.11" >> $GITHUB_OUTPUT
+          if [ -z ${{ inputs.image_a3 }} ]; then
+            echo "image_a3=swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-a3-ubuntu22.04-py3.11" >> $GITHUB_OUTPUT
           else
-            echo "image=${{ inputs.image }}" >> $GITHUB_OUTPUT
+            echo "image_a3=${{ inputs.image_a3 }}" >> $GITHUB_OUTPUT
           fi
 
           if [ -z ${{ inputs.daily_image_flag }} ]; then
@@ -56,7 +56,7 @@ jobs:
             echo "daily_image_flag=${{ inputs.daily_image_flag }}" >> $GITHUB_OUTPUT
           fi
 
-  call-nighly-test-npu:
+  nighly-test-npu:
     needs: [set-image-config]
     name: nightly-test-npu
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
@@ -64,8 +64,8 @@ jobs:
     with:
       ref:  ${{ inputs.ref }}
       job_filter: ${{ inputs.job_filter }}
-      image: ${{ needs.set-image-config.outputs.image }}
-      is_daily_image: ${{ needs.set-image-config.outputs.daily_image_flag }}
+      image_a3: ${{ needs.set-image-config.outputs.image_a3 }}
+      daily_image_flag: ${{ needs.set-image-config.outputs.daily_image_flag }}
     secrets: inherit
 
   release-1-npu-a3:
@@ -73,7 +73,7 @@ jobs:
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
     container:
-      image: ${{ needs.set-image-config.outputs.image }}
+      image: ${{ needs.set-image-config.outputs.image_a3 }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -300,7 +300,7 @@ jobs:
   check-all-jobs:
     if: github.repository == 'sgl-project/sglang' && always()
     needs:
-      - call-nighly-test-npu
+      - nighly-test-npu
       - release-1-npu-a3
 #      - release-2-npu-a3
 #      - release-4-npu-a3

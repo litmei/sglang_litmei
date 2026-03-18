@@ -21,12 +21,12 @@ on:
         required: false
         type: string
         default: 'all'
-      image:
-        description: 'The running docker image of the test task.'
+      image_a3:
+        description: 'The a3 running docker image of the test task.'
         required: false
         type: string
         default: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-a3-ubuntu22.04-py3.11'
-      is_daily_image:
+      daily_image_flag:
         description: 'Identifies whether the test target is a daily build image package, defaulting to false.'
         required: false
         type: boolean
@@ -38,6 +38,28 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 
 jobs:
+  set-image-config:
+    runs-on: ubuntu-latest
+    outputs:
+      image_a3: ${{ steps.set-vars.outputs.image_a3 }}
+      daily_image_flag: ${{ steps.set-vars.outputs.daily_image_flag }}
+    steps:
+      # 当pr触发时，没有inputs参数，默认使用社区最新代码测试。
+      - name: Set image config
+        id: set-vars
+        run: |
+          if [ -z ${{ inputs.image_a3 }} ]; then
+            echo "image_a3=swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-a3-ubuntu22.04-py3.11" >> $GITHUB_OUTPUT
+          else
+            echo "image_a3=${{ inputs.image_a3 }}" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -z ${{ inputs.daily_image_flag }} ]; then
+            echo "daily_image_flag=false" >> $GITHUB_OUTPUT
+          else
+            echo "daily_image_flag=${{ inputs.daily_image_flag }}" >> $GITHUB_OUTPUT
+          fi
+
   nightly-1-npu-a3:
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
@@ -46,7 +68,7 @@ jobs:
       matrix:
         part: [0, 1]
     container:
-      image: ${{ inputs.image }}
+      image: ${{ needs.set-image-config.outputs.image_a3 }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -61,7 +83,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ "${{ inputs.is_daily_image }}" != "true" ];then
+          if [ "${{ needs.set-image-config.outputs.daily_image_flag }}" != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
@@ -107,7 +129,7 @@ jobs:
       matrix:
         part: [0]
     container:
-      image: ${{ inputs.image }}
+      image: ${{ needs.set-image-config.outputs.image_a3 }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -122,7 +144,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ "${{ inputs.is_daily_image }}" != "true" ];then
+          if [ "${{ needs.set-image-config.outputs.daily_image_flag }}" != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
@@ -167,7 +189,7 @@ jobs:
       matrix:
         part: [0]
     container:
-      image: ${{ inputs.image }}
+      image: ${{ needs.set-image-config.outputs.image_a3 }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -182,7 +204,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ "${{ inputs.is_daily_image }}" != "true" ];then
+          if [ "${{ needs.set-image-config.outputs.daily_image_flag }}" != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
@@ -228,7 +250,7 @@ jobs:
       matrix:
         part: [0]
     container:
-      image: ${{ inputs.image }}
+      image: ${{ needs.set-image-config.outputs.image_a3 }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -243,7 +265,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ "${{ inputs.is_daily_image }}" != "true" ];then
+          if [ "${{ needs.set-image-config.outputs.daily_image_flag }}" != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
@@ -289,7 +311,7 @@ jobs:
       matrix:
         part: [0, 1]
     container:
-      image: ${{ inputs.image }}
+      image: ${{ needs.set-image-config.outputs.image_a3 }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -304,7 +326,7 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
-          if [ "${{ inputs.is_daily_image }}" != "true" ];then
+          if [ "${{ needs.set-image-config.outputs.daily_image_flag }}" != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
           fi
 
