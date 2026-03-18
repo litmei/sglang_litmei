@@ -40,17 +40,17 @@ jobs:
       image: ${{ steps.set-vars.outputs.image }}
       daily_image_flag: ${{ steps.set-vars.outputs.daily_image_flag }}
     steps:
-      # 默认使用社区最新代码测试
+      # 当pr触发时，没有inputs参数，默认使用社区最新代码测试。
       - name: Set image config
         id: set-vars
         run: |
-          if [ ${{ inputs.image }} == '' ]; then
+          if [ -z ${{ inputs.image }} ]; then
             echo "image=swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-910b-ubuntu22.04-py3.11" >> $GITHUB_OUTPUT
           else
             echo "image=${{ inputs.image }}" >> $GITHUB_OUTPUT
           fi
 
-          if [ ${{ inputs.daily_image_flag }} == '' ]; then
+          if [ -z ${{ inputs.daily_image_flag }} ]; then
             echo "daily_image_flag=false" >> $GITHUB_OUTPUT
           else
             echo "daily_image_flag=${{ inputs.daily_image_flag }}" >> $GITHUB_OUTPUT
