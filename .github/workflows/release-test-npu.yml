@@ -36,7 +36,7 @@ concurrency:
 jobs:
   set-image-config:
     runs-on: ubuntu-latest
-    outpus:
+    outputs:
       image: ${{ steps.set-vars.outputs.image }}
       daily_image_flag: ${{ steps.set-vars.outputs.daily_image_flag }}
     steps:
