@@ -29,8 +29,8 @@ on:
       daily_image_flag:
         description: 'Identifies whether the test target is a daily build image package, defaulting to false.'
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: 'false'
 
 
 concurrency:
