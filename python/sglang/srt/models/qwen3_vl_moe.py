@@ -23,6 +23,12 @@ import torch
 import torch.nn as nn
 
 from sglang.srt.configs.qwen3_vl import Qwen3VLMoeConfig, Qwen3VLMoeTextConfig
+from sglang.srt.distributed import (
+    get_moe_expert_parallel_rank,
+    get_moe_expert_parallel_world_size,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
+)
 from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
 from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -70,8 +76,30 @@ class Qwen3MoeLLMModel(Qwen3MoeModel):
             or layer_idx not in self.deepstack_embed_to_decoder_layer
         ):
             return None
-        sep = self.hidden_size * layer_idx
-        return input_deepstack_embeds[:, sep : sep + self.hidden_size]
+
+        tp_rank = get_tensor_model_parallel_rank()
+        tp_size = get_tensor_model_parallel_world_size()
+        ep_rank = get_moe_expert_parallel_rank()
+        ep_size = get_moe_expert_parallel_world_size()
+
+        # Calculate global hidden size (before any parallelism)
+        global_hidden_size = self.hidden_size * tp_size * ep_size
+
+        # Calculate this layer's start position in global space
+        layer_start_global = layer_idx * global_hidden_size
+
+        # Calculate the total parallel size and this rank's position
+        total_parallel_size = tp_size * ep_size
+        rank_in_parallel_group = tp_rank * ep_size + ep_rank
+
+        # Calculate the local hidden size per rank
+        local_hidden_size = global_hidden_size // total_parallel_size
+
+        # Calculate the start and end positions in input_deepstack_embeds
+        start = layer_start_global + rank_in_parallel_group * local_hidden_size
+        end = start + local_hidden_size
+
+        return input_deepstack_embeds[:, start:end]
 
     def forward(
         self,
