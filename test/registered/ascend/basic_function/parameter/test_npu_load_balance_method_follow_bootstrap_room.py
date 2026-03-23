@@ -13,7 +13,7 @@ from sglang.test.ci.ci_register import register_npu_ci
 register_npu_ci(est_time=400, suite="nightly-4-npu-a3", nightly=True)
 
 
-class TestNumReservedDecodeTokens(TestDisaggregationBase):
+class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
     """Testcase：Verify that the inference is successful when --load-balance-method is set to follow_bootstrap_room.
 
     [Test Category] Parameter
