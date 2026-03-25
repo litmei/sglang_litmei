@@ -120,7 +120,10 @@ class LlamaModel(nn.Module):
         )
         # fix rope_scaling for qwen2.5-vl
         if self.is_mrope_enabled:
-            config.rope_parameters["rope_type"] = "default"
+            if hasattr(config, "rope_parameters"):
+                config.rope_parameters["rope_type"] = "default"
+            else:
+                config.rope_scaling["rope_type"] = "default"
 
         self.vocab_size = config.vocab_size
         self.embed_tokens = VocabParallelEmbedding(
