@@ -253,7 +253,7 @@ class LlamaDecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         rope_scaling = getattr(config, "rope_parameters", None) or getattr(
-            config, "rope_parameters", None
+            config, "rope_scaling", None
         )
         # 10000 is the default value of rope_theta on LlamaAttention.__init__
         rope_theta = getattr(rope_scaling, "rope_theta", 10000)
