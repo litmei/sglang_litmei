@@ -1,14 +1,17 @@
 import os
 import unittest
+
 import requests
 
 from sglang.test.ascend.disaggregation_utils import TestDisaggregationBase
-from sglang.test.ascend.test_ascend_utils import QWEN3_30B_A3B_INSTRUCT_2507_WEIGHTS_PATH
+from sglang.test.ascend.test_ascend_utils import (
+    QWEN3_30B_A3B_INSTRUCT_2507_WEIGHTS_PATH
+)
+from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     popen_launch_pd_server,
 )
-from sglang.test.ci.ci_register import register_npu_ci
 
 register_npu_ci(est_time=400, suite="nightly-4-npu-a3", nightly=True)
 
@@ -38,30 +41,28 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
 
     @classmethod
     def start_prefill(cls):
-        prefill_args = (
-            [
-                "--disaggregation-mode",
-                "prefill",
-                "--tp-size",
-                "2",
-                "--enable-dp-attention",
-                "--dp",
-                "2",
-                "--load-balance-method",
-                "follow_bootstrap_room",
-                "--disaggregation-transfer-backend",
-                "ascend",
-                "--disable-cuda-graph",
-                "--attention-backend",
-                "ascend",
-                "--mem-fraction-static",
-                0.8,
-                "--dist-init-addr",
-                "127.0.0.1:10100",
-                "--base-gpu-id",
-                4,
-            ]
-        )
+        prefill_args = [
+            "--disaggregation-mode",
+            "prefill",
+            "--tp-size",
+            "2",
+            "--enable-dp-attention",
+            "--dp",
+            "2",
+            "--load-balance-method",
+            "follow_bootstrap_room",
+            "--disaggregation-transfer-backend",
+            "ascend",
+            "--disable-cuda-graph",
+            "--attention-backend",
+            "ascend",
+            "--mem-fraction-static",
+            0.8,
+            "--dist-init-addr",
+            "127.0.0.1:10100",
+            "--base-gpu-id",
+            4,
+        ]
 
         cls.process_prefill = popen_launch_pd_server(
             cls.model,
@@ -72,30 +73,29 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
 
     @classmethod
     def start_decode(cls):
-        decode_args = (
-            [
-                "--disaggregation-mode",
-                "decode",
-                "--base-gpu-id",
-                2,
-                "--tp-size",
-                "2",
-                "--enable-dp-attention",
-                "--dp",
-                "2",
-                "--load-balance-method",
-                "auto",
-                "--disaggregation-transfer-backend",
-                "ascend",
-                "--disable-cuda-graph",
-                "--attention-backend",
-                "ascend",
-                "--mem-fraction-static",
-                0.8,
-                "--dist-init-addr",
-                "127.0.0.1:10000",
-            ]
-        )
+        decode_args = [
+            "--disaggregation-mode",
+            "decode",
+            "--base-gpu-id",
+            2,
+            "--tp-size",
+            "2",
+            "--enable-dp-attention",
+            "--dp",
+            "2",
+            "--load-balance-method",
+            "auto",
+            "--disaggregation-transfer-backend",
+            "ascend",
+            "--disable-cuda-graph",
+            "--attention-backend",
+            "ascend",
+            "--mem-fraction-static",
+            0.8,
+            "--dist-init-addr",
+            "127.0.0.1:10000",
+        ]
+
         cls.process_decode = popen_launch_pd_server(
             cls.model,
             cls.decode_url,
