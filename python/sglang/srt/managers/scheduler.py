@@ -1322,6 +1322,64 @@ class Scheduler(
             tmp_batch, tmp_result = self.result_queue.popleft()
             self.process_batch_result(tmp_batch, tmp_result)
 
+        enable_profiling = envs.MY_ENABLE_PROFILING.get() and self.tp_rank == 0
+        prof_bs = envs.MY_PROFILING_BS.get()
+        prof_step = envs.MY_PROFILING_STEP.get()
+        prof_stage: str = envs.MY_PROFILING_STAGE.get()
+        prof_running = False
+        prof_cnt = 0
+        prof = None
+        if enable_profiling:
+            import torch_npu
+
+            experimental_config = torch_npu.profiler._ExperimentalConfig(
+                export_type=torch_npu.profiler.ExportType.Text,
+                profiler_level=torch_npu.profiler.ProfilerLevel.Level2,
+                msprof_tx=False,
+                aic_metrics=torch_npu.profiler.AiCMetrics.AiCoreNone,
+                l2_cache=False,
+                op_attr=False,
+                data_simplification=False,
+                record_op_args=False,
+                gc_detect_threshold=None,
+            )
+            prof = torch_npu.profiler.profile(
+                activities=[
+                    torch_npu.profiler.ProfilerActivity.CPU,
+                    torch_npu.profiler.ProfilerActivity.NPU,
+                ],
+                schedule=torch_npu.profiler.schedule(
+                    wait=1, warmup=1, active=1000, repeat=1, skip_first=20
+                ),
+                on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(
+                    "./my_profiling"
+                ),
+                record_shapes=True,
+                profile_memory=False,
+                with_stack=False,
+                with_modules=False,
+                with_flops=False,
+                experimental_config=experimental_config,
+            )
+
+            # prof = torch.profiler.profile(
+            #     activities=[
+            #         torch.profiler.ProfilerActivity.CPU,
+            #         torch.profiler.ProfilerActivity.CUDA,
+            #     ],
+            #     schedule=torch.profiler.schedule(
+            #         wait=1, warmup=1, active=1000, repeat=1, skip_first=1
+            #     ),
+            #     on_trace_ready=lambda p: p.export_chrome_trace(
+            #         "./my_profiling/trace.json"
+            #     ),
+            #     record_shapes=True,
+            #     profile_memory=False,
+            #     with_stack=False,
+            #     with_modules=False,
+            #     with_flops=False,
+            # )
+
         while True:
             # Receive requests
             recv_reqs = self.recv_requests()
@@ -1341,8 +1399,33 @@ class Scheduler(
 
             # Launch the current batch
             if batch:
+                is_prof_stage = False
+                if enable_profiling:
+                    if (
+                        prof_stage.lower() == "decode"
+                        and batch.forward_mode.is_decode()
+                    ) or (
+                        prof_stage.lower() == "prefill"
+                        and batch.forward_mode.is_extend()
+                    ):
+                        is_prof_stage = True
+
+                    if len(batch.reqs) >= prof_bs and prof_cnt == 0 and is_prof_stage:
+                        prof.start()
+                        prof_cnt += 1
+                        prof_running = True
+                    if prof_cnt > 0:
+                        prof_cnt += 1
+                    if prof_cnt == prof_step:
+                        torch.cuda.synchronize()
+                        prof.stop()
+                        prof_running = False
+
                 batch_result = self.run_batch(batch)
                 self.result_queue.append((batch.copy(), batch_result))
+
+                if enable_profiling and 0 < prof_cnt < prof_step and prof_running:
+                    prof.step()
             else:
                 batch_result = None
                 self.cancel_bubble_timer()
