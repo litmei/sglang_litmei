@@ -2,7 +2,6 @@ import os
 import re
 import tempfile
 import threading
-from time import sleep
 
 import requests
 
