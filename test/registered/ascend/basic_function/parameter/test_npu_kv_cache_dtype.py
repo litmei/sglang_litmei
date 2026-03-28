@@ -18,7 +18,7 @@ register_npu_ci(est_time=150, suite="nightly-1-npu-a3", nightly=True)
 
 
 class TestNPUKVCacheDtype(CustomTestCase):
-    """Testcase：Verify set --kv_cache_dtype is auto, bf16 or bfloat16, request inference successful.
+    """Testcase: Verify set --kv_cache_dtype is auto, bf16 or bfloat16, request inference successful.
 
     [Test Category] Parameter
     [Test Target] --kv_cache_dtype
@@ -76,7 +76,9 @@ class TestNPUKVCacheDtype(CustomTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(f'"kv_cache_dtype":"{self.kv_cache_dtype}"', response.text)
 
-        output = self.__class__.capturer.get_output() + self.__class__.capturer.get_error()
+        output = (
+            self.__class__.capturer.get_output() + self.__class__.capturer.get_error()
+        )
         self.assertIn(f"Using KV cache dtype: {self.using_kv_cache_dtype}", output)
 
 

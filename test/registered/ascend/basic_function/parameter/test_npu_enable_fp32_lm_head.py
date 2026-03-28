@@ -4,7 +4,6 @@ from sglang.test.ascend.gsm8k_ascend_mixin import GSM8KAscendMixin
 from sglang.test.ascend.test_ascend_utils import QWEN3_32B_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import CustomTestCase
-
 register_npu_ci(
     est_time=300,
     suite="nightly-4-npu-a3",
@@ -12,7 +11,7 @@ register_npu_ci(
 )
 
 
-class TestNPU(GSM8KAscendMixin, CustomTestCase):
+class TestNPUEnableFp32LmHead(GSM8KAscendMixin, CustomTestCase):
     """Testcase: Verify that the inference accuracy on the GSM8K dataset does not decrease after --enable-fp32-lm-head is set.
 
     [Test Category] Parameter

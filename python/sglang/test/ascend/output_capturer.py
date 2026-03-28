@@ -1,6 +1,6 @@
 import os
+import select
 import threading
-import time
 
 
 class OutputCapturer:
@@ -51,38 +51,46 @@ class OutputCapturer:
 
     def _read_loop(self):
         """The background process reads and prints pipeline data records in a loop."""
+        read_fds = [self.pipe_out, self.pipe_err_out]
         while not self.stop_thread:
             try:
-                data = os.read(self.pipe_out, 4096)
-                if data:
-                    self.captured_stdout.append(data)
-                    os.write(self.old_stdout, data)  # 实时打印
-            except:
-                self.stop()
+                # select listens to multiple file descriptors simultaneously, waiting for data in a non-blocking manner
+                readable, _, exceptional = select.select(read_fds, [], read_fds, 0.01)
 
-            try:
-                err_data = os.read(self.pipe_err_out, 4096)
-                if err_data:
-                    self.captured_stderr.append(err_data)
-                    os.write(self.old_stderr, err_data)
-            except:
-                self.stop()
+                # Processing file descriptors containing data
+                for fd in readable:
+                    if fd == self.pipe_out:
+                        data = os.read(fd, 4096)
+                        if data:
+                            self.captured_stdout.append(data)
+                            os.write(self.old_stdout, data)
+                    elif fd == self.pipe_err_out:
+                        err_data = os.read(fd, 4096)
+                        if err_data:
+                            self.captured_stderr.append(err_data)
+                            os.write(self.old_stderr, err_data)
 
-            time.sleep(0.001)
+                for fd in exceptional:
+                    if fd in read_fds:
+                        self.stop()
+
+            except OSError:
+                self.stop()
+                break
 
     def get_output(self):
         """Get all captured stdout as UTF-8 string
 
         Return: Decoded stdout string (ignore decoding errors)
         """
-        return b''.join(self.captured_stdout).decode('utf-8', errors='ignore')
+        return b"".join(self.captured_stdout).decode('utf-8', errors='ignore')
 
     def get_error(self):
         """Get all captured stderr as UTF-8 string
 
         Return: Decoded stderr string (ignore decoding errors)
         """
-        return b''.join(self.captured_stderr).decode('utf-8', errors='ignore')
+        return b"".join(self.captured_stderr).decode('utf-8', errors='ignore')
 
     def stop(self):
         """Stop capture and restore system environment"""
@@ -90,11 +98,11 @@ class OutputCapturer:
         if self.thread:
             self.thread.join(timeout=0.5)
 
-        # 恢复原始输出
+        # Restore original output
         os.dup2(self.old_stdout, 1)
         os.dup2(self.old_stderr, 2)
 
-        # 关闭所有文件描述符
+        # Close all file descriptors
         for fd in [self.pipe_out, self.pipe_err_out, self.old_stdout, self.old_stderr]:
             try:
                 os.close(fd)
