@@ -52,8 +52,8 @@ class TestNPULoggingCase0(TestNPULoggingBase):
         cls.temp_multi_level_dir = os.path.join(cls.temp_dir, "level1")
         cls.temp_multi_level_dir = os.path.join(cls.temp_dir, "level2")
         cls.temp_multi_level_dir = os.path.join(cls.temp_dir, "level3")
-        os.makedirs(cls.temp_level3_dir, exist_ok=True)
-        target_config = ["stdout", cls.temp_dir, cls.temp_level3_dir]
+        os.makedirs(cls.temp_multi_level_dir, exist_ok=True)
+        target_config = ["stdout", cls.temp_dir, cls.temp_multi_level_dir]
 
         cls.other_args.extend(["--log-requests"])
         cls.other_args.extend(["--log-requests-level", str(cls.log_requests_level)])
