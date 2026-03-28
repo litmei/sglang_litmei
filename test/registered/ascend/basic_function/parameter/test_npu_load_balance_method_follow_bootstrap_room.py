@@ -5,7 +5,7 @@ import requests
 
 from sglang.test.ascend.disaggregation_utils import TestDisaggregationBase
 from sglang.test.ascend.test_ascend_utils import (
-    QWEN3_30B_A3B_INSTRUCT_2507_WEIGHTS_PATH
+    QWEN3_30B_A3B_INSTRUCT_2507_WEIGHTS_PATH,
 )
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import (

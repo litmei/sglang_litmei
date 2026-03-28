@@ -1,6 +1,7 @@
 import random
 import unittest
 from types import SimpleNamespace
+
 import requests
 
 from sglang.srt.utils import kill_process_tree
@@ -15,7 +16,7 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
-register_npu_ci(est_time=500, suite="nightly-16-npu-a3", nightly=True)
+register_npu_ci(est_time=700, suite="nightly-16-npu-a3", nightly=True)
 
 
 class TestDPAttentionRoundBinLoadBalance(CustomTestCase):
@@ -110,4 +111,3 @@ if __name__ == "__main__":
         runner.run(suite)
     else:
         unittest.main()
-
