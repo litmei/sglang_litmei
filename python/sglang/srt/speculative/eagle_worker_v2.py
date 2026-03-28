@@ -386,10 +386,11 @@ class EagleDraftWorker(BaseDraftWorker):
         return wrapper
 
     @draft_wrapper
-    def prepare_verify_reflow(self, model_worker_batch):
+    def prepare_verify_fully_async_decoding(self, model_worker_batch):
+        # TODO: draft_input.prepare_for_v2_draft will update model_worker_batch.out_cache_loc, but here is not.
         draft_input = model_worker_batch.spec_info
         parent_list, top_scores_index, draft_tokens = self.draft_forward_for_prepare(
-            model_worker_batch.spec_info
+            draft_input
         )
         return parent_list, top_scores_index, draft_tokens, draft_input.verified_id
 
@@ -441,9 +442,9 @@ class EagleDraftWorker(BaseDraftWorker):
             if model_worker_batch.forward_mode.is_idle()
             else ForwardMode.DECODE
         )
-        model_worker_batch.input_ids = batch_result.next_draft_input.topk_index
         model_worker_batch.seq_lens = batch_result.next_draft_input.new_seq_lens
         # TODO(xjwei): Skip updating seq_lens_cpu for now to avoid CPU-GPU sync, it may reduce the accept length.
+        model_worker_batch.seq_lens_cpu = model_worker_batch.seq_lens.to("cpu")
 
         forward_batch, can_cuda_graph = draft_input.prepare_for_v2_draft(
             self.req_to_token_pool,
@@ -646,6 +647,11 @@ class EagleDraftWorker(BaseDraftWorker):
             spec_info.hidden_states,
         )
 
+        maybe_detect_nan(topk_p, "draft_forward: NaN in initial topk_p from spec_info")
+
+        if self.hot_token_id is not None:
+            topk_index = self.hot_token_id[topk_index]
+
         out_cache_loc = out_cache_loc.reshape(
             forward_batch.batch_size, self.topk, self.speculative_num_steps
         )
@@ -678,15 +684,23 @@ class EagleDraftWorker(BaseDraftWorker):
             logits_output = self.draft_runner.forward(
                 forward_batch, skip_attn_backend_init=True
             ).logits_output
+            maybe_detect_nan(logits_output.next_token_logits, f"draft_forward step {i}")
             probs = torch.softmax(logits_output.next_token_logits, dim=-1)
             topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
             if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
                 print(f"==debug=={i=} {topk_p=} {topk_index=} {self.topk=}")
             hidden_states = logits_output.hidden_states
-
+            maybe_detect_oob(
+                topk_index,
+                0,
+                logits_output.next_token_logits.shape[-1],
+                f"draft_forward step {i}: topk_index OOB vs vocab_size={logits_output.next_token_logits.shape[-1]}",
+            )
             # Save return values
             ret_topk_p_list.append(topk_p)
             ret_topk_index_list.append(topk_index)
+            if self.hot_token_id is not None:
+                topk_index = self.hot_token_id[topk_index]
 
         ret_topk_p = torch.cat(ret_topk_p_list, dim=1)
         ret_topk_index = torch.cat(ret_topk_index_list, dim=1)
@@ -940,7 +954,9 @@ class EAGLEWorkerV2(BaseSpecWorker):
             ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
                 if self.draft_worker.enable_spec_fully_aync_decoding:
                     verify_input: EagleVerifyInput = (
-                        self.draft_worker.prepare_verify_reflow(model_worker_batch)
+                        self.draft_worker.prepare_verify_fully_async_decoding(
+                            model_worker_batch
+                        )
                     )
                 else:
                     verify_input: EagleVerifyInput = self.draft_worker.draft(
