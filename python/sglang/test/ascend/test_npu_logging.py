@@ -520,7 +520,7 @@ class TestNPULoggingBase(CustomTestCase):
             err_log_file (file object): Open file object of the error log file
         """
         prompt_template = (
-                "just return me a string with of 10000 characters: " + "A" * 10000
+            "just return me a string with of 10000 characters: " + "A" * 10000
         )
         max_token = 10000
 
