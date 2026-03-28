@@ -83,14 +83,14 @@ class OutputCapturer:
 
         Return: Decoded stdout string (ignore decoding errors)
         """
-        return b"".join(self.captured_stdout).decode('utf-8', errors='ignore')
+        return b"".join(self.captured_stdout).decode("utf-8", errors="ignore")
 
     def get_error(self):
         """Get all captured stderr as UTF-8 string
 
         Return: Decoded stderr string (ignore decoding errors)
         """
-        return b"".join(self.captured_stderr).decode('utf-8', errors='ignore')
+        return b"".join(self.captured_stderr).decode("utf-8", errors="ignore")
 
     def stop(self):
         """Stop capture and restore system environment"""
