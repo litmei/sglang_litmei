@@ -366,13 +366,11 @@ class TestNPULoggingBase(CustomTestCase):
         self.assertGreater(len(lines), 0, "Did not find finish message in log.")
         self.assertGreater(len(lines), 0,
                            f"Did not find finish message in log. {out_log_file.name=} \n{content=}\n{len(lines)=}")
-
         finish_message = lines[-1]["content"]
         self.assertIn(f"'completion_tokens': {max_new_token}", finish_message)
 
         # Step 3: Validate token count preservation rules in logs:
         if log_requests_level >= 2:
-
             # Extract the content of output_ids to count the number of generated tokens recorded in the logs
             output_ids_start_index = finish_message.find(
                 self.keyword_output_id_start
