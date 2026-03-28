@@ -49,6 +49,12 @@ class GenerationBatchResult:
     # metrics
     expert_distribution_metrics: Optional[ExpertDistributionMetrics] = None
 
+    def __str__(self):
+        return f"<<GenerationBatchResult: next_token_ids={self.next_token_ids}, accept_lens={self.accept_lens}, num_accepted_tokens={self.num_accepted_tokens}, next_draft_input={self.next_draft_input}, extend_input_lne_per_req={self.extend_input_len_per_req}>>"
+
+    def __repr__(self):
+        return f"<<GenerationBatchResult: next_token_ids={self.next_token_ids}, accept_lens={self.accept_lens}, num_accepted_tokens={self.num_accepted_tokens}, next_draft_input={self.next_draft_input}, extend_input_lne_per_req={self.extend_input_len_per_req}>>"
+
     def copy_to_cpu(self, return_logprob: bool):
         """Copy tensors to CPU in overlap scheduling.
         Only the tensors which are needed for processing results are copied,

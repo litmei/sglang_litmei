@@ -2523,3 +2523,9 @@ class ModelWorkerBatch:
     mamba_track_indices: Optional[torch.Tensor] = None  # shape: [b], int64
     mamba_track_mask: Optional[torch.Tensor] = None  # shape: [b], bool
     mamba_track_seqlens: Optional[torch.Tensor] = None  # shape: [b], int64
+
+    def __str__(self):
+        return f"<<ModelWorkerBatch: input_ids={self.input_ids}, seq_lens={self.seq_lens}, out_cache_loc={self.out_cache_loc}, seq_lens_cpu={self.seq_lens_cpu}, spec_info={self.spec_info}>>"
+
+    def __repr__(self):
+        return f"<<ModelWorkerBatch: input_ids={self.input_ids}, seq_lens={self.seq_lens}, out_cache_loc={self.out_cache_loc}, seq_lens_cpu={self.seq_lens_cpu}, spec_info={self.spec_info}>>"

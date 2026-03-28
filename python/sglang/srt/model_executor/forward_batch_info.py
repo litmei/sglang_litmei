@@ -432,6 +432,12 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # For dumper: request IDs for cross-step sequence tracking
     rids: Optional[List[str]] = None
 
+    def __str__(self):
+        return f"<<ForwardBatch: forward_mode={self.forward_mode}, batch_size={self.batch_size}, input_ids={self.input_ids}, seq_lens={self.seq_lens}, seq_lens_cpu={self.seq_lens_cpu}, out_cache_loc={self.out_cache_loc}, spec_info={self.spec_info}>>"
+
+    def __repr__(self):
+        return f"<<ForwardBatch: forward_mode={self.forward_mode}, batch_size={self.batch_size}, input_ids={self.input_ids}, seq_lens={self.seq_lens}, seq_lens_cpu={self.seq_lens_cpu}, out_cache_loc={self.out_cache_loc}, spec_info={self.spec_info}>>"
+
     @classmethod
     def init_new(
         cls,

@@ -71,6 +71,12 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
     # Shape info for padding
     num_tokens_per_req: int = -1
 
+    def __str__(self):
+        return f"<<EagleVerifyInput: draft_token={self.draft_token}, positions={self.positions}, spec_steps={self.spec_steps}, topk={self.topk}, draft_token_num={self.draft_token_num}, seq_lens_sum={self.seq_lens_sum}, seq_lens_cpu={self.seq_lens_cpu}>>"
+
+    def __repr__(self):
+        return f"<<EagleVerifyInput: draft_token={self.draft_token}, positions={self.positions}, spec_steps={self.spec_steps}, topk={self.topk}, draft_token_num={self.draft_token_num}, seq_lens_sum={self.seq_lens_sum}, seq_lens_cpu={self.seq_lens_cpu}>>"
+
     def __post_init__(self):
         super().__init__(SpecInputType.EAGLE_VERIFY)
 
@@ -649,6 +655,12 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
     future_indices: Optional[FutureIndices] = None
     new_seq_lens: Optional[torch.Tensor] = None
     verify_done: Optional[torch.cuda.Event] = None
+
+    def __str__(self):
+        return f"<<EagleDraftInput: topk_p={self.topk_p}, verified_id={self.verified_id}, accept_length={self.accept_length}, accept_length_cpu={self.accept_length_cpu}, seq_lens_for_draft_extend={self.seq_lens_for_draft_extend}, seq_lens_for_draft_extend_cpu={self.seq_lens_for_draft_extend_cpu}, future_indices={self.future_indices}, new_seq_lens={self.new_seq_lens}>>"
+
+    def __repr__(self):
+        return f"<<EagleDraftInput: topk_p={self.topk_p}, verified_id={self.verified_id}, accept_length={self.accept_length}, accept_length_cpu={self.accept_length_cpu}, seq_lens_for_draft_extend={self.seq_lens_for_draft_extend}, seq_lens_for_draft_extend_cpu={self.seq_lens_for_draft_extend_cpu}, future_indices={self.future_indices}, new_seq_lens={self.new_seq_lens}>>"
 
     def __post_init__(self):
         super().__init__(SpecInputType.EAGLE_DRAFT)

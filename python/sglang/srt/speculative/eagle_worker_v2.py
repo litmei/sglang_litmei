@@ -406,6 +406,8 @@ class EagleDraftWorker(BaseDraftWorker):
         )
 
         # Run draft
+        if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+            print(f"--- v1 --- {forward_batch}")
         if can_cuda_graph:
             parent_list, top_scores_index, draft_tokens = self.cuda_graph_runner.replay(
                 forward_batch,
@@ -457,6 +459,8 @@ class EagleDraftWorker(BaseDraftWorker):
         forward_batch.spec_info.topk_index = batch_result.next_draft_input.topk_index
 
         # Run draft
+        if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+            print(f"--- v2 --- {forward_batch}")
         if can_cuda_graph:
             ret_topk_p, ret_topk_index = self.cuda_graph_runner.replay(
                 forward_batch,
@@ -472,6 +476,8 @@ class EagleDraftWorker(BaseDraftWorker):
         next_draft_input = batch_result.next_draft_input
         ret_topk_p_list = [next_draft_input.topk_p, ret_topk_p]
         ret_topk_index_list = [next_draft_input.topk_index, ret_topk_index]
+        if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+            print(f"===debug=== {ret_topk_p_list=} {ret_topk_index_list=}")
         (
             next_draft_input.topk_p,
             next_draft_input.topk_index,
@@ -586,6 +592,8 @@ class EagleDraftWorker(BaseDraftWorker):
             maybe_detect_nan(logits_output.next_token_logits, f"draft_forward step {i}")
             probs = torch.softmax(logits_output.next_token_logits, dim=-1)
             topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
+            if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+                print(f"==debug=={i=} {topk_p=} {topk_index=} {self.topk=}")
             maybe_detect_oob(
                 topk_index,
                 0,
@@ -672,6 +680,8 @@ class EagleDraftWorker(BaseDraftWorker):
             ).logits_output
             probs = torch.softmax(logits_output.next_token_logits, dim=-1)
             topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
+            if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+                print(f"==debug=={i=} {topk_p=} {topk_index=} {self.topk=}")
             hidden_states = logits_output.hidden_states
 
             # Save return values
@@ -923,6 +933,8 @@ class EAGLEWorkerV2(BaseSpecWorker):
                     topk=topk,
                     capture_hidden_mode=CaptureHiddenMode.LAST,
                 )
+            if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+                print(f"%%%-- before draft (or prepare): \n    {model_worker_batch=}")
             with self.draft_worker.draft_tp_context(
                 self.draft_worker.draft_runner.tp_group
             ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
@@ -936,12 +948,22 @@ class EAGLEWorkerV2(BaseSpecWorker):
                     )
             assert verify_input.is_verify_input()
             model_worker_batch.spec_info = verify_input
+            if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+                print(f"%%%-- before verify: \n    {model_worker_batch=}")
             batch_output = self.verify(model_worker_batch)
+            if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+                print(
+                    f"%%%-- before extend (and draft_v2): \n    {model_worker_batch=} \n    {batch_output=}"
+                )
             with self.draft_worker.draft_tp_context(
                 self.draft_worker.draft_runner.tp_group
             ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
                 self.draft_worker._draft_extend_for_decode(
                     model_worker_batch, batch_output
+                )
+            if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+                print(
+                    f"%%%-- before extend (and draft_v2): \n    {model_worker_batch=} \n    {batch_output=}"
                 )
             return batch_output
 

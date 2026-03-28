@@ -313,6 +313,11 @@ class EagleVerifyInputV2Mixin:
         if sampling_info.is_all_greedy or _is_npu or _is_hip:
             target_predict = torch.argmax(next_token_logits, dim=-1)
             target_predict = target_predict.reshape(bs, self.draft_token_num)
+
+            from sglang.srt.environ import envs
+
+            if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+                print(f"--- debug in ---- {candidates=} {target_predict=}")
             predict, accept_index, accept_length = verify_tree_greedy_func(
                 predicts=predict,  # mutable
                 accept_index=accept_index,  # mutable
@@ -324,6 +329,8 @@ class EagleVerifyInputV2Mixin:
                 target_predict=target_predict,
                 topk=self.topk,
             )
+            if envs.MY_DEBUGGING.get() and torch.distributed.get_rank() == 0:
+                print(f"--- debug out ---- {predict=} {accept_index=} {accept_length=}")
         else:
             # Apply temperature and get target probs
             expanded_temperature = torch.repeat_interleave(
