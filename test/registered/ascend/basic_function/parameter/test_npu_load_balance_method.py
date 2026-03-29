@@ -7,6 +7,7 @@ import requests
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import DEEPSEEK_R1_0528_W8A8_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
+from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.test.run_eval import run_eval
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -65,17 +66,34 @@ class TestDPAttentionRoundBinLoadBalance(CustomTestCase):
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
 
-    def test_mgsm_en(self):
+    # def test_mgsm_en(self):
+    #     args = SimpleNamespace(
+    #         base_url=self.base_url,
+    #         model=self.model_path,
+    #         eval_name="mgsm_en",
+    #         num_examples=10,
+    #         num_threads=1024,
+    #     )
+    #
+    #     metrics = run_eval(args)
+    #     self.assertGreater(metrics["score"], 0.95)
+
+    def test_a_gsm8k(self):
         args = SimpleNamespace(
-            base_url=self.base_url,
-            model=self.model_path,
-            eval_name="mgsm_en",
-            num_examples=10,
-            num_threads=1024,
+            num_shots=5,
+            data_path=None,
+            num_questions=200,
+            max_new_tokens=512,
+            parallel=128,
+            host=f"http://{self.url.hostname}",
+            port=int(self.url.port),
         )
 
-        metrics = run_eval(args)
-        self.assertGreater(metrics["score"], 0.95)
+        metrics = run_eval_few_shot_gsm8k(args)
+        self.assertGreaterEqual(
+            metrics["accuracy"],
+            0.95,
+        )
 
     def test_server_info(self):
         response = requests.get(f"{self.base_url}/get_server_info")
