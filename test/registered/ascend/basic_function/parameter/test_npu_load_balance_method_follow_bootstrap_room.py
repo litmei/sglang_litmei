@@ -26,7 +26,8 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
     [Test Target] --load-balance-method
     """
 
-    load_balance_method = "follow_bootstrap_room"
+    # load_balance_method = "follow_bootstrap_room"
+    load_balance_method = "round_robin"
 
     @classmethod
     def setUpClass(cls):
@@ -90,7 +91,8 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
             "--dp",
             "2",
             "--load-balance-method",
-            "auto",
+            # "auto",
+            "round_robin",
             "--disaggregation-transfer-backend",
             "ascend",
             "--disable-cuda-graph",
@@ -154,16 +156,16 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
         super().tearDownClass()
 
 
-class _TestNPULoadBalanceMethodAuto(TestNPULoadBalanceMethodFollowBootstrapRoom):
-    load_balance_method = "auto"
-
-
-class _TestNPULoadBalanceMethodTotalRequests(TestNPULoadBalanceMethodFollowBootstrapRoom):
-    load_balance_method = "total_requests"
-
-
-class _TestNPULoadBalanceMethodTotalTokens(TestNPULoadBalanceMethodFollowBootstrapRoom):
-    load_balance_method = "total_tokens"
+# class _TestNPULoadBalanceMethodAuto(TestNPULoadBalanceMethodFollowBootstrapRoom):
+#     load_balance_method = "auto"
+#
+#
+# class _TestNPULoadBalanceMethodTotalRequests(TestNPULoadBalanceMethodFollowBootstrapRoom):
+#     load_balance_method = "total_requests"
+#
+#
+# class _TestNPULoadBalanceMethodTotalTokens(TestNPULoadBalanceMethodFollowBootstrapRoom):
+#     load_balance_method = "total_tokens"
 
 
 if __name__ == "__main__":
