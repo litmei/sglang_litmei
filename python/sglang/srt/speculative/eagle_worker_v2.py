@@ -442,7 +442,7 @@ class EagleDraftWorker(BaseDraftWorker):
         )
         model_worker_batch.seq_lens = batch_result.next_draft_input.new_seq_lens
         # TODO(xjwei): Skip updating seq_lens_cpu for now to avoid CPU-GPU sync, it may reduce the accept length.
-        model_worker_batch.seq_lens_cpu = model_worker_batch.seq_lens.to("cpu")
+        # model_worker_batch.seq_lens_cpu = model_worker_batch.seq_lens.to("cpu")
 
         forward_batch, can_cuda_graph = draft_input.prepare_for_v2_draft(
             self.req_to_token_pool,
