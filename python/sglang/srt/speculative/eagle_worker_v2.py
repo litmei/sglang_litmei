@@ -427,7 +427,6 @@ class EagleDraftWorker(BaseDraftWorker):
         self,
         model_worker_batch: ModelWorkerBatch,
         batch_result: GenerationBatchResult,
-        draft_logits_output,
         draft_input,
     ):
         if self.speculative_num_steps <= 1:
@@ -439,7 +438,11 @@ class EagleDraftWorker(BaseDraftWorker):
             else ForwardMode.DECODE
         )
         model_worker_batch.seq_lens = batch_result.next_draft_input.new_seq_lens
-        # TODO(xjwei): Skip updating seq_lens_cpu for now to avoid CPU-GPU sync, it may reduce the accept length.
+        # To ensure accurate acceptance length, seq_lens_cpu synchronization is needed here.
+        # However, this synchronization contradicts the intent and benefit of spec_v2_zero_bubble.
+        # As a result, spec_v2_zero_bubble is ideal for architectures like DeepSeek-V3.2
+        # that don't need seq_lens_cpu. For models dependent on seq_lens_cpu,
+        # skipping this synchronization might affect the acceptance length.
         # model_worker_batch.seq_lens_cpu = model_worker_batch.seq_lens.to("cpu")
 
         forward_batch, can_cuda_graph = draft_input.prepare_for_v2_draft(
@@ -451,7 +454,9 @@ class EagleDraftWorker(BaseDraftWorker):
             self.speculative_num_steps,
         )
 
-        forward_batch.spec_info.hidden_states = draft_logits_output.hidden_states
+        forward_batch.spec_info.hidden_states = (
+            batch_result.next_draft_input.hidden_states
+        )
         forward_batch.spec_info.topk_p = batch_result.next_draft_input.topk_p
         forward_batch.spec_info.topk_index = batch_result.next_draft_input.topk_index
 
@@ -829,7 +834,7 @@ class EagleDraftWorker(BaseDraftWorker):
         )
 
         if self.enable_spec_v2_zero_bubble:
-            self.draft_v2(batch, batch_result, draft_logits_output, draft_input)
+            self.draft_v2(batch, batch_result, draft_input)
 
 
 class EAGLEWorkerV2(BaseSpecWorker):
