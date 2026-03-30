@@ -150,7 +150,8 @@ class _BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
         super().tearDownClass()
 
 
-def create_test_class(param_tuple, index):
+# def create_test_class(param_tuple, index):
+for index, param_tuple in enumerate(all_params):
     prefill_load_balance_method, decode_load_balance_method = param_tuple
     class_name = f"Test_{index:02d}_prefill_{prefill_load_balance_method}_decode_{decode_load_balance_method}"
     new_class = type(
@@ -158,10 +159,8 @@ def create_test_class(param_tuple, index):
         (_BaseTestNPULoadBalanceMethodDPDisaggregation, ),
         {"params": param_tuple}
     )
-    return new_class
+    globals()[class_name] = new_class
 
-for idx, param in enumerate(all_params):
-    create_test_class(param, idx)
 
 
 #
