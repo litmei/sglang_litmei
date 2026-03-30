@@ -120,9 +120,7 @@ class EagleDraftWorker(BaseDraftWorker):
         self.speculative_algorithm = SpeculativeAlgorithm.from_string(
             server_args.speculative_algorithm
         )
-        self.enable_spec_fully_aync_decoding = (
-            envs.SGLANG_SPEC_FULLY_ASYNC_DECODING.get()
-        )
+        self.enable_spec_v2_zero_bubble = envs.SGLANG_SPEC_V2_ZERO_BUBBLE.get()
 
         # Do not capture cuda graph in `TpModelWorker` init,
         # will capture later with init_cuda_graphs()
@@ -431,7 +429,6 @@ class EagleDraftWorker(BaseDraftWorker):
         self,
         model_worker_batch: ModelWorkerBatch,
         batch_result: GenerationBatchResult,
-        draft_logits_output,
         draft_input,
     ):
         if self.speculative_num_steps <= 1:
@@ -443,7 +440,11 @@ class EagleDraftWorker(BaseDraftWorker):
             else ForwardMode.DECODE
         )
         model_worker_batch.seq_lens = batch_result.next_draft_input.new_seq_lens
-        # TODO(xjwei): Skip updating seq_lens_cpu for now to avoid CPU-GPU sync, it may reduce the accept length.
+        # To ensure accurate acceptance length, seq_lens_cpu synchronization is needed here.
+        # However, this synchronization contradicts the intent and benefit of spec_v2_zero_bubble.
+        # As a result, spec_v2_zero_bubble is ideal for architectures like DeepSeek-V3.2
+        # that don't need seq_lens_cpu. For models dependent on seq_lens_cpu,
+        # skipping this synchronization might affect the acceptance length.
         # model_worker_batch.seq_lens_cpu = model_worker_batch.seq_lens.to("cpu")
 
         forward_batch, can_cuda_graph = draft_input.prepare_for_v2_draft(
@@ -455,7 +456,9 @@ class EagleDraftWorker(BaseDraftWorker):
             self.speculative_num_steps,
         )
 
-        forward_batch.spec_info.hidden_states = draft_logits_output.hidden_states
+        forward_batch.spec_info.hidden_states = (
+            batch_result.next_draft_input.hidden_states
+        )
         forward_batch.spec_info.topk_p = batch_result.next_draft_input.topk_p
         forward_batch.spec_info.topk_index = batch_result.next_draft_input.topk_index
 
@@ -756,7 +759,7 @@ class EagleDraftWorker(BaseDraftWorker):
         # Update spec_info for the next draft step
         probs = torch.softmax(logits_output.next_token_logits, dim=-1)
         topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
-        if self.enable_spec_fully_aync_decoding and self.speculative_num_steps > 1:
+        if self.enable_spec_v2_zero_bubble and self.speculative_num_steps > 1:
             topk_pad_size = self.speculative_num_steps * self.topk - topk_p.shape[-1]
             topk_p = F.pad(topk_p, (0, topk_pad_size))
             topk_index = F.pad(topk_index, (0, topk_pad_size))
@@ -840,8 +843,8 @@ class EagleDraftWorker(BaseDraftWorker):
             ret_hidden_states,
         )
 
-        if self.enable_spec_fully_aync_decoding:
-            self.draft_v2(batch, batch_result, draft_logits_output, draft_input)
+        if self.enable_spec_v2_zero_bubble:
+            self.draft_v2(batch, batch_result, draft_input)
 
 
 class EAGLEWorkerV2(BaseSpecWorker):
@@ -938,7 +941,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
         else:
             if model_worker_batch.spec_info is None:
                 topk = self.topk
-                if self.draft_worker.enable_spec_fully_aync_decoding:
+                if self.draft_worker.enable_spec_v2_zero_bubble:
                     topk *= self.speculative_num_steps
                 model_worker_batch.spec_info = EagleDraftInput.create_idle_input(
                     device=self.device,
@@ -952,7 +955,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
             with self.draft_worker.draft_tp_context(
                 self.draft_worker.draft_runner.tp_group
             ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
-                if self.draft_worker.enable_spec_fully_aync_decoding:
+                if self.draft_worker.enable_spec_v2_zero_bubble:
                     verify_input: EagleVerifyInput = (
                         self.draft_worker.prepare_verify_fully_async_decoding(
                             model_worker_batch
