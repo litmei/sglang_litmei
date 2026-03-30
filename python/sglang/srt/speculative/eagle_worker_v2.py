@@ -533,12 +533,12 @@ class EagleDraftWorker(BaseDraftWorker):
         forward_batch = ForwardBatch.init_new(batch, self.draft_runner)
         if mm_input_embeds is not None:
             forward_batch.mm_input_embeds = mm_input_embeds
-        # Important: clamp after getting original multimodal regions
-        # Clamp input ids. This is because the input_ids for the multimodal tokens are
-        # filled with the hash values of the multimodal for the prefix matching in the radix attention.
-        # There values are useless because their embeddings will be replaced by vision embeddings anyway.
-        vocab_size = self.draft_runner.model.get_input_embeddings().num_embeddings
-        forward_batch.input_ids.clamp_(min=0, max=vocab_size - 1)
+            # Important: clamp after getting original multimodal regions
+            # Clamp input ids. This is because the input_ids for the multimodal tokens are
+            # filled with the hash values of the multimodal for the prefix matching in the radix attention.
+            # There values are useless because their embeddings will be replaced by vision embeddings anyway.
+            vocab_size = self.draft_runner.model.get_input_embeddings().num_embeddings
+            forward_batch.input_ids.clamp_(min=0, max=vocab_size - 1)
         logits_output = self.draft_runner.forward(forward_batch).logits_output
         maybe_detect_nan(logits_output.next_token_logits, "draft_extend_for_prefill")
 
