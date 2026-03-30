@@ -1,11 +1,11 @@
-name: Release Test (NPU)
+name: Full Test (NPU)
 
 on:
 #  pull_request:
 #    branches:
 #      - main
 #    paths:
-#      - ".github/workflows/release-test-npu.yml"
+#      - ".github/workflows/full-test-npu.yml"
   workflow_dispatch:
     inputs:
       ref:
@@ -30,7 +30,7 @@ on:
         default: 'false'
 
 concurrency:
-  group: release-test-npu-${{ inputs.ref || github.ref }}
+  group: full-test-npu-${{ inputs.ref || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 
 jobs:
@@ -82,7 +82,7 @@ jobs:
       skip_install_flag: ${{ needs.set-image-config.outputs.skip_install_flag }}
     secrets: inherit
 
-  release-1-npu-a3:
+  full-1-npu-a3:
     needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
@@ -142,9 +142,9 @@ jobs:
           export PYTHONPATH=$PYTHONPATH:$(pwd)
           cd ../
           cd test
-          python3 run_suite.py --hw npu --suite release-1-npu-a3 --nightly --continue-on-error --timeout-per-file 3600
+          python3 run_suite.py --hw npu --suite full-1-npu-a3 --nightly --continue-on-error --timeout-per-file 3600
 
-  release-2-npu-a3:
+  full-2-npu-a3:
     needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
@@ -204,9 +204,9 @@ jobs:
           export PYTHONPATH=$PYTHONPATH:$(pwd)
           cd ../
           cd test
-          python3 run_suite.py --hw npu --suite release-2-npu-a3 --nightly --continue-on-error --timeout-per-file 3600
+          python3 run_suite.py --hw npu --suite full-2-npu-a3 --nightly --continue-on-error --timeout-per-file 3600
 
-  release-4-npu-a3:
+  full-4-npu-a3:
     needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-4
@@ -266,9 +266,9 @@ jobs:
           export PYTHONPATH=$PYTHONPATH:$(pwd)
           cd ../
           cd test
-          python3 run_suite.py --hw npu --suite release-4-npu-a3 --nightly --continue-on-error --timeout-per-file 3600
+          python3 run_suite.py --hw npu --suite full-4-npu-a3 --nightly --continue-on-error --timeout-per-file 3600
 
-  release-16-npu-a3:
+  full-16-npu-a3:
     needs: [set-image-config]
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-16
@@ -328,16 +328,16 @@ jobs:
           export PYTHONPATH=$PYTHONPATH:$(pwd)
           cd ../
           cd test
-          python3 run_suite.py --hw npu --suite release-16-npu-a3 --nightly --continue-on-error --timeout-per-file 3600
+          python3 run_suite.py --hw npu --suite full-16-npu-a3 --nightly --continue-on-error --timeout-per-file 3600
 
   check-all-jobs:
     if: github.repository == 'sgl-project/sglang' && always()
     needs:
       - nighly-test-npu
-      - release-1-npu-a3
-      - release-2-npu-a3
-      - release-4-npu-a3
-      - release-16-npu-a3
+      - full-1-npu-a3
+      - full-2-npu-a3
+      - full-4-npu-a3
+      - full-16-npu-a3
     runs-on: ubuntu-latest
     container:
       image: docker.m.daocloud.io/ubuntu:22.04
