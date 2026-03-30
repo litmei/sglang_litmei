@@ -1,6 +1,7 @@
 import itertools
 import os
 import unittest
+from time import sleep
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
@@ -149,6 +150,9 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
     def tearDownClass(cls):
         os.environ.pop("ASCEND_MF_STORE_URL")
         super().tearDownClass()
+        # wait for server release source
+        sleep(30)
+
 
 
 # def create_test_class(param_tuple, index):
