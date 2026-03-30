@@ -425,7 +425,7 @@ class EagleDraftWorker(BaseDraftWorker):
 
         return parent_list, top_scores_index, draft_tokens, draft_input.verified_id
 
-    def draft_v2(
+    def draft_zero_bubble(
         self,
         model_worker_batch: ModelWorkerBatch,
         batch_result: GenerationBatchResult,
@@ -472,7 +472,7 @@ class EagleDraftWorker(BaseDraftWorker):
         else:
             if not forward_batch.forward_mode.is_idle():
                 self.draft_attn_backend.init_forward_metadata(forward_batch)
-            ret_topk_p, ret_topk_index = self.draft_forward_v2(forward_batch)
+            ret_topk_p, ret_topk_index = self.draft_forward_zero_bubble(forward_batch)
 
         assert isinstance(ret_topk_p, torch.Tensor) and isinstance(
             ret_topk_index, torch.Tensor
@@ -636,7 +636,7 @@ class EagleDraftWorker(BaseDraftWorker):
 
         return parent_list, top_scores_index, draft_tokens
 
-    def draft_forward_v2(self, forward_batch: ForwardBatch):
+    def draft_forward_zero_bubble(self, forward_batch: ForwardBatch):
         assert (
             self.speculative_num_steps > 1
         ), "draft_forward_v2 only can work when spec_num_steps > 1"
@@ -844,7 +844,7 @@ class EagleDraftWorker(BaseDraftWorker):
         )
 
         if self.enable_spec_v2_zero_bubble:
-            self.draft_v2(batch, batch_result, draft_input)
+            self.draft_zero_bubble(batch, batch_result, draft_input)
 
 
 class EAGLEWorkerV2(BaseSpecWorker):

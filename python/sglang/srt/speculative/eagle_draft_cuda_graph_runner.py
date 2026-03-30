@@ -333,9 +333,9 @@ class EAGLEDraftCudaGraphRunner:
 
             if self.enable_spec_v2_zero_bubble:
                 assert hasattr(
-                    self.eagle_worker, "draft_forward_v2"
-                ), "Overlap reflow just support when enable overlap scheduler"
-                ret = self.eagle_worker.draft_forward_v2(forward_batch)
+                    self.eagle_worker, "draft_forward_zero_bubble"
+                ), "SpecV2 zero bubble just support when enable overlap scheduler now"
+                ret = self.eagle_worker.draft_forward_zero_bubble(forward_batch)
             else:
                 ret = self.eagle_worker.draft_forward(forward_batch)
 
