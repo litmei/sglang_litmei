@@ -19,7 +19,7 @@ from sglang.test.test_utils import (
 register_npu_ci(est_time=200, suite="nightly-4-npu-a3", nightly=True)
 
 
-class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
+class TestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
     """Testcase：Verify that the inference is successful when --load-balance-method is set to follow_bootstrap_room.
 
     [Test Category] Parameter
@@ -27,7 +27,9 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
     """
 
     # load_balance_method = "follow_bootstrap_room"
-    load_balance_method = "round_robin"
+    # load_balance_method = "round_robin"
+    prefill_load_balance_method = "auto"
+    decode_load_balance_method = "auto"
 
     @classmethod
     def setUpClass(cls):
@@ -57,7 +59,7 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
             "--dp",
             "2",
             "--load-balance-method",
-            cls.load_balance_method,
+            cls.prefill_load_balance_method,
             "--disaggregation-transfer-backend",
             "ascend",
             "--disable-cuda-graph",
@@ -91,8 +93,7 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
             "--dp",
             "2",
             "--load-balance-method",
-            # "auto",
-            "round_robin",
+            cls.decode_load_balance_method,
             "--disaggregation-transfer-backend",
             "ascend",
             "--disable-cuda-graph",
@@ -110,23 +111,6 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=decode_args,
         )
-
-    # def test_inference(self, max_new_tokens=32):
-    #     """Send a basic inference request to test inference function."""
-    #     response = requests.post(
-    #         f"{self.lb_url}/generate",
-    #         json={
-    #             "text": "What is the capital of France?",
-    #             "sampling_params": {
-    #                 "temperature": 0,
-    #                 "max_new_tokens": max_new_tokens,
-    #             },
-    #         },
-    #         timeout=60,
-    #     )
-    #     self.assertEqual(response.status_code, 200)
-    #     self.assertIn("Paris", response.text)
-    #     return response.text
 
     def test_gsm8k(self):
         args = SimpleNamespace(
@@ -156,17 +140,39 @@ class TestNPULoadBalanceMethodFollowBootstrapRoom(TestDisaggregationBase):
         super().tearDownClass()
 
 
-# class _TestNPULoadBalanceMethodAuto(TestNPULoadBalanceMethodFollowBootstrapRoom):
-#     load_balance_method = "auto"
-#
-#
-# class _TestNPULoadBalanceMethodTotalRequests(TestNPULoadBalanceMethodFollowBootstrapRoom):
-#     load_balance_method = "total_requests"
-#
-#
-# class _TestNPULoadBalanceMethodTotalTokens(TestNPULoadBalanceMethodFollowBootstrapRoom):
-#     load_balance_method = "total_tokens"
+class _TestNPULoadBalanceMethodPrefillAutoDecodeRoundBin(TestNPULoadBalanceMethodDPDisaggregation):
+    prefill_load_balance_method = "auto"
+    decode_load_balance_method = "round_bin"
+
+class _TestNPULoadBalanceMethodPrefillAutoDecodeTotalRequests(TestNPULoadBalanceMethodDPDisaggregation):
+    prefill_load_balance_method = "auto"
+    decode_load_balance_method = "total_requests"
+
+class _TestNPULoadBalanceMethodPrefillAutoDecodeTotalTotalTokens(TestNPULoadBalanceMethodDPDisaggregation):
+    prefill_load_balance_method = "auto"
+    decode_load_balance_method = "total_tokens"
+
+class _TestNPULoadBalanceMethodPrefillAutoDecodeFollowBootstrapRoom(TestNPULoadBalanceMethodDPDisaggregation):
+    prefill_load_balance_method = "auto"
+    decode_load_balance_method = "follow_bootstrap_room"
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # unittest.main()
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    RUN_FLAG = [
+        TestNPULoadBalanceMethodDPDisaggregation,
+        _TestNPULoadBalanceMethodPrefillAutoDecodeRoundBin,
+        _TestNPULoadBalanceMethodPrefillAutoDecodeTotalRequests,
+        _TestNPULoadBalanceMethodPrefillAutoDecodeTotalTotalTokens,
+        # _TestNPULoadBalanceMethodPrefillAutoDecodeFollowBootstrapRoom,
+    ]
+    # suite.addTests(loader.loadTestsFromTestCase(random.choice(RUN_FLAG)))
+    suite.addTests(loader.loadTestsFromTestCase(TestNPULoadBalanceMethodDPDisaggregation))
+    suite.addTests(loader.loadTestsFromTestCase(_TestNPULoadBalanceMethodPrefillAutoDecodeRoundBin))
+    suite.addTests(loader.loadTestsFromTestCase(_TestNPULoadBalanceMethodPrefillAutoDecodeTotalRequests))
+    suite.addTests(loader.loadTestsFromTestCase(_TestNPULoadBalanceMethodPrefillAutoDecodeTotalTotalTokens))
+    # suite.addTests(loader.loadTestsFromTestCase(_TestNPULoadBalanceMethodPrefillAutoDecodeFollowBootstrapRoom))
+    runner = unittest.TextTestRunner()
+    runner.run(suite)
