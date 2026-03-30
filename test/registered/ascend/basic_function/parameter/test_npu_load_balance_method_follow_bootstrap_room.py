@@ -141,9 +141,9 @@ class TestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
         super().tearDownClass()
 
 
-class _TestNPULoadBalanceMethodPrefillAutoDecodeRoundBin(TestNPULoadBalanceMethodDPDisaggregation):
+class _TestNPULoadBalanceMethodPrefillAutoDecodeRoundRobin(TestNPULoadBalanceMethodDPDisaggregation):
     prefill_load_balance_method = "auto"
-    decode_load_balance_method = "round_bin"
+    decode_load_balance_method = "round_robin"
 
 class _TestNPULoadBalanceMethodPrefillAutoDecodeTotalRequests(TestNPULoadBalanceMethodDPDisaggregation):
     prefill_load_balance_method = "auto"
@@ -164,7 +164,7 @@ if __name__ == "__main__":
     suite = unittest.TestSuite()
     RUN_FLAG = [
         TestNPULoadBalanceMethodDPDisaggregation,
-        _TestNPULoadBalanceMethodPrefillAutoDecodeRoundBin,
+        _TestNPULoadBalanceMethodPrefillAutoDecodeRoundRobin,
         _TestNPULoadBalanceMethodPrefillAutoDecodeTotalRequests,
         _TestNPULoadBalanceMethodPrefillAutoDecodeTotalTotalTokens,
         # _TestNPULoadBalanceMethodPrefillAutoDecodeFollowBootstrapRoom,
