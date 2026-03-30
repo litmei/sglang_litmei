@@ -120,7 +120,7 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
         )
 
 
-    def _test_gsm8k(self):
+    def test_gsm8k(self):
         args = SimpleNamespace(
             num_shots=5,
             data_path=None,
@@ -137,7 +137,7 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
             0.95,
         )
 
-    def _test_server_info(self):
+    def test_server_info(self):
         response = requests.get(f"{self.lb_url}/get_server_info")
         self.assertEqual(response.status_code, 200)
         self.assertIn(self.prefill_load_balance_method, response.text)
@@ -160,8 +160,8 @@ def create_test_class(param_tuple, index):
     )
     return new_class
 
-for index, param_tuple in enumerate(all_params):
-    create_test_class(param_tuple, index)
+for idx, param in enumerate(all_params):
+    create_test_class(param, idx)
 
 
 #
