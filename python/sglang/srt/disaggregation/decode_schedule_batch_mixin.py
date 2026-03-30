@@ -164,14 +164,9 @@ class ScheduleBatchDisaggregationDecodeMixin:
             hidden_states_list = [req.hidden_states_tensor for req in self.reqs]
             hidden_states = torch.stack(hidden_states_list, dim=0).to(self.device)
 
-            enable_spec_fully_aync_decoding = (
-                envs.SGLANG_SPEC_FULLY_ASYNC_DECODING.get()
-            )
+            enable_spec_v2_zero_bubble = envs.SGLANG_SPEC_V2_ZERO_BUBBLE.get()
 
-            if (
-                enable_spec_fully_aync_decoding
-                and server_args.speculative_num_steps > 1
-            ):
+            if enable_spec_v2_zero_bubble and server_args.speculative_num_steps > 1:
                 topk_pad_size = (
                     server_args.speculative_num_steps * num_states - topk_p.shape[-1]
                 )
