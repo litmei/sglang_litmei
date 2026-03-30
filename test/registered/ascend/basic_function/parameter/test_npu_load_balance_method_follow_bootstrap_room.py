@@ -215,7 +215,7 @@ class TestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
                 self._test_server_info()
                 self._test_gsm8k()
             finally:
-                self.tearDownClass()
+                super().tearDownClass()
 
     def _test_gsm8k(self):
         args = SimpleNamespace(
