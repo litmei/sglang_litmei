@@ -21,7 +21,13 @@ from sglang.test.test_utils import (
 
 register_npu_ci(est_time=200, suite="nightly-4-npu-a3", nightly=True)
 
-load_balance_method_options = ["auto", "round_robin", "total_requests", "total_tokens", "follow_bootstrap_room"]
+load_balance_method_options = [
+    "auto",
+    "round_robin",
+    "total_requests",
+    "total_tokens",
+    "follow_bootstrap_room"
+]
 all_params = list(itertools.product(load_balance_method_options, repeat=2))
 
 
@@ -140,11 +146,19 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.text)
         self.assertEqual(
-            "follow_bootstrap_room" if self.prefill_load_balance_method == "auto" else self.prefill_load_balance_method,
+            (
+                "follow_bootstrap_room"
+                if self.prefill_load_balance_method == "auto"
+                else self.prefill_load_balance_method
+            ),
             data.get("prefill")[0].get("load_balance_method")
         )
         self.assertEqual(
-            "round_robin" if self.decode_load_balance_method == "auto" else self.decode_load_balance_method,
+            (
+                "round_robin"
+                if self.decode_load_balance_method == "auto"
+                else self.decode_load_balance_method
+            ),
             data.get("decode")[0].get("load_balance_method")
         )
 
@@ -165,7 +179,7 @@ for index, param_tuple in enumerate(all_params):
     new_class = type(
         class_name,
         (BaseTestNPULoadBalanceMethodDPDisaggregation,),
-        {"params": param_tuple}
+        {"params": param_tuple},
     )
     globals()[class_name] = new_class
 
