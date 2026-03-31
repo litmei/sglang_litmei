@@ -75,6 +75,8 @@ register_npu_ci(est_time=200, suite="nightly-1-npu-a3", nightly=True)
 _ASCEND_BACKEND = "ascend"
 
 _SERVER_ARGS = [
+    "--base-gpu-id", "2",
+    "--gpu-id-step", "1",
     "--trust-remote-code",
     "--attention-backend", _ASCEND_BACKEND,
     "--quantization", "modelslim",
