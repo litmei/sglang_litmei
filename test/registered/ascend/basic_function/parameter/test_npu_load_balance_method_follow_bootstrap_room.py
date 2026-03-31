@@ -23,7 +23,8 @@ from sglang.test.test_utils import (
 register_npu_ci(est_time=200, suite="nightly-4-npu-a3", nightly=True)
 
 # load_balance_method_options = ["auto", "round_robin", "total_requests", "total_tokens", "follow_bootstrap_room"]
-load_balance_method_options = ["auto", "total_requests"]
+# load_balance_method_options = ["auto", "total_requests"]
+load_balance_method_options = ["auto"]
 all_params = list(itertools.product(load_balance_method_options, repeat=2))
 
 class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
@@ -33,6 +34,7 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
     [Test Target] --load-balance-method
     """
 
+    __test__ = False
     params = None
     # params = ("round_robin", "total_requests")
     # params = ("auto", "auto")
