@@ -549,3 +549,57 @@ def run_bench_serving(
 
     assert res["completed"] == num_prompts
     return res
+    
+def send_score_request(
+    base_url,
+    query,
+    items,
+    label_token_ids,
+    apply_softmax=False,
+    item_first=False,
+    timeout=180,
+):
+    """Send a POST request to the /v1/score endpoint.
+
+    Constructs and sends a scoring request to the server running at base_url.
+    Supports both text and pre-tokenized (token ID list) inputs for query and items.
+
+    Args:
+        base_url (str): Server base URL, e.g. "http://localhost:30000".
+        query (str | list[int]): Query as a text string or a list of pre-tokenized
+            token IDs. Must match the type convention of items.
+        items (str | list[str] | list[list[int]]): Candidate items to score.
+            - str: single text item.
+            - list[str]: multiple text items.
+            - list[list[int]]: multiple pre-tokenized items.
+        label_token_ids (list[int]): Token IDs whose log-probabilities are extracted
+            at each item boundary. Each ID must satisfy 0 <= id < vocab_size.
+            The length of each returned score sub-list equals len(label_token_ids).
+        apply_softmax (bool): If True, apply softmax normalization so that each
+            item's score list sums to 1.0. If False, return raw exp(logprob) values
+            in range [0, 1]. Default: False.
+        item_first (bool): If True, concatenate item before query when building the
+            prompt in single-item scoring mode. This parameter is ignored when
+            --multi-item-scoring-delimiter is active on the server. Default: False.
+        timeout (int): HTTP request timeout in seconds. Default: 180.
+
+    Returns:
+        requests.Response: The raw HTTP response. Callers should check
+            response.status_code and call response.json() to parse the result.
+            The JSON body contains a "scores" field: list[list[float]],
+            one sub-list per item, each of length len(label_token_ids).
+    """
+
+    payload = {
+        "query": query,
+        "items": items,
+        "label_token_ids": label_token_ids,
+        "apply_softmax": apply_softmax,
+        "item_first": item_first,
+    }
+    return _requests.post(
+        url=f"{base_url}/v1/score",
+        json=payload,
+        headers={"Content-Type": "application/json"},
+        timeout=timeout,
+    )
