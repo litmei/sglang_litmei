@@ -143,11 +143,13 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
     def test_server_info(self):
         response = requests.get(f"{self.lb_url}/get_server_info")
         self.assertEqual(response.status_code, 200)
-        with open("test.log", "w", encoding="utf-8") as f:
-            f.write(response.text)
-        # self.assertIn(self.prefill_load_balance_method, response.text)
-        # self.assertIn(self.decode_load_balance_method, response.text)
-        # print(response.text)
+        self.assertEqual(self.prefill_load_balance_method, response.json()["prefill"]["load_balance_method"])
+        self.assertEqual(self.decode_load_balance_method, response.json()["decode"]["load_balance_method"])
+        # with open("test.log", "w", encoding="utf-8") as f:
+        #     f.write(response.text)
+        # # self.assertIn(self.prefill_load_balance_method, response.text)
+        # # self.assertIn(self.decode_load_balance_method, response.text)
+        # # print(response.text)
 
     @classmethod
     def tearDownClass(cls):
