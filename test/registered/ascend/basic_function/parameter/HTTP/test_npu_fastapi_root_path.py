@@ -1,8 +1,35 @@
 import unittest
 from urllib.parse import urlparse
-
+import os
 import requests
+# ============【本地路径覆盖 - 仅影响本文件】============
+# 配置：服务器实际模型根目录
+LOCAL_MODEL_WEIGHTS_DIR = "/home/weights"
 
+# 在导入 test_ascend_utils 之后，立即覆盖其中的路径常量
+import sglang.test.ascend.test_ascend_utils as utils
+
+# 覆盖根目录常量（可选，如果其他代码依赖这个）
+utils.MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
+utils.HF_MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
+
+# 覆盖 5 个模型路径常量（使用服务器实际路径）
+utils.QWEN3_0_6B_WEIGHTS_PATH = os.path.join(
+    LOCAL_MODEL_WEIGHTS_DIR, "Qwen/Qwen3-0.6B"
+)
+utils.QWEN3_30B_A3B_W8A8_WEIGHTS_PATH = os.path.join(
+    LOCAL_MODEL_WEIGHTS_DIR, "Qwen/Qwen3-30B-A3B-W8A8"  # 注意：实际是大写 W8A8
+)
+utils.QWEN3_32B_EAGLE3_WEIGHTS_PATH = os.path.join(
+    LOCAL_MODEL_WEIGHTS_DIR, "Qwen/Eagle3-Qwen3-32B-zh"  # 注意：实际目录名不同
+)
+utils.QWEN3_32B_W8A8_MINDIE_WEIGHTS_PATH = os.path.join(
+    LOCAL_MODEL_WEIGHTS_DIR, "Qwen/Qwen3-32B-w8a8-MindIE"  # 注意：实际父目录是 Qwen 不是 aleoyang
+)
+utils.LLAMA_2_7B_WEIGHTS_PATH = os.path.join(
+    LOCAL_MODEL_WEIGHTS_DIR, "llama-2-7b"
+)
+# ====================================================
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import QWEN3_0_6B_WEIGHTS_PATH as MODEL_PATH
 from sglang.test.ci.ci_register import register_npu_ci
