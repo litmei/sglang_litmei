@@ -5,6 +5,7 @@ from pathlib import Path
 
 import requests
 
+from sglang.test.ascend.output_capturer import OutputCapturer
 from sglang.test.ascend.test_npu_logging import TestNPULoggingBase
 from sglang.test.ci.ci_register import register_npu_ci
 
@@ -28,6 +29,8 @@ class TestNPULogRequestTarget(TestNPULoggingBase):
         cls.other_args.extend(
             ["--log-requests-target", "stdout", cls.temp_dir, cls.temp_multi_level_dir]
         )
+        cls.output_capturer = OutputCapturer()
+        cls.output_capturer.start()
         cls.launch_server()
 
     def test_log_requests_target(self):
@@ -46,16 +49,16 @@ class TestNPULogRequestTarget(TestNPULoggingBase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Paris", response.text)
 
+
+
         log_files = list(Path(self.temp_dir).glob("*.log"))
         self.assertGreater(len(log_files), 0)
-
         file_content = log_files[0].read_text()
         self.assertIn("Receive:", file_content)
         self.assertIn("Finish:", file_content)
 
         log_files = list(Path(self.temp_multi_level_dir).glob("*.log"))
         self.assertGreater(len(log_files), 0)
-
         file_content = log_files[0].read_text()
         self.assertIn("Receive:", file_content)
         self.assertIn("Finish:", file_content)
