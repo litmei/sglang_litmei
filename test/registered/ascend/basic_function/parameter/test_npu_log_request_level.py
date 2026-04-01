@@ -70,7 +70,9 @@ class TestNPULogRequestLevel0(TestNPULoggingBase):
         content = self.out_log_file.read()
         self.assertTrue(len(content) > 0)
         self.assertIsNotNone(
-            re.search(self.finish_message_level_dict[str(self.log_requests_level)], content)
+            re.search(
+                self.finish_message_level_dict[str(self.log_requests_level)], content
+            )
         )
         # The total number of generated tokens should equal the configured maximum number of generated tokens
         lines = self.get_lines_with_keyword(self.out_log_name, self.finish_message)

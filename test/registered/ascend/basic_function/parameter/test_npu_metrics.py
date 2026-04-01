@@ -1,5 +1,7 @@
 import unittest
 
+import requests
+
 from sglang.test.ascend.test_npu_logging import TestNPULoggingBase
 from sglang.test.ci.ci_register import register_npu_ci
 
@@ -37,14 +39,14 @@ class TestNPUMetricsDefaultBucketBoundary(TestNPULoggingBase):
 
     @staticmethod
     def _verify_metrics_and_bucket_boundary(
-            testcase,
-            model,
-            url,
-            expected_time_to_first_token_bucket=None,
-            expected_inter_token_latency_bucket=None,
-            expected_e2e_request_latency_bucket=None,
-            expected_prompt_tokens_bucket=None,
-            expected_generation_tokens_bucket=None,
+        testcase,
+        model,
+        url,
+        expected_time_to_first_token_bucket=None,
+        expected_inter_token_latency_bucket=None,
+        expected_e2e_request_latency_bucket=None,
+        expected_prompt_tokens_bucket=None,
+        expected_generation_tokens_bucket=None,
     ):
         """Validate that metrics buckets align with expected boundaries when --enable-metrics and bucket configuration parameters are set."""
         response = requests.get(f"{url}/metrics", timeout=10)

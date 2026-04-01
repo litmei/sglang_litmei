@@ -24,7 +24,9 @@ class TestNPULogRequestTarget(TestNPULoggingBase):
         super().setUpClass()
         cls._temp_dir_obj = tempfile.TemporaryDirectory()
         cls.temp_dir = cls._temp_dir_obj.name
-        cls.temp_multi_level_dir = os.path.join(cls.temp_dir, "level1", "level2", "level3")
+        cls.temp_multi_level_dir = os.path.join(
+            cls.temp_dir, "level1", "level2", "level3"
+        )
         os.makedirs(cls.temp_multi_level_dir, exist_ok=True)
         cls.other_args.extend(
             ["--log-requests-target", "stdout", cls.temp_dir, cls.temp_multi_level_dir]
