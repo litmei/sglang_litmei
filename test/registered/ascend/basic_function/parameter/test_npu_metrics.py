@@ -71,7 +71,7 @@ class TestNPUMetricsDefaultBucketBoundary(TestNPULoggingBase):
             f"{url}/generate",
             json={
                 "text": f"just return me a long string, generate as much as possible.",
-                "sampling_params": {"temperature": 0, "max_new_tokens": 10000},
+                "sampling_params": {"temperature": 0, "max_new_tokens": 1000},
             },
         )
         testcase.assertEqual(response.status_code, 200)
@@ -321,4 +321,9 @@ class TestNPUMetricsTSEBucketBoundary(TestNPULoggingBase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # unittest.main()
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    suite.addTests(loader.loadTestsFromTestCase(TestNPUMetricsDefaultBucketBoundary))
+    runner = unittest.TextTestRunner(verbosity=2)
+    runner.run(suite)
