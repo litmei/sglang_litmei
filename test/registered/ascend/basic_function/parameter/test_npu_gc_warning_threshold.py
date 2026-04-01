@@ -39,7 +39,7 @@ class TestNPUGCWarningThreshold(TestNPULoggingBase):
             3. Verify that when GC time exceeds the configured threshold, a specific GC warning log is recorded in the error log file
         """
         prompt_template = (
-                "just return me a string with of 10000 characters: " + "A" * 10000
+            "just return me a string with of 10000 characters: " + "A" * 10000
         )
         max_token = 10000
 
@@ -53,7 +53,7 @@ class TestNPUGCWarningThreshold(TestNPULoggingBase):
             )
 
         threads = []
-        for _ in range(1000):
+        for _ in range(2000):
             t = threading.Thread(target=send_request)
             t.start()
             threads.append(t)
@@ -62,8 +62,8 @@ class TestNPUGCWarningThreshold(TestNPULoggingBase):
             t.join()
 
         GC_info = "LONG GARBAGE COLLECTION DETECTED"
-        self.err_log_file.seek(0)
-        content = self.err_log_file.read()
+        self.out_log_file.seek(0)
+        content = self.err_log_file.read() + self.err_log_file.read()
         self.assertTrue(len(content) > 0)
         self.assertIn(GC_info, content)
 
