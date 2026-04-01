@@ -21,8 +21,6 @@ class TestNPUEnableMetricsForAllScheduler(TestNPULoggingBase):
     [Test Target] --enable-metrics-for-all-scheduler;
     """
 
-    if_enable_metrics_for_all_scheduler = True
-
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -42,21 +40,30 @@ class TestNPUEnableMetricsForAllScheduler(TestNPULoggingBase):
             f',moe_ep_rank="0",pp_rank="0",tp_rank="1"}}'
         )
         self.assertIn(message_0, response.text)
-        if self.if_enable_metrics_for_all_scheduler:
-            self.assertIn(message_1, response.text)
-        else:
-            self.assertNotIn(message_1, response.text)
+        self.assertIn(message_1, response.text)
 
 
-class TestNPUDisableMetricsForAllScheduler(TestNPUEnableMetricsForAllScheduler):
-    if_enable_metrics_for_all_scheduler = False
+class TestNPUDisableMetricsForAllScheduler(TestNPULoggingBase):
 
     @classmethod
     def setUpClass(cls):
-        super().setUpClass()
+        TestNPULoggingBase.setUpClass()
         cls.other_args.extend(["--enable-metrics"])
         cls.other_args.extend(["--tp-size", 2])
         cls.launch_server()
+
+    def test_enable_metrics_for_all_scheduler(self):
+        response = requests.get(f"{self.base_url}/metrics", timeout=10)
+        message_0 = (
+            f'sglang:num_decode_transfer_queue_reqs{{engine_type="unified",model_name="{self.model}"'
+            f',moe_ep_rank="0",pp_rank="0",tp_rank="0"}}'
+        )
+        message_1 = (
+            f'sglang:num_decode_transfer_queue_reqs{{engine_type="unified",model_name="{self.model}"'
+            f',moe_ep_rank="0",pp_rank="0",tp_rank="1"}}'
+        )
+        self.assertIn(message_0, response.text)
+        self.assertNotIn(message_1, response.text)
 
 
 if __name__ == "__main__":
