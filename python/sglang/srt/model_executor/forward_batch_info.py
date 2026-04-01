@@ -537,8 +537,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             )
 
         if ret.forward_mode.is_idle():
-            # This synchronize is necessary to prevent the system from hanging.
-            torch.cuda.synchronize()
+            if _is_npu:
+                # This synchronize is necessary to prevent the system from hanging.
+                torch.cuda.synchronize()
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
             return ret
 
