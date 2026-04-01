@@ -135,7 +135,7 @@ class TestMultiItemScoringSoftmax(CustomTestCase):
 
     def test_apply_softmax_false_tokenized_input(self):
         """
-        Verify apply_softmax=False with pre-tokenized query and items (Case 6 merged):
+        Verify apply_softmax=False with pre-tokenized query and items :
 
         Pre-tokenized input bypasses the server's internal tokenization step.
         The score formula is: score = exp(logprob) if finite, else 0.0.
