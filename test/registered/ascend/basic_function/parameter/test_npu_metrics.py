@@ -38,6 +38,21 @@ class TestNPUMetricsDefaultBucketBoundary(TestNPULoggingBase):
     """
 
     @staticmethod
+    def _inference_once(testcase, url):
+        response = requests.post(
+            f"{url}/generate",
+            json={
+                "text": "The capital of France is",
+                "sampling_params": {
+                    "temperature": 0,
+                    "max_new_tokens": 32,
+                },
+            },
+        )
+        testcase.assertEqual(response.status_code, 200)
+        testcase.assertIn("Paris", response.text)
+
+    @staticmethod
     def _verify_metrics_and_bucket_boundary(
         testcase,
         model,
@@ -49,6 +64,10 @@ class TestNPUMetricsDefaultBucketBoundary(TestNPULoggingBase):
         expected_generation_tokens_bucket=None,
     ):
         """Validate that metrics buckets align with expected boundaries when --enable-metrics and bucket configuration parameters are set."""
+        # inference twice to monitor inter_token_latency_seconds_bucket
+        TestNPUMetricsDefaultBucketBoundary._inference_once(testcase, url)
+        # TestNPUMetricsDefaultBucketBoundary._inference_once(testcase, url)
+
         response = requests.get(f"{url}/metrics", timeout=10)
         testcase.assertEqual(response.status_code, 200)
         metrics_content = response.text
@@ -241,7 +260,7 @@ class TestNPUMetricsCustomBucketBoundary(TestNPULoggingBase):
             "900000.0",
         ]
 
-    def test__bucket_boundary(self):
+    def test_bucket_boundary(self):
         TestNPUMetricsDefaultBucketBoundary._verify_metrics_and_bucket_boundary(
             self,
             self.model,
@@ -283,7 +302,7 @@ class TestNPUMetricsTSEBucketBoundary(TestNPULoggingBase):
             "1016.0",
         ]
 
-    def test__bucket_boundary(self):
+    def test_bucket_boundary(self):
         TestNPUMetricsDefaultBucketBoundary._verify_metrics_and_bucket_boundary(
             self,
             self.model,
