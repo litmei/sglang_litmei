@@ -39,13 +39,14 @@ _SERVER_ARGS = [
     "--speculative-attention-mode",
     "decode",
     "--tp-size",
-    "16",   # Tensor parallelism – adjust according to available NPUs
+    "16",  # Tensor parallelism – adjust according to available NPUs
     "--mem-fraction-static",
     "0.85",  # adjust according to available HBM
     "--disable-cuda-graph",
     "--dtype",
     "bfloat16",
 ]
+
 
 class TestNpuNextnDeepSeek(CustomTestCase):
     """
