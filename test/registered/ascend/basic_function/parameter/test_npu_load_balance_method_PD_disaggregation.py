@@ -18,7 +18,8 @@ from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-    popen_launch_pd_server, is_in_ci,
+    is_in_ci,
+    popen_launch_pd_server,
 )
 
 register_npu_ci(est_time=3600, suite="nightly-4-npu-a3", nightly=True)
@@ -194,8 +195,7 @@ if __name__ == "__main__":
         suite = unittest.TestSuite()
 
         selected_classes = random.sample(
-            all_test_classes,
-            min(RUN_COUNT, len(all_test_classes))
+            all_test_classes, min(RUN_COUNT, len(all_test_classes))
         )
 
         for cls in selected_classes:
