@@ -26,8 +26,8 @@ class TestNPULogRequestLevel0(TestNPULoggingBase):
         cls.finish_message_level_dict = {
             "0": r".*Finish: obj=GenerateReqInput\(rid='\w+', http_worker_ipc=None, video_data=None,.*",
             "1": r".*Finish: obj=GenerateReqInput\(.*rid='\w+', http_worker_ipc=None, video_data=None, sampling_params=.*",
-            "2": r".*Finish: obj=GenerateReqInput\(.*rid='\w+', http_worker_ipc=None, text=.*",
-            "3": r".*Finish: obj=GenerateReqInput\(.*rid='\w+', http_worker_ipc=None, text=.*",
+            "2": r".*Finish: obj=GenerateReqInput\(.*rid='\w+', http_worker_ipc=None, text=.*, video_data=None, sampling_params=.*",
+            "3": r".*Finish: obj=GenerateReqInput\(.*rid='\w+', http_worker_ipc=None, text=.*, video_data=None, sampling_params=.*",
         }
         cls.finish_message = (
             r".*Finish: obj=GenerateReqInput\(.*rid='\w+', http_worker_ipc=None, .*"
