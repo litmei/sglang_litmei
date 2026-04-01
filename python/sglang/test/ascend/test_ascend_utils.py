@@ -14,7 +14,7 @@ Please remember to sort by variable name within each section.
 import asyncio
 import copy
 import os
-import requests as _requests
+import requests
 import subprocess
 from types import SimpleNamespace
 from typing import Awaitable, Callable, NamedTuple, Optional
@@ -552,7 +552,9 @@ def run_bench_serving(
     return res
 
 
-def send_inference_request(base_url: str, model: str, prompt: str, max_tokens: int =512) -> dict:
+def send_inference_request(
+        base_url: str, model: str, prompt: str, max_tokens: int =512
+) -> dict:
     """
     POST a single-turn chat completion request to a running SGLang server.
 
@@ -575,7 +577,7 @@ def send_inference_request(base_url: str, model: str, prompt: str, max_tokens: i
         "max_tokens": max_tokens,
         "temperature": 0,
     }
-    response = _requests.post(url, json=payload, timeout=300)
+    response = requests.post(url, json=payload, timeout=300)
     response.raise_for_status()
     return response.json()
 
@@ -597,7 +599,7 @@ def get_avg_spec_accept_length(base_url: str) -> float:
     Raises:
         requests.HTTPError: On non-2xx HTTP status.
     """
-    response = _requests.get(f"{base_url}/get_server_info", timeout=10)
+    response = requests.get(f"{base_url}/get_server_info", timeout=10)
     response.raise_for_status()
     info = response.json()
     internal_states = info.get("internal_states", [])
@@ -606,7 +608,9 @@ def get_avg_spec_accept_length(base_url: str) -> float:
     return 0.0
 
 
-def assert_spec_decoding_active(test_case, base_url: str, threshold: float = 1.0) -> None:
+def assert_spec_decoding_active(
+        test_case, base_url: str, threshold: float = 1.0
+) -> None:
     """
     Assert that avg_spec_accept_length > threshold.
 
@@ -626,8 +630,10 @@ def assert_spec_decoding_active(test_case, base_url: str, threshold: float = 1.0
     """
     avg_len = get_avg_spec_accept_length(base_url)
 
-    print(f"\n[Spec Decoding] avg_spec_accept_length={avg_len:.3f}, threshold={threshold:.3f}, "
-          f"result={'PASS' if avg_len > threshold else 'FAIL'}")
+    print(
+        f"\n[Spec Decoding] avg_spec_accept_length={avg_len:.3f}, threshold={threshold:.3f}, "
+        f"result={'PASS' if avg_len > threshold else 'FAIL'}"
+    )
 
     test_case.assertGreater(
         avg_len,
@@ -635,6 +641,7 @@ def assert_spec_decoding_active(test_case, base_url: str, threshold: float = 1.0
         f"avg_spec_accept_length={avg_len:.3f} must be > {threshold}: "
         "speculative decoding is not active or not contributing speedup.",
     )
+
 
 def check_server_health(base_url: str, endpoint: str = "/health") -> bool:
     """Check whether a SGLang server health endpoint returns HTTP 200
@@ -647,7 +654,6 @@ def check_server_health(base_url: str, endpoint: str = "/health") -> bool:
         True if the server returns HTTP 200, False on any error or non-200 status
     """
     try:
-        response = _requests.get(f"{base_url}{endpoint}", timeout=10)
+        response = requests.get(f"{base_url}{endpoint}", timeout=10)
         return response.status_code == 200
-    except _requests.exceptions.RequestException:
-        return False
+    except requests.exceptions.RequestException:return False

@@ -1,11 +1,5 @@
-
 import unittest
-import os
 import requests
-
-
-
-
 
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH
@@ -38,7 +32,8 @@ class TestHealthCheckEndpoint(CustomTestCase):
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=[
-                "--attention-backend", "ascend",
+                "--attention-backend",
+                "ascend",
                 "--disable-cuda-graph",
             ],
         )
