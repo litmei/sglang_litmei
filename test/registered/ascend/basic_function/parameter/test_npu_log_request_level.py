@@ -1,6 +1,8 @@
 import re
 import unittest
 
+import requests
+
 from sglang.test.ascend.test_npu_logging import TestNPULoggingBase
 from sglang.test.ci.ci_register import register_npu_ci
 
