@@ -32,6 +32,10 @@ class TestNPULogRequestLevel0(TestNPULoggingBase):
         cls.finish_message = (
             r".*Finish: obj=GenerateReqInput\(.*rid='\w+', http_worker_ipc=None, .*"
         )
+        cls.keyword_output_id_start = (
+            "'output_ids': ["  # Start delimiter for token ID array
+        )
+        cls.keyword_output_id_end = "], 'meta_info'"
 
         cls.other_args.extend(["--log-requests"])
         cls.other_args.extend(["--log-requests-level", str(cls.log_requests_level)])
@@ -67,10 +71,10 @@ class TestNPULogRequestLevel0(TestNPULoggingBase):
         content = self.out_log_file.read()
         self.assertTrue(len(content) > 0)
         self.assertIsNotNone(
-            re.search(self.log_request_message_dict[str(self.log_requests_level)], content)
+            re.search(self.finish_message_level_dict[str(self.log_requests_level)], content)
         )
         # The total number of generated tokens should equal the configured maximum number of generated tokens
-        lines = self.get_lines_with_keyword(self.out_log_name, self.keyword_Finish)
+        lines = self.get_lines_with_keyword(self.out_log_name, self.finish_message)
         self.assertGreater(len(lines), 0, "Did not find finish message in log.")
         finish_message = lines[-1]["content"]
         self.assertIn(f"'completion_tokens': {max_new_token}", finish_message)

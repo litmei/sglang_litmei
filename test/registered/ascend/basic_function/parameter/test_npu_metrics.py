@@ -5,7 +5,6 @@ from sglang.test.ci.ci_register import register_npu_ci
 
 register_npu_ci(est_time=100, suite="nightly-2-npu-a3", nightly=True)
 
-
 class TestNPUMetricsDefaultBucketBoundary(TestNPULoggingBase):
     """Test case for verifying the functionality of the metrics-related parameter group.
 
@@ -34,6 +33,8 @@ class TestNPUMetricsDefaultBucketBoundary(TestNPULoggingBase):
     [Test Target] --enable-metrics; --bucket-time-to-first-token; --bucket-inter-token-latency; --bucket-e2e-request-latency;
     --collect-tokens-histogram; --prompt-tokens-buckets; --generation-tokens-buckets;
     """
+
+
 
     @classmethod
     def setUpClass(cls):
