@@ -25,7 +25,7 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
-register_npu_ci(est_time=300, suite="nightly-1-npu-a3", nightly=True)
+register_npu_ci(est_time=300, suite="nightly-2-npu-a3", nightly=True)
 
 # Placeholder encoder URLs used to validate parameter parsing.
 # These do not need to point to live encoder servers; the language-only server
@@ -36,6 +36,9 @@ _ENCODER_URL_SECONDARY = "http://127.0.0.1:8101"
 
 
 class TestEncoderUrlsBase(CustomTestCase):
+    __test__ = False
+
+
     _next_port = 21000
     """Testcase: Verify --encoder-urls parameter is accepted at server startup on Ascend NPU.
 
@@ -67,6 +70,7 @@ class TestEncoderUrlsBase(CustomTestCase):
             # language-only is the natural counterpart for --encoder-urls:
             # the language server receives embeddings from a remote encoder server
             "--language-only",
+            "--port", str(cls.port),
             "--encoder-urls",
             _ENCODER_URL_PRIMARY,
             _ENCODER_URL_SECONDARY,
@@ -74,6 +78,8 @@ class TestEncoderUrlsBase(CustomTestCase):
             cls.transfer_backend,
             "--attention-backend",
             "ascend",
+            "--tp-size",
+            "2",
             "--base-gpu-id",
             "14",
             "--disable-cuda-graph",
