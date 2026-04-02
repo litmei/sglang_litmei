@@ -76,7 +76,7 @@ class TestNPULoggingBase(CustomTestCase):
             "--disable-cuda-graph",
             "--log-requests",
             "--base-gpu-id",
-            2
+            8,
         ]
         cls.out_log_file_obj = tempfile.NamedTemporaryFile(
             mode="w+", encoding="utf-8", delete=False, suffix=".txt"
