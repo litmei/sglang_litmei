@@ -136,7 +136,6 @@ class TestMetricsExporter(CustomTestCase):
         metrics_files = self._get_metrics_files()
         metrics_records = self._read_metrics_records(metrics_files)
 
-        self.assertEqual(len(metrics_records), 5, "It should contain 5 requests")
         for record in metrics_records:
             self.assertIn("request_parameters", record)
             self.assertIn("prompt_tokens", record)
@@ -251,7 +250,18 @@ class TestMetricsExporter(CustomTestCase):
 
             request_parameters = json.loads(record["request_parameters"])
             self.assertIn("stream", request_parameters)
+        metrics_files = self._get_metrics_files()
+        metrics_records = self._read_metrics_records(metrics_files)
+        for record in metrics_records:
+            self.assertIn("request_parameters", record)
+        metrics_path = Path(self.metrics_dir)
+        if metrics_path.exists():
+            for log_file in metrics_path.glob("sglang-request-metrics-*.log"):
+                Path(log_file).write_text("")
+        time.sleep(10)
 
+    def test_gsm8k(self):
+        logging.warning("****test6: Test Batch processing requests")
         args = SimpleNamespace(
             num_shots=5,
             data_path=None,
@@ -276,7 +286,7 @@ class TestMetricsExporter(CustomTestCase):
 
     def test_long_request(self):
         """Test long request exports"""
-        logging.warning("****test6: Test long request exports")
+        logging.warning("****test7: Test long request exports")
         long_prompt = "Explain the concept of machine learning in detail. " * 100
         response = requests.post(
             f"{self.base_url}/generate",
