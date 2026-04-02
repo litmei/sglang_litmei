@@ -2,6 +2,7 @@ import unittest
 
 import requests
 
+import time
 import os
 
 # ============ [Local path override - for local debugging only] ============
@@ -35,6 +36,7 @@ _ENCODER_URL_SECONDARY = "http://127.0.0.1:8101"
 
 
 class TestEncoderUrlsBase(CustomTestCase):
+    _next_port = 21000
     """Testcase: Verify --encoder-urls parameter is accepted at server startup on Ascend NPU.
 
     --encoder-urls specifies a list of encoder server addresses used in VLM encoder
@@ -58,7 +60,9 @@ class TestEncoderUrlsBase(CustomTestCase):
         env = os.environ.copy()
         env["SGLANG_MM_SKIP_COMPUTE_HASH"] = "True"
         cls.model = QWEN3_VL_30B_A3B_INSTRUCT_WEIGHTS_PATH
-        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.port = cls._next_port
+        cls._next_port += 1  # 下一个子类使用新端口
+        cls.base_url = f"http://127.0.0.1:{cls.port}"
         other_args = [
             # language-only is the natural counterpart for --encoder-urls:
             # the language server receives embeddings from a remote encoder server
@@ -89,6 +93,7 @@ class TestEncoderUrlsBase(CustomTestCase):
     def tearDownClass(cls):
         # Restore the test environment by stopping the server process (coding standard rule 8)
         kill_process_tree(cls.process.pid)
+        time.sleep(2)
 
     def test_server_health(self):
         """Verify language-only server with encoder-urls is healthy.
