@@ -483,7 +483,7 @@ class EagleDraftWorker(BaseDraftWorker):
         ) = (
             torch.cat(ret_topk_p_list, dim=1).clone(),
             torch.cat(ret_topk_index_list, dim=1).clone(),
-            None,  # if use spec overlap reflow, we do not need to save hidden_states for target mode
+            None,  # When enable `spec_v2_zero_bubble` feature, we don't need to save hidden_states for next step
         )
 
     def draft_forward_for_prepare(self, spec_info):
