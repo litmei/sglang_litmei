@@ -51,10 +51,10 @@ class TestNPUMetricsTokenizerLabel(TestNPULoggingBase):
             json={
                 "Content-Type": "application/json",
                 self.labels_header: f"{self.my_label}=customer_service",
-                "text": self.test_prompt,
+                "text": f"just return me a long string, generate as much as possible.",
                 "sampling_params": {
                     "temperature": 0,
-                    "max_new_tokens": 32,
+                    "max_new_tokens": 1000,
                 },
             },
         )
