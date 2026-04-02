@@ -35,16 +35,6 @@ class BaseNoHFRewardModelTest(ABC):
     def setUpClass(cls):
         mp.set_start_method("spawn", force=True)
 
-        # Set environment variables if needed
-        cls._set_environment_variables()
-
-    @classmethod
-    def _set_environment_variables(cls):
-        """Set environment variables for NPU-specific optimizations.
-        Override in subclasses if needed.
-        """
-        pass
-
     def test_assert_close_reward_scores(self):
         """Test that the model can generate reward scores."""
         srt_runner_kwargs = {
