@@ -22,6 +22,7 @@ class TestRetractDecode(CustomTestCase):
     [Test Category] Parameter
     [Test Target] SGLANG_TEST_RETRACT
     """
+
     @classmethod
     def setUpClass(cls):
         # Enable retract decode feature for test
@@ -34,7 +35,7 @@ class TestRetractDecode(CustomTestCase):
             "ascend",
             "--disable-cuda-graph",
             "--mem-fraction-static",
-            0.8,    
+            0.8,
         ]
 
         cls.process = popen_launch_server(
