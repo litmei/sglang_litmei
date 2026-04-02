@@ -5,6 +5,7 @@ import requests
 
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import QWEN3_VL_8B_INSTRUCT_WEIGHTS_PATH
+from sglang.test.ascend.test_ascend_utils import GME_QWEN2_VL_2B_INSTRUCT_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -179,6 +180,33 @@ class TestLimitMMDatePerRequest(CustomTestCase):
         self._run_multi_turn_request()
         self._run_multi_turn_request1()
         self._run_parallel_two_requests()
+        
+class TestQwen3VL8B(TestVLMModels):
+    model = "/home/weights/Qwen/Qwen3-VL-8B-Instruct/"
+    mmmu_accuracy = 0.2
+    limit_mm = '{"image":1, "video":1}'
+    other_args = [
+            "--mem-fraction-static",
+            "0.5",
+            "--enable-multimodal",
+            "--mm-max-concurrent-calls",
+            "1",
+            "--mm-per-request-timeout",
+            "1",
+            "--enable-broadcast-mm-inputs-process",
+            "--attention-backend",
+            "ascend",
+            "--device",
+            "npu",
+            "--tp-size",
+            "4",
+            "--disable-cuda-graph",
+            "--limit-mm-data-per-request",
+            limit_mm,
+    ]
+
+    def test_vlm_mmmu_benchmark(self):
+        self._run_vlm_mmmu_test()
 
 
 if __name__ == "__main__":
