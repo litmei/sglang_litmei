@@ -67,7 +67,7 @@ class TestAscendSpeculativeAttentionMode(TestDisaggregationBase):
         cls.accuracy = 0.81
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.url = urlparse(DEFAULT_URL_FOR_TEST)
-        os.environ["ASCEND_MF_STORE_URL"] = "tcp://127.0.0.1:24666"
+        # os.environ["ASCEND_MF_STORE_URL"] = "tcp://127.0.0.1:24666"
 
         # Non blocking start servers
         cls.start_prefill()
