@@ -30,7 +30,7 @@ class TestNPULogRequestsFormatText(TestNPULoggingBase):
         super().tearDownClass()
         cls.output_capturer.stop()
 
-    def test_enable_request_time_stats_logging(self):
+    def test_format(self):
         self.inference_once()
 
         content = self.output_capturer.get_all()
@@ -41,7 +41,7 @@ class TestNPULogRequestsFormatText(TestNPULoggingBase):
 class TestNPULogRequestsFormatJson(TestNPULogRequestsFormatText):
     log_requests_format = "json"
 
-    def test_enable_request_time_stats_logging(self):
+    def test_format(self):
         self.inference_once()
 
         content = self.output_capturer.get_all()
