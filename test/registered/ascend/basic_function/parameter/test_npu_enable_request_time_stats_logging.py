@@ -37,7 +37,7 @@ class TestNPUEnableRequestTimeStatsLogging(TestNPULoggingBase):
         cls.output_capturer = OutputCapturer()
         cls.output_capturer.start()
         cls.other_args.extend(["--enable-request-time-stats-logging"])
-        cls.other_args.extend(["--base-gpu-id", "10", ])
+        cls.other_args.extend(["--base-gpu-id", "10"])
         cls.launch_server()
 
     @classmethod
