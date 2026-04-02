@@ -160,8 +160,11 @@ class DisaggregationHiCacheBase(PDDisaggregationServerBase):
 
 class TestDisaggregationDecodeWithHiCache(DisaggregationHiCacheBase):
     """Decode startup parameters"""
+
     ascend_devices = os.environ.get("ASCEND_RT_VISIBLE_DEVICES", "0,1,2,3")
-    base_gpu_id = ascend_devices.split(",")[2] if len(ascend_devices.split(",")) >= 3 else "2"
+    base_gpu_id = (
+        ascend_devices.split(",")[2] if len(ascend_devices.split(",")) >= 3 else "2"
+    )
 
     @classmethod
     def start_decode(cls):
@@ -197,7 +200,7 @@ class TestDisaggregationDecodeWithHiCache(DisaggregationHiCacheBase):
         env = {
             **os.environ,
             "SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR": cls.temp_dir,
-            "ASCEND_MF_STORE_URL": "tcp://127.0.0.1:24667"
+            "ASCEND_MF_STORE_URL": "tcp://127.0.0.1:24667",
         }
         cls.process_decode = popen_launch_pd_server(
             cls.model,
@@ -237,7 +240,9 @@ class TestDisaggregationDecodeWithHiCache(DisaggregationHiCacheBase):
             cached_tokens = response["meta_info"]["cached_tokens"]
 
             logging.warning(f"Turn {turn} cached tokens: {cached_tokens}")
-            logging.warning(f"Improvement: {cached_tokens - previous_cached_tokens} tokens")
+            logging.warning(
+                f"Improvement: {cached_tokens - previous_cached_tokens} tokens"
+            )
 
             # Assert cache improvement
             self.assertGreater(
