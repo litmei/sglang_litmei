@@ -8,7 +8,7 @@ from pathlib import Path
 
 import requests
 
-from sglang.srt.constants import HEALTH_CHECK_RID_PREFIX
+# from sglang.srt.constants import HEALTH_CHECK_RID_PREFIX
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
 from sglang.test.test_utils import (
@@ -23,7 +23,8 @@ register_cuda_ci(est_time=120, suite="nightly-1-npu-a3", nightly=True)
 TEST_ROUTING_KEY = "test-routing-key-12345"
 TEST_CUSTOM_HEADER_NAME = "X-Test-Header"
 TEST_CUSTOM_HEADER_VALUE = "test-header-value-67890"
-TEST_MODEL_NAME = "Qwen/Qwen3-0.6B"
+# TEST_MODEL_NAME = "Qwen/Qwen3-0.6B"
+TEST_MODEL_NAME = "/home/weights/Qwen/Qwen3-0.6B"
 
 
 class BaseTestRequestLogger:
@@ -196,9 +197,9 @@ class TestRequestLoggerJson(BaseTestRequestLogger, CustomTestCase):
             except json.JSONDecodeError:
                 continue
 
-            rid = data.get("rid", "")
-            if rid.startswith(HEALTH_CHECK_RID_PREFIX):
-                continue
+            # rid = data.get("rid", "")
+            # if rid.startswith(HEALTH_CHECK_RID_PREFIX):
+            #     continue
 
             if data.get("event") == "request.received":
                 self.assertIn("rid", data)
