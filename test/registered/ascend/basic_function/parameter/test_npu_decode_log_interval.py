@@ -7,7 +7,6 @@ from sglang.test.ascend.output_capturer import OutputCapturer
 from sglang.test.ascend.test_npu_logging import TestNPULoggingBase
 from sglang.test.ci.ci_register import register_npu_ci
 
-
 register_npu_ci(est_time=400, suite="nightly-1-npu-a3", nightly=True)
 
 
@@ -30,21 +29,7 @@ class TestDecodeLogInterval(TestNPULoggingBase):
 
     def test_decode_log_interval(self):
         max_tokens = 512
-        # response = requests.get(f"{self.base_url}/health_generate")
-        # self.assertEqual(response.status_code, 200)
-        # response = requests.post(
-        #     f"{self.base_url}/generate",
-        #     json={
-        #         "text": "The capital of France is",
-        #         "sampling_params": {
-        #             "temperature": 0,
-        #             "max_new_tokens": max_tokens,
-        #         },
-        #     },
-        # )
-        # self.assertEqual(response.status_code, 200)
-        # self.assertIn("Paris", response.text)
-        self.inference_once(max_tokens=512)
+        self.inference_once(max_tokens=max_tokens)
         self.out_log_file.seek(0)
         self.err_log_file.seek(0)
         content = self.out_log_file.read() + self.err_log_file.read()
