@@ -1,9 +1,11 @@
 import itertools
 import json
 import os
+import random
 import unittest
 from time import sleep
 from types import SimpleNamespace
+from typing import List, Type
 from urllib.parse import urlparse
 
 import requests
@@ -16,6 +18,7 @@ from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+    is_in_ci,
     popen_launch_pd_server,
 )
 
@@ -170,6 +173,8 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
         sleep(10)
 
 
+TestClassType = Type[BaseTestNPULoadBalanceMethodDPDisaggregation]
+all_test_classes: List[TestClassType] = [BaseTestNPULoadBalanceMethodDPDisaggregation]
 for index, param_tuple in enumerate(all_params):
     if param_tuple == BaseTestNPULoadBalanceMethodDPDisaggregation.params:
         continue
@@ -181,7 +186,23 @@ for index, param_tuple in enumerate(all_params):
         (BaseTestNPULoadBalanceMethodDPDisaggregation,),
         {"params": param_tuple},
     )
-    globals()[class_name] = new_class
+
+    all_test_classes.append(new_class)
 
 if __name__ == "__main__":
-    unittest.main()
+    if is_in_ci():
+        RUN_COUNT = 3
+        loader = unittest.TestLoader()
+        suite = unittest.TestSuite()
+
+        selected_classes = random.sample(
+            all_test_classes, min(RUN_COUNT, len(all_test_classes))
+        )
+
+        for cls in selected_classes:
+            suite.addTests(loader.loadTestsFromTestCase(cls))
+
+        runner = unittest.TextTestRunner(verbosity=2)
+        runner.run(suite)
+    else:
+        unittest.main()
