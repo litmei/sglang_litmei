@@ -14,10 +14,10 @@ Please remember to sort by variable name within each section.
 import asyncio
 import copy
 import os
-import requests
 import subprocess
 from types import SimpleNamespace
 from typing import Awaitable, Callable, NamedTuple, Optional
+
 
 from sglang.bench_serving import run_benchmark
 from sglang.srt.utils import kill_process_tree
@@ -550,5 +550,3 @@ def run_bench_serving(
 
     assert res["completed"] == num_prompts
     return res
-
-
