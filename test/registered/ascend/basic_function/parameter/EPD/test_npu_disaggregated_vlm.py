@@ -41,8 +41,8 @@ _INLINE_IMAGE_URL = (
 
 
 class TestDisaggregatedVLM(TestDisaggregationBase):
-    encoder_transfer_backend = None
     __test__ = False
+    encoder_transfer_backend = None
     """
     Testcase 5.1 & 5.2 Unified: Verify encoder-only + language-only configuration.
 
