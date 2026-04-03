@@ -3,15 +3,7 @@ import unittest
 import requests
 from requests.exceptions import Timeout
 
-# ============ [Local path override - for local debugging only] ============
-LOCAL_MODEL_WEIGHTS_DIR = "/home/weights"
-import sglang.test.ascend.test_ascend_utils as _utils
-_utils.MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
-_utils.HF_MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
-_utils.QWEN3_VL_30B_A3B_INSTRUCT_WEIGHTS_PATH = os.path.join(
-    LOCAL_MODEL_WEIGHTS_DIR, "Qwen/Qwen3-VL-30B-A3B-Instruct"
-)
-# =========================================================================
+
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.disaggregation_utils import TestDisaggregationBase
 from sglang.test.ascend.test_ascend_utils import QWEN3_VL_30B_A3B_INSTRUCT_WEIGHTS_PATH
@@ -24,9 +16,7 @@ from sglang.test.test_utils import (
 
 register_npu_ci(est_time=400, suite="nightly-4-npu-a3", nightly=True)
 
-# Inline PNG image encoded as a Data URL.
-# Image bytes are embedded directly in the string; no network access required.
-# Source: reused from developer integration test notes (curl example).
+
 _INLINE_IMAGE_URL = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAA7EAAAOxAGVKw4b"
@@ -37,13 +27,13 @@ _INLINE_IMAGE_URL = (
 
 
 
-# ---------------------------------------------
+
 
 class TestDisaggregatedVLM(TestDisaggregationBase):
     __test__ = False
     encoder_transfer_backend: str = None
     """
-    Testcase 5.1 & 5.2 Unified: Verify encoder-only + language-only configuration.
+    Verify encoder-only + language-only configuration.
 
     Architecture under test
     -----------------------
@@ -54,23 +44,13 @@ class TestDisaggregatedVLM(TestDisaggregationBase):
     The language server is configured with --encoder-urls pointing to the
     encoder server. This setup validates the complete VLM disaggregation.
 
-    Why two servers are required
-    ----------------------------
-    With zmq_to_scheduler backend, the /encode endpoint in encode_server.py
-    blocks until the language server registers its receiving address (up to 60s).
-    A single encoder server without a language server counterpart would cause
-    every /encode call to hang. The two-server setup mirrors production EPD
-    deployment and makes the test behaviorally correct.
+   
 
-    This test covers:
-    - Case 5.1: encoder-only complete configuration
-    - Case 5.2: language-only complete configuration (via text-only test)
-    - Case 1.1: basic encoder-only mode (covered as subset of 5.1)
-    - Case 5.5: multi-card environment (tp-size=2 per server, 4 cards total)
+
 
     [Test Category] Parameter
     [Test Target] --encoder-only; --language-only; --encoder-transfer-backend;
-                  --encoder-urls; --tp-size
+                  --encoder-urls;
     """
 
     @classmethod
@@ -101,13 +81,11 @@ class TestDisaggregatedVLM(TestDisaggregationBase):
     @classmethod
     def start_encoder(cls):
         """
-        Launch encoder-only server on NPU 0-1 (prefill_url port).
-
         --encoder-only: loads only the visual encoder weights, no language model.
         --encoder-transfer-backend zmq_to_scheduler: embeddings are sent via ZMQ
         to the language server's scheduler once the language server registers its
         receiving address.
-        --tp-size 2: shard encoder across two NPU cards for memory efficiency.
+
         """
         encoder_args = [
             "--encoder-only",
@@ -115,8 +93,6 @@ class TestDisaggregatedVLM(TestDisaggregationBase):
             cls.encoder_transfer_backend,
             "--tp-size",
             "2",
-            "--base-gpu-id",
-            "4",
             "--attention-backend",
             "ascend",
             "--disable-cuda-graph",
@@ -124,8 +100,7 @@ class TestDisaggregatedVLM(TestDisaggregationBase):
             "--mem-fraction-static",
             "0.8",
         ]
-        # Assign to process_prefill so TestDisaggregationBase.tearDownClass
-        # handles cleanup automatically
+
         cls.process_prefill = popen_launch_server(
             cls.model,
             cls.prefill_url,
@@ -136,13 +111,9 @@ class TestDisaggregatedVLM(TestDisaggregationBase):
     @classmethod
     def start_language(cls):
         """
-        Launch language-only server on NPU 2-3 (decode_url port).
-
         --language-only: loads only language model weights, no visual encoder.
         --encoder-urls: points to the encoder server started in start_encoder().
         --encoder-transfer-backend zmq_to_scheduler: must match the encoder server
-        --tp-size 2: shard language model across two NPU cards.
-        --base-gpu-id 2: use NPU 2-3, avoiding conflict with encoder on NPU 0-1.
         """
         language_args = [
             "--language-only",
@@ -152,8 +123,6 @@ class TestDisaggregatedVLM(TestDisaggregationBase):
             cls.encoder_transfer_backend,
             "--tp-size",
             "2",
-            "--base-gpu-id",
-            "6",
             "--attention-backend",
             "ascend",
             "--disable-cuda-graph",
@@ -161,8 +130,6 @@ class TestDisaggregatedVLM(TestDisaggregationBase):
             "--mem-fraction-static",
             "0.8",
         ]
-        # Assign to process_decode so TestDisaggregationBase.tearDownClass
-        # handles cleanup automatically
         cls.process_decode = popen_launch_server(
             cls.model,
             cls.decode_url,

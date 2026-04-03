@@ -4,15 +4,7 @@ import unittest
 import requests
 
 
-# ============ [Local path override - for local debugging only] ============
-LOCAL_MODEL_WEIGHTS_DIR = "/home/weights"
-import sglang.test.ascend.test_ascend_utils as _utils
-_utils.MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
-_utils.HF_MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
-_utils.QWEN3_VL_30B_A3B_INSTRUCT_WEIGHTS_PATH = os.path.join(
-    LOCAL_MODEL_WEIGHTS_DIR, "Qwen/Qwen3-VL-30B-A3B-Instruct"
-)
-# =========================================================================
+
 
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import QWEN3_VL_30B_A3B_INSTRUCT_WEIGHTS_PATH
@@ -26,9 +18,7 @@ from sglang.test.test_utils import (
 
 register_npu_ci(est_time=400, suite="nightly-2-npu-a3", nightly=True)
 
-# A small inline PNG image encoded as a Data URL.
-# The image bytes are embedded directly in the string; no network access is needed.
-# Source: reused from developer integration test notes (curl example).
+
 _INLINE_IMAGE_URL = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAA7EAAAOxAGVKw4b"
@@ -55,17 +45,6 @@ class TestAdaptiveDispatchToEncoder(CustomTestCase):
     The routing decision is made in tokenizer_manager._should_dispatch_to_encoder()
     by comparing total multimodal item count against SGLANG_ENCODER_DISPATCH_MIN_ITEMS
     (default = 2).
-
-    Dependency on PR #18118
-    -----------------------
-    PR sgl-project/sglang#18118 fixes a bug where mm_pool was incorrectly skipped
-    even when adaptive dispatch was enabled.  Without this fix the local processing
-    path crashes because mm_pool is empty.
-
-    test_single_image_processed_locally() therefore serves as a regression test
-    for that bugfix: it MUST fail on a codebase without PR #18118 and MUST pass
-    after the fix is applied.  This is intentional -- write the test now, merge
-    the fix, then confirm the test turns green.
 
     Server setup
     ------------
@@ -105,8 +84,6 @@ class TestAdaptiveDispatchToEncoder(CustomTestCase):
                 "--encoder-urls", "http://127.0.0.1:9999",
                 "--tp-size",
                 "2",
-                "--base-gpu-id",
-                "14",
                 "--attention-backend",
                 "ascend",
                 "--disable-cuda-graph",
@@ -145,12 +122,6 @@ class TestAdaptiveDispatchToEncoder(CustomTestCase):
     def test_single_image_processed_locally(self):
         """Verify a single-image request is processed locally without an encoder server.
 
-        DEPENDS ON: PR sgl-project/sglang#18118
-        If this PR is not yet merged into the working branch, this test will fail
-        because mm_pool is skipped (skip_mm_pool=True), causing a crash on local
-        multimodal processing.  That failure is expected and intentional -- it
-        validates the bugfix.
-
         Assertion rationale:
         - HTTP 200 means the language server processed the image locally.
         - Any non-2xx or connection timeout means either:
@@ -186,7 +157,6 @@ class TestAdaptiveDispatchToEncoder(CustomTestCase):
             200,
             f"Single-image request failed with status {response.status_code}. "
             "Possible causes: (1) adaptive dispatch not routing single-image locally, "
-            "(2) PR #18118 not yet merged (mm_pool empty). "
             f"Response body: {response.text[:300]}",
         )
 
