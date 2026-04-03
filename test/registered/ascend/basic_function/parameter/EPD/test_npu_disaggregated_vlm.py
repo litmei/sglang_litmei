@@ -123,6 +123,8 @@ class TestDisaggregatedVLM(TestDisaggregationBase):
             cls.encoder_transfer_backend,
             "--tp-size",
             "2",
+            "--base-gpu-id",
+            "2",
             "--attention-backend",
             "ascend",
             "--disable-cuda-graph",
