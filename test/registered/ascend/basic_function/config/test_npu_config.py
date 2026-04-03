@@ -95,7 +95,7 @@ class TestConfigPriority(CustomTestCase):
         # will use false model path (/nonexistent/Qwen/Qwen3-32B) service start fail
         error_message = "Repo id must be in the form 'repo_name' or 'namespace/repo_name': '/nonexistent/Qwen/Qwen3-32B'."
         with tempfile.NamedTemporaryFile(
-                mode="w+", delete=True, suffix="out.log"
+            mode="w+", delete=True, suffix="out.log"
         ) as out_log_file, tempfile.NamedTemporaryFile(
             mode="w+", delete=True, suffix="out.log"
         ) as err_log_file:
