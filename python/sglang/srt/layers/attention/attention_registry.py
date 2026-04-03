@@ -1,6 +1,10 @@
 import logging
 from typing import TYPE_CHECKING
 
+from sglang.srt.utils import get_device_capability, is_musa
+
+_is_musa = is_musa()
+
 logger = logging.getLogger(__name__)
 
 
@@ -125,14 +129,19 @@ def create_flashmla_backend(runner):
 
 @register_attention_backend("fa3")
 def create_flashattention_v3_backend(runner):
-    import torch
 
-    assert (
-        torch.cuda.get_device_capability()[0] == 8 and not runner.use_mla_backend
-    ) or torch.cuda.get_device_capability()[0] == 9, (
-        "FlashAttention v3 Backend requires SM>=80 and SM<=90. "
-        "Please use `--attention-backend flashinfer`."
-    )
+    major, minor = get_device_capability()
+    if not _is_musa:
+        assert (major == 8 and not runner.use_mla_backend) or major == 9, (
+            "FlashAttention v3 Backend requires SM>=80 and SM<=90. "
+            "Please use `--attention-backend flashinfer`."
+        )
+    else:
+        assert major >= 3 and minor >= 1, (
+            "FlashAttention v3 Backend requires MP>=31. "
+            "Please use `--attention-backend triton`."
+        )
+
     from sglang.srt.layers.attention.flashattention_backend import FlashAttentionBackend
 
     return FlashAttentionBackend(runner)
@@ -210,7 +219,8 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
                     runner.server_args.attention_backend == "triton"
                     or runner.server_args.attention_backend == "trtllm_mha"
                     or runner.server_args.attention_backend == "fa4"
-                ), "triton or trtllm_mha or fa4 backend are the only supported backends on Blackwell GPUs for hybrid GDN models, use --attention-backend triton or --attention-backend trtllm_mha to specify the backend."
+                    or runner.server_args.attention_backend == "flashinfer"
+                ), "triton, trtllm_mha, fa4, or flashinfer backend are the only supported backends on Blackwell GPUs for hybrid GDN models, use --attention-backend to specify the backend."
             if is_npu():
                 assert (
                     runner.server_args.attention_backend == "ascend"

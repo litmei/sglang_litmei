@@ -48,7 +48,6 @@ from sglang.srt.utils import (
     get_bool_env_var,
     get_current_device_stream_fast,
     get_int_env_var,
-    get_local_ip_auto,
     is_cpu,
     is_cuda_alike,
     is_hip,
@@ -58,6 +57,7 @@ from sglang.srt.utils import (
     is_xpu,
 )
 from sglang.srt.utils.custom_op import register_custom_op
+from sglang.srt.utils.network import get_local_ip_auto
 
 _is_npu = is_npu()
 _is_cpu = is_cpu()
@@ -246,7 +246,6 @@ class GroupCoordinator:
         use_npu_communicator: bool,
         use_message_queue_broadcaster: bool = False,
         group_name: Optional[str] = None,
-        pynccl_use_current_stream: bool = False,
         gloo_timeout: timedelta = timedelta(seconds=120 * 60),
     ):
         # Set group info
@@ -316,7 +315,6 @@ class GroupCoordinator:
 
         # Import communicators
         self.use_pynccl = use_pynccl
-        self.pynccl_use_current_stream = pynccl_use_current_stream
         self.use_pymscclpp = use_pymscclpp
         self.use_custom_allreduce = use_custom_allreduce
         self.use_torch_symm_mem_all_reduce = use_torch_symm_mem_all_reduce
@@ -358,7 +356,6 @@ class GroupCoordinator:
             self.pynccl_comm = PyNcclCommunicator(
                 group=self.cpu_group,
                 device=self.device,
-                use_current_stream=pynccl_use_current_stream,
             )
 
         self.pymscclpp_comm: Optional[PyMscclppCommunicator] = None
@@ -533,9 +530,7 @@ class GroupCoordinator:
             if not pynccl_comm:
                 maybe_pynccl_context = nullcontext()
             else:
-                maybe_pynccl_context = pynccl_comm.change_state(
-                    enable=True, stream=get_current_device_stream_fast()
-                )
+                maybe_pynccl_context = pynccl_comm.change_state(enable=True)
 
             pymscclpp_comm = self.pymscclpp_comm
             maybe_pymscclpp_context: Any
@@ -602,9 +597,7 @@ class GroupCoordinator:
             return self.npu_communicator.all_reduce(input_)
 
         if self.pynccl_comm is not None and self.is_symmetric_memory_enabled():
-            with self.pynccl_comm.change_state(
-                enable=True, stream=get_current_device_stream_fast()
-            ):
+            with self.pynccl_comm.change_state(enable=True):
                 self.pynccl_comm.all_reduce(input_)
                 return input_
 
@@ -720,9 +713,7 @@ class GroupCoordinator:
             assert not pymscclpp_comm.disabled
             out = pymscclpp_comm.all_reduce(input_)
         elif outplace_all_reduce_method == "pynccl":
-            with pynccl_comm.change_state(
-                enable=True, stream=get_current_device_stream_fast()
-            ):
+            with pynccl_comm.change_state(enable=True):
                 out = pynccl_comm.outplace_all_reduce(input_)
         assert out is not None
         return out
@@ -746,9 +737,7 @@ class GroupCoordinator:
         if pynccl_comm is not None and (
             not pynccl_comm.disabled or self.is_symmetric_memory_enabled()
         ):
-            with pynccl_comm.change_state(
-                enable=True, stream=get_current_device_stream_fast()
-            ):
+            with pynccl_comm.change_state(enable=True):
                 pynccl_comm.reduce_scatter(output, input)
         else:
             torch.distributed.reduce_scatter_tensor(
@@ -780,9 +769,7 @@ class GroupCoordinator:
         world_size = self.world_size
         pynccl_comm = self.pynccl_comm
 
-        with pynccl_comm.change_state(
-            enable=True, stream=get_current_device_stream_fast()
-        ):
+        with pynccl_comm.change_state(enable=True):
             assert (
                 pynccl_comm is not None and not pynccl_comm.disabled
             ), "pynccl is required for reduce_scatterv"
@@ -811,9 +798,7 @@ class GroupCoordinator:
         if pynccl_comm is not None and (
             not pynccl_comm.disabled or self.is_symmetric_memory_enabled()
         ):
-            with pynccl_comm.change_state(
-                enable=True, stream=get_current_device_stream_fast()
-            ):
+            with pynccl_comm.change_state(enable=True):
                 pynccl_comm.all_gather(output, input)
         else:
             torch.distributed.all_gather_into_tensor(
@@ -827,7 +812,7 @@ class GroupCoordinator:
             reg_all_gather_into_tensor(output, input, group_name=self.unique_name)
 
     def cp_all_gather_into_tensor_async(
-        self, output: torch.Tensor, input: torch.Tensor, stream=None
+        self, output: torch.Tensor, input: torch.Tensor, stream: torch.cuda.Stream
     ):
         """
         Implement an asynchronous `allgather` operation on a specified stream.
@@ -835,9 +820,6 @@ class GroupCoordinator:
         eliminating the CPU-side launch-kernel blocking issue caused by synchronization problems.
         The specific implementation uses the interface provided by pynccl to remove the synchronization logic of events.
         """
-        assert (
-            stream is not None
-        ), f"Invalid params stream ({stream}, Please specify the stream to use when calling cp_all_gather_into_tensor_async.)"
         pynccl_comm = self.pynccl_comm
         if pynccl_comm is None or pynccl_comm.disabled:
             self.all_gather_into_tensor(output, input)
@@ -940,9 +922,7 @@ class GroupCoordinator:
         world_size = self.world_size
         pynccl_comm = self.pynccl_comm
 
-        with pynccl_comm.change_state(
-            enable=True, stream=get_current_device_stream_fast()
-        ):
+        with pynccl_comm.change_state(enable=True):
             assert (
                 pynccl_comm is not None and not pynccl_comm.disabled
             ), "pynccl is required for all_gatherv"
@@ -1449,7 +1429,6 @@ def init_model_parallel_group(
     use_message_queue_broadcaster: bool = False,
     group_name: Optional[str] = None,
     use_mscclpp_allreduce: Optional[bool] = None,
-    pynccl_use_current_stream: bool = True,
     use_torch_symm_mem_allreduce: Optional[bool] = None,
 ) -> GroupCoordinator:
     if use_custom_allreduce is None:
@@ -1475,7 +1454,6 @@ def init_model_parallel_group(
         use_npu_communicator=True,
         use_message_queue_broadcaster=use_message_queue_broadcaster,
         group_name=group_name,
-        pynccl_use_current_stream=pynccl_use_current_stream,
     )
 
 
@@ -1589,7 +1567,12 @@ def graph_capture(stream: Optional[torch.cuda.Stream] = None):
     with get_tp_group().graph_capture(
         stream=stream
     ) as context, get_pp_group().graph_capture(context):
-        yield context
+        moe_ep = _MOE_EP
+        if moe_ep is not None and moe_ep is not _TP:
+            with moe_ep.graph_capture(context):
+                yield context
+        else:
+            yield context
 
 
 logger = logging.getLogger(__name__)
@@ -1846,7 +1829,6 @@ def initialize_model_parallel(
             "SGLANG_USE_MESSAGE_QUEUE_BROADCASTER", "true"
         ),
         group_name="tp",
-        pynccl_use_current_stream=duplicate_tp_group,
     )
 
     if duplicate_tp_group:
@@ -1862,7 +1844,6 @@ def initialize_model_parallel(
                 "SGLANG_USE_MESSAGE_QUEUE_BROADCASTER", "true"
             ),
             group_name="pdmux_prefill_tp",
-            pynccl_use_current_stream=True,
         )
         if _TP.pynccl_comm:
             _TP.pynccl_comm.disabled = False
