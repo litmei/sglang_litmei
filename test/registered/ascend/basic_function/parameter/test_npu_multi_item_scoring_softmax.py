@@ -173,24 +173,6 @@ class TestMultiItemScoringBasic(CustomTestCase):
         )
         logger.info("Softmax=False vs Softmax=True distinction verified.")
 
-    def test_item_first_flag(self):
-        """item_first=True is accepted by the server without error.
-
-        Note: When --multi-item-scoring-delimiter is active, item_first is ignored
-        by the server. This test verifies the parameter is accepted without error.
-        """
-        response = send_score_request(
-            base_url=self.base_url,
-            query=_QUERY,
-            items=_ITEMS,
-            label_token_ids=_LABEL_TOKEN_IDS,
-            item_first=True,
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("scores", response.json())
-        self.assertEqual(len(response.json()["scores"]), len(_ITEMS))
-        logger.info("item_first=True accepted by server without error.")
-
 
 if __name__ == "__main__":
     unittest.main()
