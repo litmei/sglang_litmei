@@ -559,7 +559,21 @@ def run_bench_serving(
 
 # hook factory
 def create_attention_monitor_hook_factory(config):
+    """
+    Factory function to create a forward hook for monitoring self-attention layer states.
+    This hook records input/output statistics during model forward propagation.
+
+    Args:
+        config (dict): Configuration dictionary containing hook parameters
+            layer_index (int): Index of the target attention layer to monitor
+
+    Returns:
+        function: Forward hook function to be registered on the target module
+    """
+    # Get target layer index from config, default to 0 if not specified
     layer_index = config.get("layer_index", 0)
+
+    # Initialize logging configuration if no handlers are set
     if not logging.root.handlers:
         logging.basicConfig(
             level=logging.INFO,
@@ -568,21 +582,39 @@ def create_attention_monitor_hook_factory(config):
         )
 
     def attention_monitor_hook(module, inputs, output):
-        # The actual hook function is called during the forward propagation of the self-attention layer.
+        """
+        Forward hook function that monitors and logs the internal states of a self-attention layer.
+        Executed automatically during the forward pass of the module it is registered to.
+
+        Args:
+            module (torch.nn.Module): The module this hook is attached to
+            inputs (tuple): Input tensors passed to the module's forward method
+            output (torch.Tensor): Output tensor returned by the module's forward method
+
+        Returns:
+            torch.Tensor: Unmodified output tensor to preserve model computation flow
+        """
+        # Record current timestamp for time-series tracking
         timestamp = time.time()
 
+        # Extract hidden states from inputs (second input tensor of attention layer)
         hidden_states = inputs[1] if inputs and len(inputs) > 1 else None
 
+        # Construct monitoring record with key statistics
         monitor_record = {
             "timestamp": timestamp,
             "layer_index": layer_index,
             "module_type": type(module).__name__,
+            # Compute sum of hidden states across last dim, take first 5 elements for logging
             "inputs": hidden_states.sum(-1)[:5] if hidden_states is not None else None,
+            # Compute sum of output across last dim, take first 5 elements for logging
             "outputs": output.sum(-1)[:5],
         }
 
+        # Log the monitoring record
         logging.info(f"hook effect: {monitor_record}")
 
+        # Return the original output to maintain normal model forward propagation
         return output
 
     return attention_monitor_hook

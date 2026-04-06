@@ -31,15 +31,11 @@ class TestSetForwardHooks(CustomTestCase):
     [Test Target] --forward-hooks
     """
 
-    hook_function_path = (
-        "sglang.test.ascend.test_ascend_utils:create_attention_monitor_hook_factory"
-    )
-    model = QWEN3_32B_WEIGHTS_PATH
     hooks_spec = [
         {
             "name": "qwen_first_layer_attn_monitor",
             "target_modules": ["model.layers.0.self_attn"],
-            "hook_factory": hook_function_path,
+            "hook_factory": "sglang.test.ascend.test_ascend_utils:create_attention_monitor_hook_factory",
             "config": {"layer_index": 0},
         }
     ]
@@ -52,7 +48,7 @@ class TestSetForwardHooks(CustomTestCase):
         cls.out_log_file = open(cls.out_log_file_name, "w+", encoding="utf-8")
         cls.hook_log_file = open(cls.hook_log_file_name, "w+", encoding="utf-8")
         cls.process = popen_launch_server(
-            cls.model,
+            QWEN3_32B_WEIGHTS_PATH,
             DEFAULT_URL_FOR_TEST,
             DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=[

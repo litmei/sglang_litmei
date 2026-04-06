@@ -34,8 +34,6 @@ class TestConfig(CustomTestCase):
     [Test Target] --config
     """
 
-    config = CONFIG_YAML_PATH
-
     @classmethod
     def setUpClass(cls):
         # launch server with "--config" parameter
@@ -47,7 +45,7 @@ class TestConfig(CustomTestCase):
             "-m",
             "sglang.launch_server",
             "--config",
-            cls.config,
+            CONFIG_YAML_PATH,
             "--host",
             host,
             "--port",
@@ -88,9 +86,6 @@ class TestConfigPriority(CustomTestCase):
     [Test Target] --config
     """
 
-    model = "/nonexistent/Qwen/Qwen3-32B"
-    config = CONFIG_YAML_PATH
-
     def test_config_priority(self):
         # will use false model path (/nonexistent/Qwen/Qwen3-32B) service start fail
         error_message = "Repo id must be in the form 'repo_name' or 'namespace/repo_name': '/nonexistent/Qwen/Qwen3-32B'."
@@ -101,10 +96,10 @@ class TestConfigPriority(CustomTestCase):
         ) as err_log_file:
             try:
                 popen_launch_server(
-                    self.model,
+                    "/nonexistent/Qwen/Qwen3-32B",
                     DEFAULT_URL_FOR_TEST,
                     timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-                    other_args=["--config", self.config],
+                    other_args=["--config", CONFIG_YAML_PATH],
                     return_stdout_stderr=(out_log_file, err_log_file),
                 )
             except Exception as e:
