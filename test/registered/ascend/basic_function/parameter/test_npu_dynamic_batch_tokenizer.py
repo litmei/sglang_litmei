@@ -2,18 +2,6 @@ import logging
 import unittest
 from types import SimpleNamespace
 
-import os
-
-# ============ [Local path override - for local debugging only] ============
-LOCAL_MODEL_WEIGHTS_DIR = "/home/weights"
-import sglang.test.ascend.test_ascend_utils as _utils
-_utils.MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
-_utils.HF_MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
-_utils.QWEN3_32B_WEIGHTS_PATH = os.path.join(
-    LOCAL_MODEL_WEIGHTS_DIR, "Qwen/Qwen3-32B"
-)
-# =========================================================================
-
 import requests
 
 from sglang.srt.utils import kill_process_tree
@@ -64,7 +52,7 @@ class BaseQwenTest(CustomTestCase):
     def _run_gsm8k_test(self, scenario):
         args = SimpleNamespace(
             num_shots=5,
-            data_path="/home/x30082852/test.jsonl",
+            data_path=None,
             num_questions=200,
             max_new_tokens=512,
             parallel=128,

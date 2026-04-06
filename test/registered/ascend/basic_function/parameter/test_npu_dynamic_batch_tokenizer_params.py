@@ -1,19 +1,7 @@
 import threading
 import unittest
+
 import requests
-
-import os
-
-# ============ [Local path override - for local debugging only] ============
-LOCAL_MODEL_WEIGHTS_DIR = "/home/weights"
-import sglang.test.ascend.test_ascend_utils as _utils
-_utils.MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
-_utils.HF_MODEL_WEIGHTS_DIR = LOCAL_MODEL_WEIGHTS_DIR
-_utils.LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH = os.path.join(
-    LOCAL_MODEL_WEIGHTS_DIR, "LLM-Research/Llama-3.2-1B-Instruct"
-)
-# =========================================================================
-
 
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import (
