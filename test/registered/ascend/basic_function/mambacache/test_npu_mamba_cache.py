@@ -22,7 +22,7 @@ class TestMambaCacheBase(CustomTestCase):
     """Base class for MambaCache tests with common setup and teardown.
 
     Subclasses should define:
-        - model: model path or weights config
+        - model: model path
         - other_args: list of server arguments
     """
 
@@ -49,9 +49,10 @@ class TestMambaCacheBasic(GSM8KAscendMixin, TestMambaCacheBase):
     The inference accuracy of the Qwen3-Next-80B-A3B-Instruct model
     on the GSM8K dataset is no less than 0.92.
 
-    [Test Category] Functional
-    [Test Target] MambaCache
+    [Test Category] Parameter
+    [Test Target] --mamba-scheduler-strategy, --mamba-full-memory-ratio, --mamba-track-interval
     """
+
     accuracy = QWEN3_NEXT_80B_A3B_INSTRUCT_WEIGHTS_FOR_TEST.gsm8k_accuracy
     other_args = [
         "--trust-remote-code",
@@ -76,8 +77,8 @@ class TestMambaCacheParameters(TestMambaCacheBase):
     """Testcase: Verify MambaCache with different parameters, inference request successful.
 
     [Test Category] Parameter
-    [Test Target] --mamba-full-memory-ratio 0.3, --mamba-ssm-dtype float16, --mamba-track-interval "128,
-    --mamba-scheduler-strategy no_buffer
+    [Test Target] --mamba-full-memory-ratio, --mamba-ssm-dtype, --mamba-track-interval,
+    --mamba-scheduler-strategy
     """
 
     other_args = [
@@ -116,9 +117,7 @@ class TestMambaCacheParameters(TestMambaCacheBase):
         return response.text
 
     def test_mamba_long_sequence(self):
-        long_text = (
-                "Explain the concept of machine learning in detail." * 50000
-        )
+        long_text = "Explain the concept of machine learning in detail." * 80000
         response = requests.post(
             f"{DEFAULT_URL_FOR_TEST}/generate",
             json={
@@ -138,7 +137,7 @@ class TestMambaCacheRadix(TestMambaCacheBase):
     """Testcase: Verify Radix Cache reuse with mamba cache.
 
     [Test Category] Parameter
-    [Test Target] Radix Cache reuse, --mamba-ssm-dtype bfloat16
+    [Test Target] Radix Cache reuse, --mamba-ssm-dtype
     """
 
     other_args = [
@@ -159,7 +158,7 @@ class TestMambaCacheRadix(TestMambaCacheBase):
     ]
 
     def test_mamba_cache_kv_cache(self):
-        # test kv cache reuse with radix cache
+        # test kv cache reuse with radix cache,input text should meet page size requirement( >=128 )
         input_ids_first = [1] * 200
         input_ids_second = input_ids_first + [2] * 70
 
@@ -189,7 +188,7 @@ class TestMambaCacheHierarchicalCache(TestMambaCacheRadix):
     """Testcase: Verify hierarchical cache reuse with mamba cache.
 
     [Test Category] Parameter
-    [Test Target] Hierarchical Cache reuse
+    [Test Target]--enable-hierarchical-cache
     """
 
     other_args = [
