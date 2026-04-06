@@ -48,8 +48,8 @@ CHATGLM2_6B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "ZhipuAI/chatglm2-6b"
 DBRX_INSTRUCT_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "AI-ModelScope/dbrx-instruct"
 )
-DEEPSEEK_R1_0528_W4A8_PER_CHANNEL_WEIGHTS_PATH = os.path.join(
-    MODEL_WEIGHTS_DIR, "vllm-ascend/DeepSeek-R1-0528-w4a8-per-channel"
+DEEPSEEK_R1_0528_W8A8_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "vllm-ascend/DeepSeek-R1-0528-W8A8"
 )
 DEEPSEEK_V3_2_EXP_W8A8_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "DeepSeek-V3.2-Exp-W8A8"
