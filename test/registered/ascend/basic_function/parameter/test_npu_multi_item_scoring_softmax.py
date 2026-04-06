@@ -174,6 +174,5 @@ class TestMultiItemScoringBasic(CustomTestCase):
         logger.info("Softmax=False vs Softmax=True distinction verified.")
 
 
-
 if __name__ == "__main__":
     unittest.main()
