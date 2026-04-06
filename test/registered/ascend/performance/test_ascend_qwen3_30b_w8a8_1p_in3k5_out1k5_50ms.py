@@ -82,11 +82,14 @@ QWEN3_30B_A3B_OTHER_ARGS = [
     162,
     "--dtype",
     "bfloat16",
+    # "--base-gpu-id",
+    # 2,
 ]
 
 
 class TestQwen30B(TestAscendPerformanceTestCaseBase):
     model = QWEN3_30B_A3B_W8A8_VLLM_MODEL_PATH
+    # model = "/home/weights/Qwen/Qwen3-30B-A3B-W8A8"
     other_args = QWEN3_30B_A3B_OTHER_ARGS
     envs = QWEN3_30B_A3B_ENVS
     dataset_name = "random"

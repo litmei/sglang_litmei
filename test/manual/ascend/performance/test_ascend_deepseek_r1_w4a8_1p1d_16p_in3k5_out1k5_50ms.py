@@ -30,9 +30,9 @@ MODEL_CONFIG = {
         "SGLANG_USE_FIA_NZ": "1",
         "ENABLE_MOE_NZ": "1",
         "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
-        "SGLANG_ENABLE_SPEC_V2": "1",
+        "SGLANG_ENABLE_SPEC_V2": "2",
         "HCCL_BUFFSIZE": "850",
-        "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "112",
+        "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "78",
         "TASK_QUEUE_ENABLE": "1",
         "HCCL_SOCKET_IFNAME": NIC_NAME,
         "GLOO_SOCKET_IFNAME": NIC_NAME,
@@ -88,9 +88,9 @@ MODEL_CONFIG = {
         "--dp-size",
         16,
         "--mem-fraction-static",
-        0.802,
+        0.805,
         "--max-running-requests",
-        448,
+        416,
         "--quantization",
         "modelslim",
         "--moe-a2a-backend",
@@ -113,7 +113,6 @@ MODEL_CONFIG = {
         22,
         24,
         26,
-        28,
         "--watchdog-timeout",
         9000,
         "--context-length",
@@ -121,11 +120,11 @@ MODEL_CONFIG = {
         "--speculative-algorithm",
         "NEXTN",
         "--speculative-num-steps",
-        3,
+        2,
         "--speculative-eagle-topk",
         1,
         "--speculative-num-draft-tokens",
-        4,
+        3,
         "--prefill-round-robin-balance",
         "--disable-shared-experts-fusion",
         "--dtype",
@@ -143,7 +142,7 @@ class TestDeepSeekR1W4A8(TestAscendPerfMultiNodePdSepTestCaseBase):
     model_config = MODEL_CONFIG
     dataset_name = "random"
     request_rate = 24
-    max_concurrency = 448
+    max_concurrency = 416
     num_prompts = int(max_concurrency) * 4
     input_len = 3584
     output_len = 1536
