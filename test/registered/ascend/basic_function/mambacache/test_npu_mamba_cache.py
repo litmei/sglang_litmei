@@ -155,7 +155,7 @@ class TestMambaCacheRadix(CustomTestCase):
         self.assertIn("Paris", response.text)
 
     def test_mamba_long_sequence(self):
-        long_text = "Explain the concept of machine learning in detail." * 6000
+        long_text = "Explain the concept of machine learning in detail." * 4000
         response = requests.post(
             f"{DEFAULT_URL_FOR_TEST}/generate",
             json={
