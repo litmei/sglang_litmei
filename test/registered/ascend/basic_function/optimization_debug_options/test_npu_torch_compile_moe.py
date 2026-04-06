@@ -18,23 +18,25 @@ from sglang.test.test_utils import (
 register_npu_ci(est_time=400, suite="nightly-1-npu-a3", nightly=True)
 
 
-class TestTokenizerBatchEncode(CustomTestCase):
-    """Testcase: Verify throughput improvement when enabling --enable-tokenizer-batch-encode.
+class TestTorchCompileMoe(CustomTestCase):
+    """Testcase: Verify throughput improvement when enabling --enable-torch-compile.
 
     [Test Category] Parameter
-    [Test Target] --enable-tokenizer-batch-encode
+    [Test Target] --enable-torch-compile
     """
 
     model = QWEN3_0_6B_WEIGHTS_PATH
     base_url = DEFAULT_URL_FOR_TEST
 
-    def _start_server(self, enable_tokenizer_batch_encode: bool):
+    def _start_server(self, enable_torch_compile: bool):
         other_args = [
             "--attention-backend",
             "ascend",
+            "--torch-compile-max-bs",
+            "4",
         ]
-        if enable_tokenizer_batch_encode:
-            other_args.append("--enable-tokenizer-batch-encode")
+        if enable_torch_compile:
+            other_args.append("--enable-torch-compile")
 
         return popen_launch_server(
             self.model,
@@ -65,21 +67,21 @@ class TestTokenizerBatchEncode(CustomTestCase):
         tok = time.perf_counter()
         return max_tokens / (tok - tic)
 
-    def test_tokenizer_batch_encode_throughput_improvement(self):
-        # Without tokenizer batch encode
-        proc_off = self._start_server(enable_tokenizer_batch_encode=False)
+    def test_torch_compile_throughput_improvement(self):
+        # Without torch compile
+        proc_off = self._start_server(enable_torch_compile=False)
         tp_off = self._get_throughput()
         kill_process_tree(proc_off.pid)
 
-        # With tokenizer batch encode
-        proc_on = self._start_server(enable_tokenizer_batch_encode=True)
+        # With torch compile
+        proc_on = self._start_server(enable_torch_compile=True)
         tp_on = self._get_throughput()
         kill_process_tree(proc_on.pid)
 
         self.assertGreater(tp_on, tp_off)
 
     def test_mmlu(self):
-        process = self._start_server(enable_tokenizer_batch_encode=True)
+        process = self._start_server(enable_torch_compile=True)
         args = SimpleNamespace(
             base_url=self.base_url,
             model=self.model,

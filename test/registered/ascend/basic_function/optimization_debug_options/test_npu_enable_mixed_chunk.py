@@ -1,13 +1,11 @@
 import threading
 import time
 import unittest
-from datetime import datetime
-from typing import Any, Dict
 
 import requests
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ascend.test_ascend_utils import LLAMA_3_2_1B_WEIGHTS_PATH
+from sglang.test.ascend.test_ascend_utils import QWEN3_0_6B_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -16,212 +14,96 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
-register_npu_ci(est_time=400, suite="nightly-1-npu-a3", nightly=True)
-
-CONFIG = {
-    "TARGET_TOKEN_COUNT": 2500,
-    "CHUNK_SIZE": 1024,
-    "REQUEST_COUNT": 50,
-    "TIMEOUT": 600,
-}
+register_npu_ci(est_time=600, suite="nightly-1-npu-a3", nightly=True)
 
 
-def build_long_input_text_for_token():
-    """Construct long input text with enough tokens (common function for consistent input)"""
-    base_sentence = "This is a test sentence to generate enough tokens. "
-    repeat_times = (CONFIG["TARGET_TOKEN_COUNT"] // 10) + 20
-    return (base_sentence * repeat_times) + "The capital of France is"
+class TestEnableMixedChunk(CustomTestCase):
+    """Testcase: Verify that enabling --enable-mixed-chunk accelerates mixed long and short text requests.
 
-
-def send_generate_request(task_id, request_results):
-    # record single request elapsed time
-    single_start_time = time.time()
-
-    long_input_text = build_long_input_text_for_token()
-
-    response = requests.post(
-        f"{DEFAULT_URL_FOR_TEST}/generate",
-        json={
-            "text": long_input_text,
-            "sampling_params": {
-                "temperature": 0,
-                "max_new_tokens": 32,
-            },
-        },
-        timeout=CONFIG["TIMEOUT"],
-    )
-
-    single_end_time = time.time()
-    single_elapsed_time = round(single_end_time - single_start_time, 4)
-
-    request_results.append(
-        {
-            "task_id": task_id,
-            "status_code": response.status_code,
-            "single_elapsed_time": single_elapsed_time,
-        }
-    )
-
-    print(
-        f"[Task {task_id}] Request completed, status code: {response.status_code}, elapsed time: {single_elapsed_time} seconds"
-    )
-
-
-def start_server(with_mixed: bool):
-    other_args = [
-        "--attention-backend",
-        "ascend",
-        "--disable-cuda-graph",
-        "--chunked-prefill-size",
-        str(CONFIG["CHUNK_SIZE"]),
-    ]
-
-    # Add --enable-mixed-chunk parameter if needed
-    if with_mixed:
-        other_args.insert(0, "--enable-mixed-chunk")
-
-    # Start server
-    process = popen_launch_server(
-        LLAMA_3_2_1B_WEIGHTS_PATH,
-        DEFAULT_URL_FOR_TEST,
-        timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-        other_args=other_args,
-    )
-
-    return process
-
-
-def calculate_statistics(request_results):
-    """Common statistics function: calculate average, max, min elapsed time (remove overall elapsed time)"""
-    success_requests = [r for r in request_results if r["status_code"] == 200]
-    if not success_requests:
-        return {
-            "success_count": 0,
-            "total_count": len(request_results),
-            "avg_elapsed": 0.0,
-            "max_elapsed": 0.0,
-            "min_elapsed": 0.0,
-        }
-
-    # Extract elapsed time of successful requests
-    elapsed_times = [r["single_elapsed_time"] for r in success_requests]
-
-    # Calculate statistical indicators
-    return {
-        "success_count": len(success_requests),
-        "total_count": len(request_results),
-        "avg_elapsed": round(sum(elapsed_times) / len(elapsed_times), 4),
-        "max_elapsed": round(max(elapsed_times), 4),
-        "min_elapsed": round(min(elapsed_times), 4),
-    }
-
-
-class TestMixedChunkPerformanceComparison(CustomTestCase):
-    """Testcase: Compare performance between --enable-mixed-chunk ON/OFF with 50 concurrent long-token requests.
-
-    [Test Category] Parameter
-    [Test Target] --enable-mixed-chunk;
+    [Test Category] Parameter Validation
+    [Test Target] --enable-mixed-chunk
     """
 
-    test_results: Dict[str, Dict[str, Any]] = {
-        "mixed_enabled": {},
-        "mixed_disabled": {},
-    }
+    model = QWEN3_0_6B_WEIGHTS_PATH
+    base_url = DEFAULT_URL_FOR_TEST
 
-    @classmethod
-    def _run_concurrent_tests(cls, with_mixed: bool) -> Dict[str, Any]:
-        process = start_server(with_mixed=with_mixed)
-        time.sleep(5)
+    # Very long prompt (~16k tokens), short prompt (32 tokens)
+    LONG_PROMPT = "Hello " * 3000
+    SHORT_PROMPT = "The capital of France is"
 
-        request_results = []
-        mixed_status = "ENABLED" if with_mixed else "DISABLED"
-        print(
-            f"\n=== [Mixed Chunk {mixed_status}] Test started, timestamp: {datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S.%f')} ==="
+    def _start_server(self, enable_mixed_chunk: bool):
+        other_args = [
+            "--attention-backend",
+            "ascend",
+            "--chunked-prefill-size",
+            "4096",
+        ]
+        if enable_mixed_chunk:
+            other_args.append("--enable-mixed-chunk")
+
+        return popen_launch_server(
+            self.model,
+            self.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            other_args=other_args,
         )
-        print(
-            f"=== Starting {CONFIG['REQUEST_COUNT']} request threads to create queue scenario ==="
+
+    def _send_single_request(self, prompt, max_new_tokens):
+        """Send a single inference request"""
+        requests.post(
+            f"{self.base_url}/generate",
+            json={
+                "text": prompt,
+                "sampling_params": {
+                    "temperature": 0,
+                    "max_new_tokens": max_new_tokens,
+                    "ignore_eos": True,
+                },
+            },
         )
 
+    def _benchmark_mixed_load(self):
+        """Concurrent benchmark: 50 long prompts + 50 short prompts"""
         threads = []
-        for task_id in range(CONFIG["REQUEST_COUNT"]):
+        # Launch 50 long text requests
+        for _ in range(50):
             t = threading.Thread(
-                target=send_generate_request, args=(task_id, request_results)
+                target=self._send_single_request, args=(self.LONG_PROMPT, 32)
             )
             threads.append(t)
 
+        # Launch 50 short text requests
+        for _ in range(50):
+            t = threading.Thread(
+                target=self._send_single_request, args=(self.SHORT_PROMPT, 32)
+            )
+            threads.append(t)
+
+        # Run concurrently and measure total time
+        start = time.time()
         for t in threads:
             t.start()
         for t in threads:
             t.join()
+        end = time.time()
+        return end - start
 
-        statistics = calculate_statistics(request_results)
+    def test_mixed_chunk_performance(self):
+        """Compare total time with mixed-chunk disabled/enabled, verify faster processing when enabled"""
+        # Disable mixed-chunk
+        proc_off = self._start_server(enable_mixed_chunk=False)
+        time_off = self._benchmark_mixed_load()
+        kill_process_tree(proc_off)
+        time.sleep(5)
 
-        kill_process_tree(process.pid)
-        time.sleep(10)
+        # Enable mixed-chunk
+        proc_on = self._start_server(enable_mixed_chunk=True)
+        time_on = self._benchmark_mixed_load()
+        kill_process_tree(proc_on)
 
-        print(f"\n=== [Mixed Chunk {mixed_status}] Test Results ===")
-        print(
-            f"  Success count / Total count: {statistics['success_count']} / {statistics['total_count']}"
-        )
-        print(
-            f"  Average elapsed time per request: {statistics['avg_elapsed']} seconds"
-        )
-        print(
-            f"  Maximum elapsed time per request: {statistics['max_elapsed']} seconds"
-        )
-        print(
-            f"  Minimum elapsed time per request: {statistics['min_elapsed']} seconds"
-        )
-
-        return statistics
-
-    def test_1_mixed_chunk_disabled(self):
-        statistics = self._run_concurrent_tests(with_mixed=False)
-        self.__class__.test_results["mixed_disabled"] = {"detail": statistics}
-
-    def test_2_mixed_chunk_enabled(self):
-        statistics = self._run_concurrent_tests(with_mixed=True)
-        self.__class__.test_results["mixed_enabled"] = {"detail": statistics}
-
-        # Add assertGreater after both tests are completed (verify optimization effect)
-        self._run_performance_assertions()
-
-    def _run_performance_assertions(self):
-        # verify performance optimization
-        print("\n" + "=" * 60)
-        print("=== Running Performance Assertions ===")
-
-        enabled = self.__class__.test_results["mixed_enabled"]["detail"]
-        disabled = self.__class__.test_results["mixed_disabled"]["detail"]
-
-        # Extract core statistical data
-        enabled_avg = enabled["avg_elapsed"]
-        disabled_avg = disabled["avg_elapsed"]
-
-        self.assertNotEqual(
-            disabled_avg, 0.0, "Disabled mode average elapsed time is 0, invalid data"
-        )
-        self.assertNotEqual(
-            enabled_avg, 0.0, "Enabled mode average elapsed time is 0, invalid data"
-        )
-
-        avg_optimize_rate = round(
-            ((disabled_avg - enabled_avg) / disabled_avg) * 100, 2
-        )
-
-        print(f"\nAverage Elapsed Time Comparison")
-        print(
-            f"   Mixed Enabled: {enabled_avg}s | Mixed Disabled: {disabled_avg}s | Optimization Rate: {avg_optimize_rate}%"
-        )
-
-        # Core assertion: Average elapsed time (disabled > enabled)
-        self.assertGreater(
-            disabled_avg,
-            enabled_avg,
-            f"Assertion Failed: Average elapsed time - Mixed Disabled ({disabled_avg}s) is not greater than Mixed Enabled ({enabled_avg}s)",
-        )
+        # Assert: faster when enabled
+        self.assertLess(time_on, time_off)
 
 
 if __name__ == "__main__":
-    # Execute all test cases with detailed output
-    unittest.main(verbosity=2, exit=False)
+    unittest.main()

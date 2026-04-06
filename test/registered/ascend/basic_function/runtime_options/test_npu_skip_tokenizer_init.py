@@ -30,7 +30,7 @@ class TestSkipTokenizerInit(CustomTestCase):
     and EOS Token termination trigger function all work properly.
 
     [Test Category] Parameter
-    [Test Target] --skip-tokenizer-init
+    [Test Target] --skip-tokenizer-init; --stream-output
     """
 
     model = LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH
