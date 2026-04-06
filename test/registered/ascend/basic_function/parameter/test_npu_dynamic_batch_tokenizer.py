@@ -105,7 +105,7 @@ class TestQwen32BTimeoutMax(BaseQwenTest):
         kill_process_tree(cls.process.pid)
 
     def test_gsm8k_timeout_max(self):
-        self._run_gsm8k_test("timeout=0.1")
+        self._run_gsm8k_test("timeout=0.01")
 
 
 if __name__ == "__main__":
