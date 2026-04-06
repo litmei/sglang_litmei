@@ -43,8 +43,7 @@ class TestMambaCacheBase(CustomTestCase):
             kill_process_tree(cls.process.pid)
 
 
-'''
-class TestMambaCacheBasic(GSM8KAscendMixin, TestMambaCacheBase):
+class TestMambaCacheBasic(GSM8KAscendMixin, CustomTestCase):
     """Testcase: Test MambaCache basic functions using GSM8K dataset.
     The inference accuracy of the Qwen3-Next-80B-A3B-Instruct model
     on the GSM8K dataset is no less than 0.92.
@@ -53,6 +52,7 @@ class TestMambaCacheBasic(GSM8KAscendMixin, TestMambaCacheBase):
     [Test Target] --mamba-scheduler-strategy, --mamba-full-memory-ratio, --mamba-track-interval
     """
 
+    model = QWEN3_NEXT_80B_A3B_INSTRUCT_WEIGHTS_FOR_TEST.model_path
     accuracy = QWEN3_NEXT_80B_A3B_INSTRUCT_WEIGHTS_FOR_TEST.gsm8k_accuracy
     other_args = [
         "--trust-remote-code",
@@ -71,7 +71,6 @@ class TestMambaCacheBasic(GSM8KAscendMixin, TestMambaCacheBase):
         "8",
         "--disable-radix-cache",
     ]
-'''
 
 
 class TestMambaCacheParameters(TestMambaCacheBase):
