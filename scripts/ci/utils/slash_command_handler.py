@@ -271,6 +271,9 @@ def handle_rerun_stage(
         "stage-c-test-deepep-8-gpu-h200",
         "multimodal-gen-test-1-gpu",
         "multimodal-gen-test-2-gpu",
+        "multimodal-gen-component-accuracy-1-gpu",
+        "multimodal-gen-component-accuracy-2-gpu",
+        "multimodal-gen-test-1-b200",
     ]
 
     # Valid AMD stage names that support target_stage
@@ -485,7 +488,9 @@ def detect_cuda_suite(file_path_from_test):
         content = f.read()
 
     match = re.search(
-        r'register_cuda_ci\([^)]*suite\s*=\s*["\']([^"\']+)["\']', content
+        r'^[^#\n]*register_cuda_ci\([^)]*suite\s*=\s*["\']([^"\']+)["\']',
+        content,
+        re.MULTILINE,
     )
     if not match:
         return (
