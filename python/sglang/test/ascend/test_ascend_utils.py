@@ -32,6 +32,7 @@ from sglang.test.test_utils import (
 # Model weights storage directory
 MODEL_WEIGHTS_DIR = "/root/.cache/modelscope/hub/models/"
 HF_MODEL_WEIGHTS_DIR = "/root/.cache/huggingface/hub/"
+IMAGES_DIR = "/root/.cache/modelscope/hub/datasets/images/"
 
 # LLM model weights path
 AFM_4_5B_BASE_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "arcee-ai/AFM-4.5B-Base")
@@ -284,6 +285,10 @@ SKYWORK_REWARD_LLAMA_3_1_8B_V0_2_WEIGHTS_PATH = os.path.join(
     HF_MODEL_WEIGHTS_DIR,
     "models--Skywork--Skywork-Reward-Llama-3.1-8B-v0.2/snapshots/d4117fbfd81b72f41b96341238baa1e3e90a4ce1",
 )
+
+# Images path
+IMAGES_023_PATH = os.path.join(IMAGES_DIR, "023.jpg")
+
 # fmt: on
 
 # Other

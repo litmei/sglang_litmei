@@ -37,6 +37,8 @@ class TestKimiK2Thinking(GSM8KAscendMixin, CustomTestCase):
         8000,
         "--max-running-requests",
         16,
+        "--log-level",
+        "error",
     ]
 
 
