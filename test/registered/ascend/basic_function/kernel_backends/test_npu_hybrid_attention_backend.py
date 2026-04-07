@@ -1,6 +1,7 @@
 import os
 import unittest
 from types import SimpleNamespace
+from urllib.parse import urlparse
 
 import requests
 
@@ -68,6 +69,8 @@ class TestHybridAttnBackendBase(CustomTestCase):
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=cls.get_server_args(),
         )
+        cls.host = urlparse(cls.base_url).hostname
+        cls.port = urlparse(cls.base_url).port
 
     @classmethod
     def tearDownClass(cls):
@@ -82,8 +85,10 @@ class TestHybridAttnBackendBase(CustomTestCase):
             max_new_tokens=512,
             parallel=128,
             # host="http://127.0.0.1",
-            host="127.0.0.1",
-            port=int(self.base_url.split(":")[-1]),
+            # host="127.0.0.1",
+            host=self.host,
+            # port=int(self.base_url.split(":")[-1]),
+            port=self.port,
             data_path=GSM_DATASET_PATH,
         )
         metrics = run_eval_few_shot_gsm8k(args)
