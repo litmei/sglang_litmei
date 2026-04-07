@@ -70,14 +70,17 @@ class TestStreamInterval(CustomTestCase):
     def test_stream_interval_1_vs_4(self):
         """Test interval=1 produces more chunks than interval=4"""
 
-        proc1 = self._start_server(interval=1)
-        chunks1 = self._run_stream_request()
-        kill_process_tree(proc1.pid)
-        time.sleep(3)
+        try:
+            proc1 = self._start_server(interval=1)
+            chunks1 = self._run_stream_request()
+        finally:
+            kill_process_tree(proc1.pid)
 
-        proc4 = self._start_server(interval=4)
-        chunks4 = self._run_stream_request()
-        kill_process_tree(proc4.pid)
+        try:
+            proc4 = self._start_server(interval=4)
+            chunks4 = self._run_stream_request()
+        finally:
+            kill_process_tree(proc4.pid)
 
         # interval=1 should have significantly more chunks
         self.assertGreater(len(chunks1), len(chunks4))

@@ -29,10 +29,6 @@ class TestSchedulerRecvIntervalConsistency(unittest.TestCase):
         cls.url = urlparse(DEFAULT_URL_FOR_TEST)
         cls.server_process = None
 
-    @classmethod
-    def tearDownClass(cls):
-        kill_process_tree(cls.server_process.pid)
-
     def _run_gsm8k_evaluation(self, scheduler_recv_interval: int):
         self.server_process = popen_launch_server(
             QWEN3_0_6B_WEIGHTS_PATH,

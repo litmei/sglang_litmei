@@ -91,15 +91,18 @@ class TestEnableMixedChunk(CustomTestCase):
     def test_mixed_chunk_performance(self):
         """Compare total time with mixed-chunk disabled/enabled, verify faster processing when enabled"""
         # Disable mixed-chunk
-        proc_off = self._start_server(enable_mixed_chunk=False)
-        time_off = self._benchmark_mixed_load()
-        kill_process_tree(proc_off)
-        time.sleep(5)
+        try:
+            proc_off = self._start_server(enable_mixed_chunk=False)
+            time_off = self._benchmark_mixed_load()
+        finally:
+            kill_process_tree(proc_off)
 
         # Enable mixed-chunk
-        proc_on = self._start_server(enable_mixed_chunk=True)
-        time_on = self._benchmark_mixed_load()
-        kill_process_tree(proc_on)
+        try:
+            proc_on = self._start_server(enable_mixed_chunk=True)
+            time_on = self._benchmark_mixed_load()
+        finally:
+            kill_process_tree(proc_on)
 
         # Assert: faster when enabled
         self.assertLess(time_on, time_off)

@@ -69,29 +69,35 @@ class TestTorchCompileMoe(CustomTestCase):
 
     def test_torch_compile_throughput_improvement(self):
         # Without torch compile
-        proc_off = self._start_server(enable_torch_compile=False)
-        tp_off = self._get_throughput()
-        kill_process_tree(proc_off.pid)
+        try:
+            proc_off = self._start_server(enable_torch_compile=False)
+            tp_off = self._get_throughput()
+        finally:
+            kill_process_tree(proc_off.pid)
 
         # With torch compile
-        proc_on = self._start_server(enable_torch_compile=True)
-        tp_on = self._get_throughput()
-        kill_process_tree(proc_on.pid)
+        try:
+            proc_on = self._start_server(enable_torch_compile=True)
+            tp_on = self._get_throughput()
+        finally:
+            kill_process_tree(proc_on.pid)
 
         self.assertGreater(tp_on, tp_off)
 
     def test_mmlu(self):
-        process = self._start_server(enable_torch_compile=True)
-        args = SimpleNamespace(
-            base_url=self.base_url,
-            model=self.model,
-            eval_name="mmlu",
-            num_examples=64,
-            num_threads=32,
-        )
-        metrics = run_eval(args)
-        self.assertGreaterEqual(metrics["score"], 0.50)
-        kill_process_tree(process.pid)
+        try:
+            process = self._start_server(enable_torch_compile=True)
+            args = SimpleNamespace(
+                base_url=self.base_url,
+                model=self.model,
+                eval_name="mmlu",
+                num_examples=64,
+                num_threads=32,
+            )
+            metrics = run_eval(args)
+            self.assertGreaterEqual(metrics["score"], 0.50)
+        finally:
+            kill_process_tree(process.pid)
 
 
 if __name__ == "__main__":
