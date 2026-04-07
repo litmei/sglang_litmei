@@ -56,7 +56,7 @@ def _send_parallel_request_task1(base_url, image_url):
     assert resp.status_code == 200
 
 
-class TestLimitMMDatePerRequest(CustomTestCase, TestVLMModels):
+class TestLimitMMDatePerRequest(TestVLMModels, CustomTestCase):
     """Testcase: Configuring Multi-Modal to send different multimodal inference requests,
        each containing multiple multimodal input data.
 
@@ -71,7 +71,6 @@ class TestLimitMMDatePerRequest(CustomTestCase, TestVLMModels):
     def setUpClass(cls):
         mp.set_start_method("spawn", force=True)
         cls.base_url = DEFAULT_URL_FOR_TEST
-        cls.base_url += "/v1"
         cls.api_key = "sk-123456"
 
         limit_mm = '{"image":1, "video":1}'
@@ -120,7 +119,7 @@ class TestLimitMMDatePerRequest(CustomTestCase, TestVLMModels):
             },
         ]
         response = requests.post(
-            self.base_url + "/chat/completions",
+            self.base_url + "/v1/chat/completions",
             json={
                 "messages": messages,
                 "temperature": 0,
@@ -151,7 +150,7 @@ class TestLimitMMDatePerRequest(CustomTestCase, TestVLMModels):
             },
         ]
         response2 = requests.post(
-            self.base_url + "/chat/completions",
+            self.base_url + "/v1/chat/completions",
             json={
                 "messages": messages2,
                 "temperature": 0,
@@ -161,14 +160,14 @@ class TestLimitMMDatePerRequest(CustomTestCase, TestVLMModels):
         assert response2.status_code == 400
 
     def _run_parallel_two_requests(self):
-
+        url = self.base_url + "/v1"
         p1 = mp.Process(
             target=_send_parallel_request_task1,
-            args=(self.base_url, IMAGE_MAN_IRONING_URL),
+            args=(url, IMAGE_MAN_IRONING_URL),
         )
         p2 = mp.Process(
             target=_send_parallel_request_task1,
-            args=(self.base_url, IMAGE_MAN_IRONING_URL),
+            args=(url, IMAGE_MAN_IRONING_URL),
         )
 
         p1.start()
