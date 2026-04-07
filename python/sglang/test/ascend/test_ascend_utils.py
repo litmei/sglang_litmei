@@ -13,8 +13,10 @@ Please remember to sort by variable name within each section.
 
 import asyncio
 import copy
+import logging
 import os
 import subprocess
+import time
 from types import SimpleNamespace
 from typing import Awaitable, Callable, NamedTuple, Optional
 
@@ -30,6 +32,8 @@ from sglang.test.test_utils import (
 # Model weights storage directory
 MODEL_WEIGHTS_DIR = "/root/.cache/modelscope/hub/models/"
 HF_MODEL_WEIGHTS_DIR = "/root/.cache/huggingface/hub/"
+IMAGES_DIR = "/root/.cache/modelscope/hub/datasets/images/"
+VIDEO_DIR = "/root/.cache/modelscope/hub/datasets/video/"
 
 # LLM model weights path
 AFM_4_5B_BASE_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "arcee-ai/AFM-4.5B-Base")
@@ -44,8 +48,14 @@ CHATGLM2_6B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "ZhipuAI/chatglm2-6b"
 DBRX_INSTRUCT_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "AI-ModelScope/dbrx-instruct"
 )
+DEEPSEEK_R1_0528_W8A8_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "vllm-ascend/DeepSeek-R1-0528-W8A8"
+)
 DEEPSEEK_V3_2_EXP_W8A8_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "DeepSeek-V3.2-Exp-W8A8"
+)
+DEEPSEEK_R1_0528_W8A8_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "vllm-ascend/DeepSeek-R1-0528-W8A8"
 )
 DEEPSEEK_V3_2_W8A8_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "vllm-ascend/DeepSeek-V3.2-W8A8"
@@ -56,6 +66,7 @@ DEEPSEEK_CODER_V2_LITE_WEIGHTS_PATH = os.path.join(
 DEEPSEEK_CODER_1_3_B_BASE_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "deepseek-ai/deepseek-coder-1.3b-base"
 )
+DOTS_OCR_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "rednote-hilab/dots.ocr")
 ERNIE_4_5_21B_A3B_PT_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "baidu/ERNIE-4.5-21B-A3B-PT"
 )
@@ -64,6 +75,9 @@ EXAONE_3_5_7_8B_INSTRUCT_WEIGHTS_PATH = os.path.join(
 )
 GEMMA_3_4B_IT_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "google/gemma-3-4b-it")
 GLM_4_9B_CHAT_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "ZhipuAI/glm-4-9b-chat")
+GPT_OSS_120B_BF16_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "eigen-ai-labs/gpt-oss-120b-bf16"
+)
 GRANITE_3_0_3B_A800M_INSTRUCT_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "ibm-granite/granite-3.0-3b-a800m-instruct"
 )
@@ -71,6 +85,9 @@ GRANITE_3_1_8B_INSTRUCT_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "ibm-granite/granite-3.1-8b-instruct"
 )
 GROK_2_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "huihui-ai/grok-2")
+GROK_2_WEIGHTS_TOKENIZER_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "huihui-ai/grok-2/tokenizer.tok.json"
+)
 INTERNLM2_7B_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "Shanghai_AI_Laboratory/internlm2-7b"
 )
@@ -98,6 +115,9 @@ MINICPM3_4B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "OpenBMB/MiniCPM3-4B"
 MISTRAL_7B_INSTRUCT_V0_2_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "mistralai/Mistral-7B-Instruct-v0.2"
 )
+OLMO_2_1124_7B_INSTRUCT_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "allenai/OLMo-2-1124-7B-Instruct"
+)
 OLMOE_1B_7B_0924_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "allenai/OLMoE-1B-7B-0924"
 )
@@ -111,6 +131,7 @@ QWEN2_5_7B_INSTRUCT_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "Qwen/Qwen2.5-7B-Instruct"
 )
 QWEN3_0_6B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "Qwen/Qwen3-0.6B")
+QWEN3_5_27B_MODEL_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "Qwen/Qwen3.5-27B")
 QWEN3_1_7B_GPTQ_INT8_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "Qwen/Qwen3-1.7B-GPTQ-Int8"
 )
@@ -144,9 +165,14 @@ QWEN3_32B_W8A8_MINDIE_WEIGHTS_PATH = os.path.join(
 )
 QWQ_32B_W8A8_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "vllm-ascend/QWQ-32B-W8A8")
 SMOLLM_1_7B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "HuggingFaceTB/SmolLM-1.7B")
+SOLAR_10_7B_INSTRUCT_V1_0_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "upstage/SOLAR-10.7B-Instruct-v1.0"
+)
 STABLELM_2_1_6B_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "stabilityai/stablelm-2-1_6b"
 )
+STARCODER2_7B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "bigcode/starcoder2-7b")
+TRINITY_MINI_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "arcee-ai/Trinity-Mini")
 XVERSE_MOE_A36B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "xverse/XVERSE-MoE-A36B")
 MINIMAX_M2_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "cyankiwi/MiniMax-M2-BF16")
 
@@ -203,11 +229,19 @@ QWEN3_30B_A3B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "Qwen/Qwen3-30B-A3B
 QWEN3_30B_A3B_W8A8_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "Qwen/Qwen3-30B-A3B-w8a8"
 )
+DEEPSEEK_V2_LITE_W8A8_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "vllm-ascend/DeepSeek-V2-Lite-W8A8"
+)
 
 DEEPSEEK_R1_DISTILL_QWEN_7B_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 )
-
+DEEPSEEK_R1_0528_W4A8_PER_CHANNEL_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "DeepSeek-R1-0528-w4a8-per-channel"
+)
+DEEPSEEK_R1_0528_W8A8_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "vllm-ascend/DeepSeek-R1-0528-W8A8"
+)
 QWEN3_30B_MODELSLIM_INT4_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "Eco-Tech/Qwen3-30B-A3B-w4a4-LAOS"
 )
@@ -252,10 +286,19 @@ SKYWORK_REWARD_LLAMA_3_1_8B_V0_2_WEIGHTS_PATH = os.path.join(
     HF_MODEL_WEIGHTS_DIR,
     "models--Skywork--Skywork-Reward-Llama-3.1-8B-v0.2/snapshots/d4117fbfd81b72f41b96341238baa1e3e90a4ce1",
 )
+
+# Images path
+IMAGES_023_PATH = os.path.join(IMAGES_DIR, "023.jpg")
+IMAGES_MAN_PATH = os.path.join(IMAGES_DIR, "man.png")
+IMAGES_LOGO_PATH = os.path.join(IMAGES_DIR, "logo.png")
+VIDEO_JOBS_PATH = os.path.join(VIDEO_DIR, "jobs.mp4")
 # fmt: on
 
 # Other
 DEEPSEEK_CODER_JSON_PATH = "/__w/sglang/sglang/test/registered/ascend/basic_function/parameter/deepseek_coder.json"
+CONFIG_YAML_PATH = (
+    "/__w/sglang/sglang/test/registered/ascend/basic_function/config/config.yaml"
+)
 
 
 class ModelTestConfig(NamedTuple):
@@ -549,3 +592,66 @@ def run_bench_serving(
 
     assert res["completed"] == num_prompts
     return res
+
+
+# hook factory
+def create_attention_monitor_hook_factory(config):
+    """
+    Factory function to create a forward hook for monitoring self-attention layer states.
+    This hook records input/output statistics during model forward propagation.
+
+    Args:
+        config (dict): Configuration dictionary containing hook parameters
+            layer_index (int): Index of the target attention layer to monitor
+
+    Returns:
+        function: Forward hook function to be registered on the target module
+    """
+    # Get target layer index from config, default to 0 if not specified
+    layer_index = config.get("layer_index", 0)
+
+    # Initialize logging configuration if no handlers are set
+    if not logging.root.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+
+    def attention_monitor_hook(module, inputs, output):
+        """
+        Forward hook function that monitors and logs the internal states of a self-attention layer.
+        Executed automatically during the forward pass of the module it is registered to.
+
+        Args:
+            module (torch.nn.Module): The module this hook is attached to
+            inputs (tuple): Input tensors passed to the module's forward method
+            output (torch.Tensor): Output tensor returned by the module's forward method
+
+        Returns:
+            torch.Tensor: Unmodified output tensor to preserve model computation flow
+        """
+        # Record current timestamp for time-series tracking
+        timestamp = time.time()
+
+        # Extract hidden states from inputs (second input tensor of attention layer)
+        hidden_states = inputs[1] if inputs and len(inputs) > 1 else None
+
+        # Construct monitoring record with key statistics
+        monitor_record = {
+            "timestamp": timestamp,
+            "layer_index": layer_index,
+            "module_type": type(module).__name__,
+            # Compute sum of hidden states across last dim, take first 5 elements for logging
+            "inputs": hidden_states.sum(-1)[:5] if hidden_states is not None else None,
+            # Compute sum of output across last dim, take first 5 elements for logging
+            "outputs": output.sum(-1)[:5],
+        }
+
+        # Log the monitoring record
+        logging.info(f"hook effect: {monitor_record}")
+
+        # Return the original output to maintain normal model forward propagation
+        return output
+
+    return attention_monitor_hook

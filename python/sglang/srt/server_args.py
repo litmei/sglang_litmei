@@ -3132,11 +3132,6 @@ class ServerArgs:
                         "speculative_ngram_external_sam_budget must be less than or equal to "
                         f"speculative_num_draft_tokens - 1 ({self.speculative_num_draft_tokens - 1})."
                     )
-            elif self.speculative_ngram_external_sam_budget != 0:
-                raise ValueError(
-                    "--speculative-ngram-external-sam-budget requires "
-                    "--speculative-ngram-external-corpus-path."
-                )
             logger.warning(
                 "The overlap scheduler and mixed chunked prefill are disabled because of "
                 "using ngram speculative decoding."
@@ -3326,6 +3321,8 @@ class ServerArgs:
             "Qwen3VLForConditionalGeneration",
             "Qwen2_5_VLForConditionalGeneration",
             "Qwen3VLMoeForConditionalGeneration",
+            "Qwen3_5ForConditionalGeneration",
+            "Qwen3_5MoeForConditionalGeneration",
             "Qwen3OmniMoeForConditionalGeneration",
             "Qwen2AudioForConditionalGeneration",
             "Qwen2_5OmniForConditionalGeneration",
@@ -4919,7 +4916,7 @@ class ServerArgs:
             "--speculative-ngram-external-corpus-path",
             type=str,
             default=ServerArgs.speculative_ngram_external_corpus_path,
-            help="Optional path to an external corpus used to build a read-only SAM for ngram speculative decoding.",
+            help="Path to an external JSONL corpus to pre-load into SAM at startup. Additional corpora can be added at runtime via POST /add_external_corpus.",
         )
         parser.add_argument(
             "--speculative-ngram-external-sam-budget",
