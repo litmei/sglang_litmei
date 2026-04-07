@@ -7,7 +7,7 @@ import requests
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
-from sglang.test.run_eval import run_eval
+from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
@@ -77,20 +77,20 @@ class TestHybridAttnBackendBase(CustomTestCase):
         requests.get(self.base_url + "/flush_cache")
 
         args = SimpleNamespace(
-            base_url=self.base_url,
-            model=self.model,
-            eval_name="gsm8k",
-            api="completion",
-            max_tokens=512,
-            num_examples=100,
-            num_threads=128,
+            num_shots=4,
+            num_questions=100,
+            max_new_tokens=512,
+            parallel=128,
+            host="http://127.0.0.1",
+            port=int(self.base_url.split(":")[-1]),
+            data_path=GSM_DATASET_PATH,
         )
-        metrics = run_eval(args)
+        metrics = run_eval_few_shot_gsm8k(args)
 
         # Use the appropriate metric key based on the test class
-        # metric_key = "accuracy"
-        # self.assertGreater(metrics[metric_key], self.accuracy_threshold)
-        self.assertGreater(metrics["score"], self.accuracy_threshold)
+        metric_key = "accuracy"
+        self.assertGreater(metrics[metric_key], self.accuracy_threshold)
+        # self.assertGreater(metrics["score"], self.accuracy_threshold)
         # self.assertGreater(metrics["score"], 0)
 
         response = requests.get(f"{self.base_url}/get_server_info")
