@@ -34,8 +34,6 @@ DEFAULT_SERVER_ARGS = [
     0.9,
     "--tp-size",
     2,
-    "--base-gpu-id",
-    2,
 ]
 
 
@@ -46,8 +44,7 @@ class TestHybridAttnBackendBase(CustomTestCase):
     [Test Target] --prefill-attention-backend, --decode-attention-backend
     """
 
-    # model = LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH
-    model = "/home/weights/Llama-3.2-1B-Instruct"
+    model = LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH
     base_url = DEFAULT_URL_FOR_TEST
     accuracy_threshold = 0.36  # derived tests need to override this
 
@@ -90,17 +87,8 @@ class TestHybridAttnBackendBase(CustomTestCase):
             num_shots=8,
         )
         metrics = run_eval(args)
-        # print(f"Eval accuracy of GSM8K: {metrics=}")
-        #
-        # self.assertGreater(metrics["score"], 0.93)
-        # # metrics = run_eval_few_shot_gsm8k(args)
-        # metrics = run_eval(args)
 
-        # Use the appropriate metric key based on the test class
-        # metric_key = "accuracy"
-        # self.assertGreater(metrics[metric_key], self.accuracy_threshold)
         self.assertGreater(metrics["score"], self.accuracy_threshold)
-        # self.assertGreater(metrics["score"], 0)
 
         response = requests.get(f"{self.base_url}/get_server_info")
         self.assertEqual(

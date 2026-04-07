@@ -215,4 +215,3 @@ class TestVLMModels(CustomTestCase):
                 print(f"Error reading {tag.lower()} file: {e}")
 
         return "\n".join(output_lines)
-

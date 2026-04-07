@@ -14,8 +14,7 @@ class TestAscendMMAttentionBackend(TestVLMModels):
     [Test Target] --mm-attention-backend
     """
 
-    # model = GEMMA_3_4B_IT_WEIGHTS_PATH
-    model = "/home/weights/gemma3-4b-it"
+    model = GEMMA_3_4B_IT_WEIGHTS_PATH
     mmmu_accuracy = 0.2
     other_args = [
         "--trust-remote-code",
@@ -23,7 +22,7 @@ class TestAscendMMAttentionBackend(TestVLMModels):
         "32",
         "--enable-multimodal",
         "--mem-fraction-static",
-        0.8,
+        0.35,
         "--log-level",
         "info",
         "--attention-backend",
@@ -33,8 +32,6 @@ class TestAscendMMAttentionBackend(TestVLMModels):
         4,
         "--mm-attention-backend",
         "ascend_attn",
-        "--base-gpu-id",
-        8,
     ]
 
     def test_mmmu(self):
