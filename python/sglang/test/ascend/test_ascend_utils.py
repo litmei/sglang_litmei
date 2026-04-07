@@ -32,6 +32,7 @@ from sglang.test.test_utils import (
 # Model weights storage directory
 MODEL_WEIGHTS_DIR = "/root/.cache/modelscope/hub/models/"
 HF_MODEL_WEIGHTS_DIR = "/root/.cache/huggingface/hub/"
+IMAGES_DIR = "/root/.cache/modelscope/hub/datasets/images/"
 
 # LLM model weights path
 AFM_4_5B_BASE_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "arcee-ai/AFM-4.5B-Base")
@@ -284,6 +285,10 @@ SKYWORK_REWARD_LLAMA_3_1_8B_V0_2_WEIGHTS_PATH = os.path.join(
     HF_MODEL_WEIGHTS_DIR,
     "models--Skywork--Skywork-Reward-Llama-3.1-8B-v0.2/snapshots/d4117fbfd81b72f41b96341238baa1e3e90a4ce1",
 )
+
+# Images path
+IMAGES_023_PATH = os.path.join(IMAGES_DIR, "023.jpg")
+
 # fmt: on
 
 # Other
@@ -357,33 +362,33 @@ def run_command(cmd, shell=True):
 
 
 def get_benchmark_args(
-    base_url="",
-    backend="sglang",
-    dataset_name="",
-    dataset_path="",
-    tokenizer="",
-    num_prompts=500,
-    sharegpt_output_len=None,
-    random_input_len=4096,
-    random_output_len=2048,
-    sharegpt_context_len=None,
-    request_rate=float("inf"),
-    disable_stream=False,
-    disable_ignore_eos=False,
-    seed: int = 0,
-    device="auto",
-    pd_separated: bool = False,
-    lora_name=None,
-    lora_request_distribution="uniform",
-    lora_zipf_alpha=1.5,
-    gsp_num_groups=4,
-    gsp_prompts_per_group=4,
-    gsp_system_prompt_len=128,
-    gsp_question_len=32,
-    gsp_output_len=32,
-    gsp_num_turns=1,
-    header=None,
-    max_concurrency=None,
+        base_url="",
+        backend="sglang",
+        dataset_name="",
+        dataset_path="",
+        tokenizer="",
+        num_prompts=500,
+        sharegpt_output_len=None,
+        random_input_len=4096,
+        random_output_len=2048,
+        sharegpt_context_len=None,
+        request_rate=float("inf"),
+        disable_stream=False,
+        disable_ignore_eos=False,
+        seed: int = 0,
+        device="auto",
+        pd_separated: bool = False,
+        lora_name=None,
+        lora_request_distribution="uniform",
+        lora_zipf_alpha=1.5,
+        gsp_num_groups=4,
+        gsp_prompts_per_group=4,
+        gsp_system_prompt_len=128,
+        gsp_question_len=32,
+        gsp_output_len=32,
+        gsp_num_turns=1,
+        header=None,
+        max_concurrency=None,
 ):
     """Constructing the parameter objects needed for inference tests
 
@@ -464,29 +469,29 @@ def get_benchmark_args(
 
 
 def run_bench_serving(
-    model,
-    num_prompts,
-    request_rate,
-    other_server_args,
-    dataset_name="random",
-    dataset_path="",
-    tokenizer=None,
-    random_input_len=4096,
-    random_output_len=2048,
-    sharegpt_context_len=None,
-    disable_stream=False,
-    disable_ignore_eos=False,
-    need_warmup=False,
-    seed: int = 0,
-    device="auto",
-    gsp_num_groups=None,
-    gsp_prompts_per_group=None,
-    gsp_system_prompt_len=None,
-    gsp_question_len=None,
-    gsp_output_len=None,
-    max_concurrency=None,
-    background_task: Optional[Callable[[str, asyncio.Event], Awaitable[None]]] = None,
-    lora_name: Optional[str] = None,
+        model,
+        num_prompts,
+        request_rate,
+        other_server_args,
+        dataset_name="random",
+        dataset_path="",
+        tokenizer=None,
+        random_input_len=4096,
+        random_output_len=2048,
+        sharegpt_context_len=None,
+        disable_stream=False,
+        disable_ignore_eos=False,
+        need_warmup=False,
+        seed: int = 0,
+        device="auto",
+        gsp_num_groups=None,
+        gsp_prompts_per_group=None,
+        gsp_system_prompt_len=None,
+        gsp_question_len=None,
+        gsp_output_len=None,
+        max_concurrency=None,
+        background_task: Optional[Callable[[str, asyncio.Event], Awaitable[None]]] = None,
+        lora_name: Optional[str] = None,
 ):
     """Start the service and obtain the inference results.
 
