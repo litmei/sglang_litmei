@@ -258,7 +258,9 @@ SKYWORK_REWARD_LLAMA_3_1_8B_V0_2_WEIGHTS_PATH = os.path.join(
 
 # Other
 DEEPSEEK_CODER_JSON_PATH = "/__w/sglang/sglang/test/registered/ascend/basic_function/parameter/deepseek_coder.json"
-CONFIG_YAML_PATH = "/__w/sglang/sglang/test/registered/ascend/basic_function/config/config.yaml"
+CONFIG_YAML_PATH = (
+    "/__w/sglang/sglang/test/registered/ascend/basic_function/config/config.yaml"
+)
 
 
 class ModelTestConfig(NamedTuple):
