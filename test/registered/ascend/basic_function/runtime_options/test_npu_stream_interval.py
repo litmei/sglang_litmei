@@ -28,6 +28,15 @@ class TestStreamInterval(CustomTestCase):
     prompt = "The capital of France is"
     total_tokens = 32
 
+    @classmethod
+    def setUpClass(cls):
+        cls.process = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.process:
+            kill_process_tree(cls.process.pid)
+
     def _start_server(self, interval: int):
         other_args = [
             "--attention-backend",
@@ -68,18 +77,15 @@ class TestStreamInterval(CustomTestCase):
 
     def test_stream_interval_1_vs_4(self):
         """Test interval=1 produces more chunks than interval=4"""
+        # Start server with interval 1
+        self.process = self._start_server(interval=1)
+        chunks1 = self._run_stream_request()
+        kill_process_tree(self.process.pid)
 
-        try:
-            proc1 = self._start_server(interval=1)
-            chunks1 = self._run_stream_request()
-        finally:
-            kill_process_tree(proc1.pid)
-
-        try:
-            proc4 = self._start_server(interval=4)
-            chunks4 = self._run_stream_request()
-        finally:
-            kill_process_tree(proc4.pid)
+        # Start server with interval 4
+        self.process = self._start_server(interval=5)
+        chunks4 = self._run_stream_request()
+        kill_process_tree(self.process.pid)
 
         # interval=1 should have significantly more chunks
         self.assertGreater(len(chunks1), len(chunks4))

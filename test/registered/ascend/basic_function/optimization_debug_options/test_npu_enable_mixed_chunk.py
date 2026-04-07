@@ -31,6 +31,15 @@ class TestEnableMixedChunk(CustomTestCase):
     LONG_PROMPT = "Hello " * 3000
     SHORT_PROMPT = "The capital of France is"
 
+    @classmethod
+    def setUpClass(cls):
+        cls.process = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.process:
+            kill_process_tree(cls.process.pid)
+
     def _start_server(self, enable_mixed_chunk: bool):
         other_args = [
             "--attention-backend",
@@ -91,18 +100,14 @@ class TestEnableMixedChunk(CustomTestCase):
     def test_mixed_chunk_performance(self):
         """Compare total time with mixed-chunk disabled/enabled, verify faster processing when enabled"""
         # Disable mixed-chunk
-        try:
-            proc_off = self._start_server(enable_mixed_chunk=False)
-            time_off = self._benchmark_mixed_load()
-        finally:
-            kill_process_tree(proc_off)
+        self.process = self._start_server(enable_mixed_chunk=False)
+        time_off = self._benchmark_mixed_load()
+        kill_process_tree(self.process.pid)
 
         # Enable mixed-chunk
-        try:
-            proc_on = self._start_server(enable_mixed_chunk=True)
-            time_on = self._benchmark_mixed_load()
-        finally:
-            kill_process_tree(proc_on)
+        self.process = self._start_server(enable_mixed_chunk=True)
+        time_on = self._benchmark_mixed_load()
+        kill_process_tree(self.process.pid)
 
         # Assert: faster when enabled
         self.assertLess(time_on, time_off)

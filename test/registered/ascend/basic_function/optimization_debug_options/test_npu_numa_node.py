@@ -22,10 +22,40 @@ class BaseNumaBindingTest(CustomTestCase):
     """
 
     TP_SIZE = 2
-    CONFIG_NUMA_LIST = None
+    # When binding to different NUMA nodes, the CPU ranges are different
+    CONFIG_NUMA_LIST = ["0", "1"]
+
+    @classmethod
+    def _is_numactl_installed(cls):
+        try:
+            subprocess.run(
+                ["numactl", "--hardware"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
 
     @classmethod
     def setUpClass(cls):
+        if not cls._is_numactl_installed():
+            print("Installing numactl...")
+            subprocess.run(
+                ["apt", "update", "-y"],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            subprocess.run(
+                ["apt", "install", "-y", "numactl"],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print("numactl installed successfully.")
+
         cls.model = QWEN3_0_6B_WEIGHTS_PATH
         cls.other_args = [
             "--trust-remote-code",
@@ -70,8 +100,7 @@ class BaseNumaBindingTest(CustomTestCase):
         cpu0 = self._get_taskset_cpu_range(tp_pids["TP0"])
         cpu1 = self._get_taskset_cpu_range(tp_pids["TP1"])
 
-        # When binding to the same NUMA node, the CPU ranges should be the same;
-        # when binding to different NUMA nodes, the CPU ranges should be different.
+        # When binding to the same NUMA node, the CPU ranges should be the same; when binding to different NUMA nodes, the CPU ranges should be different.
         if self.CONFIG_NUMA_LIST[0] == self.CONFIG_NUMA_LIST[1]:
             self.assertEqual(
                 cpu0, cpu1, "The same NUMA node should bind to the same CPU range"
@@ -80,11 +109,6 @@ class BaseNumaBindingTest(CustomTestCase):
             self.assertNotEqual(
                 cpu0, cpu1, "Different NUMA nodes should bind to different CPU ranges"
             )
-
-
-class TestNumaDifferent(BaseNumaBindingTest):
-    # When binding to different NUMA nodes, the CPU ranges are different
-    CONFIG_NUMA_LIST = ["0", "1"]
 
 
 class TestNumaSame(BaseNumaBindingTest):

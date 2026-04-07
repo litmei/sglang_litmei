@@ -80,7 +80,7 @@ class TestDisableCudaGraphPadding(CustomTestCase):
             },
         )
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("text", resp.json())
+        self.assertIn("Paris", resp.text())
 
 
 if __name__ == "__main__":

@@ -28,6 +28,15 @@ class TestTorchCompileMoe(CustomTestCase):
     model = QWEN3_0_6B_WEIGHTS_PATH
     base_url = DEFAULT_URL_FOR_TEST
 
+    @classmethod
+    def setUpClass(cls):
+        cls.process = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.process:
+            kill_process_tree(cls.process.pid)
+
     def _start_server(self, enable_torch_compile: bool):
         other_args = [
             "--attention-backend",
@@ -69,35 +78,29 @@ class TestTorchCompileMoe(CustomTestCase):
 
     def test_torch_compile_throughput_improvement(self):
         # Without torch compile
-        try:
-            proc_off = self._start_server(enable_torch_compile=False)
-            tp_off = self._get_throughput()
-        finally:
-            kill_process_tree(proc_off.pid)
+        self.process = self._start_server(enable_torch_compile=False)
+        tp_off = self._get_throughput()
+        kill_process_tree(self.process.pid)
 
         # With torch compile
-        try:
-            proc_on = self._start_server(enable_torch_compile=True)
-            tp_on = self._get_throughput()
-        finally:
-            kill_process_tree(proc_on.pid)
+        self.process = self._start_server(enable_torch_compile=True)
+        tp_on = self._get_throughput()
+        kill_process_tree(self.process.pid)
 
         self.assertGreater(tp_on, tp_off)
 
     def test_mmlu(self):
-        try:
-            process = self._start_server(enable_torch_compile=True)
-            args = SimpleNamespace(
-                base_url=self.base_url,
-                model=self.model,
-                eval_name="mmlu",
-                num_examples=64,
-                num_threads=32,
-            )
-            metrics = run_eval(args)
-            self.assertGreaterEqual(metrics["score"], 0.50)
-        finally:
-            kill_process_tree(process.pid)
+        self.process = self._start_server(enable_torch_compile=True)
+        args = SimpleNamespace(
+            base_url=self.base_url,
+            model=self.model,
+            eval_name="mmlu",
+            num_examples=64,
+            num_threads=32,
+        )
+        metrics = run_eval(args)
+        self.assertGreaterEqual(metrics["score"], 0.50)
+        kill_process_tree(self.process.pid)
 
 
 if __name__ == "__main__":
