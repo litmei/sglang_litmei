@@ -22,7 +22,6 @@ import time
 from types import SimpleNamespace
 from typing import Awaitable, Callable, List, NamedTuple, Optional
 
-
 from sglang.bench_serving import run_benchmark
 from sglang.srt.utils import kill_process_tree
 from sglang.test.run_eval import run_eval
