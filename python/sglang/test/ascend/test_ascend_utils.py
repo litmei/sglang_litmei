@@ -15,19 +15,25 @@ import asyncio
 import copy
 import logging
 import os
+import random
 import subprocess
+import threading
 import time
 from types import SimpleNamespace
-from typing import Awaitable, Callable, NamedTuple, Optional
+from typing import Awaitable, Callable, List, NamedTuple, Optional
 
 from sglang.bench_serving import run_benchmark
 from sglang.srt.utils import kill_process_tree
+from sglang.test.run_eval import run_eval
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     auto_config_device,
     popen_launch_server,
 )
+
+STDERR_FILENAME = "/tmp/stderr.txt"
+STDOUT_FILENAME = "/tmp/stdout.txt"
 
 # Model weights storage directory
 MODEL_WEIGHTS_DIR = "/root/.cache/modelscope/hub/models/"
@@ -175,6 +181,9 @@ STARCODER2_7B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "bigcode/starcoder2
 TRINITY_MINI_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "arcee-ai/Trinity-Mini")
 XVERSE_MOE_A36B_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "xverse/XVERSE-MoE-A36B")
 MINIMAX_M2_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "cyankiwi/MiniMax-M2-BF16")
+EAGLE3_LLAMA3_1_INSTRUCT_8B_WEIGHTS_PATH = os.path.join(
+    MODEL_WEIGHTS_DIR, "sglang-EAGLE3-LLaMA3.1-Instruct-8B"
+)
 
 # VLM model weights path
 DEEPSEEK_VL2_WEIGHTS_PATH = os.path.join(MODEL_WEIGHTS_DIR, "deepseek-ai/deepseek-vl2")
@@ -392,40 +401,6 @@ def get_benchmark_args(
     header=None,
     max_concurrency=None,
 ):
-    """Constructing the parameter objects needed for inference tests
-
-    Parameters:
-        base_url: url
-        backend: Inference backend
-        dataset_name: Data set name
-        dataset_path: Dataset path
-        tokenizer: tokenizer
-        num_prompts: Total number of test requests
-        sharegpt_output_len: Output the number of tokens
-        random_input_len: The length of the randomly generated input prompt
-        random_output_len: The length of the randomly generated output prompt
-        sharegpt_context_len: Sharegpt dataset context length
-        request_rate: Request rate
-        disable_stream: Disable streaming output
-        disable_ignore_eos: Should eos_token be ignored?
-        seed: random seed
-        device: Device type
-        pd_separated: Enable PD separation
-        lora_name: LoRA fine-tuning model path
-        lora_request_distribution: LoRA request distribution strategy
-        lora_zipf_alpha: Control request distribution skewness
-        gsp_num_groups: Grouped Sequence Parallelism
-        gsp_prompts_per_group: Number of parallel prompts within each group
-        gsp_system_prompt_len: GSP system prompts length
-        gsp_question_len: GSP question length
-        gsp_output_len: GSP output length
-        gsp_num_turns: GSP Dialogue Rounds
-        header: HTTP request header
-        max_concurrency: Maximum number of concurrent requests
-    Returns:
-        The return parameter is the same as the input.
-    """
-
     return SimpleNamespace(
         backend=backend,
         base_url=base_url,
@@ -467,6 +442,7 @@ def get_benchmark_args(
         gsp_num_turns=gsp_num_turns,
         header=header,
         max_concurrency=max_concurrency,
+        ready_check_timeout_sec=0,
     )
 
 
@@ -486,46 +462,9 @@ def run_bench_serving(
     need_warmup=False,
     seed: int = 0,
     device="auto",
-    gsp_num_groups=None,
-    gsp_prompts_per_group=None,
-    gsp_system_prompt_len=None,
-    gsp_question_len=None,
-    gsp_output_len=None,
-    max_concurrency=None,
     background_task: Optional[Callable[[str, asyncio.Event], Awaitable[None]]] = None,
     lora_name: Optional[str] = None,
 ):
-    """Start the service and obtain the inference results.
-
-    Parameters:
-        model: Model name
-        num_prompts: Total number of test requests
-        request_rate: Request rate
-        other_server_args: Additional configuration when starting the service
-        dataset_name: Data set name
-        dataset_path: Dataset path
-        tokenizer: tokenizer
-        random_input_len: The length of the randomly generated input prompt
-        random_output_len: The length of the randomly generated output prompt
-        sharegpt_context_len: Sharegpt dataset context length
-        disable_stream: Disable streaming output
-        disable_ignore_eos: Should eos_token be ignored?
-        need_warmup: Preheating required
-        seed: random seed
-        device: Device type
-        gsp_num_groups: Grouped Sequence Parallelism
-        gsp_prompts_per_group: Number of parallel prompts within each group
-        gsp_system_prompt_len: GSP system prompts length
-        gsp_question_len: GSP question length
-        gsp_output_len: GSP output length
-        max_concurrency: Maximum number of concurrent requests
-        background_task: Background tasks
-        lora_name: LoRA fine-tuning model path
-    Returns:
-        res: Number of requests successfully completed
-
-    """
-
     if device == "auto":
         device = auto_config_device()
     # Launch the server
@@ -553,12 +492,6 @@ def run_bench_serving(
         seed=seed,
         device=device,
         lora_name=lora_name,
-        gsp_num_groups=gsp_num_groups,
-        gsp_prompts_per_group=gsp_prompts_per_group,
-        gsp_system_prompt_len=gsp_system_prompt_len,
-        gsp_question_len=gsp_question_len,
-        gsp_output_len=gsp_output_len,
-        max_concurrency=max_concurrency,
     )
 
     async def _run():
@@ -655,3 +588,131 @@ def create_attention_monitor_hook_factory(config):
         return output
 
     return attention_monitor_hook
+
+
+def read_output(output_lines: List[str], filename: str = STDERR_FILENAME):
+    """Print the output in real time with another thread."""
+    while not os.path.exists(filename):
+        time.sleep(0.01)
+
+    pt = 0
+    while pt >= 0:
+        if pt > 0 and not os.path.exists(filename):
+            break
+        try:
+            lines = open(filename).readlines()
+        except FileNotFoundError:
+            print(f"{pt=}, {os.path.exists(filename)=}")
+            raise
+        for line in lines[pt:]:
+            print(line, end="", flush=True)
+            output_lines.append(line)
+            pt += 1
+        time.sleep(0.1)
+
+
+def run_and_check_memory_leak(
+    workload_func,
+    disable_radix_cache,
+    enable_mixed_chunk,
+    disable_overlap,
+    chunked_prefill_size,
+    assert_has_abort,
+    api_key: Optional[str] = None,
+):
+    other_args = [
+        "--chunked-prefill-size",
+        str(chunked_prefill_size),
+        "--log-level",
+        "debug",
+    ]
+    if disable_radix_cache:
+        other_args += ["--disable-radix-cache"]
+    if enable_mixed_chunk:
+        other_args += ["--enable-mixed-chunk"]
+    if disable_overlap:
+        other_args += ["--disable-overlap-schedule"]
+
+    model = LLAMA_3_1_8B_INSTRUCT_WEIGHTS_PATH
+    port = random.randint(4000, 5000)
+    base_url = f"http://127.0.0.1:{port}"
+
+    # Create files and launch the server
+    stdout = open(STDOUT_FILENAME, "w")
+    stderr = open(STDERR_FILENAME, "w")
+    process = popen_launch_server(
+        model,
+        base_url,
+        timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+        other_args=other_args,
+        return_stdout_stderr=(stdout, stderr),
+        api_key=api_key,
+    )
+
+    # Launch a thread to stream the output
+    output_lines = []
+    t = threading.Thread(target=read_output, args=(output_lines,))
+    t.start()
+
+    # Run the workload
+    workload_func(base_url, model)
+
+    # Clean up everything
+    kill_process_tree(process.pid)
+    stdout.close()
+    stderr.close()
+    if os.path.exists(STDOUT_FILENAME):
+        os.remove(STDOUT_FILENAME)
+    if os.path.exists(STDERR_FILENAME):
+        os.remove(STDERR_FILENAME)
+    kill_process_tree(process.pid)
+    t.join()
+
+    # Assert success
+    has_new_server = False
+    has_leak = False
+    has_abort = False
+    for line in output_lines:
+        if "Uvicorn running" in line:
+            has_new_server = True
+        if "leak" in line:
+            has_leak = True
+        if "Abort" in line:
+            has_abort = True
+
+    assert has_new_server
+    assert not has_leak
+    if assert_has_abort:
+        assert has_abort
+
+
+def run_mmlu_test(
+    disable_radix_cache=False,
+    enable_mixed_chunk=False,
+    disable_overlap=False,
+    chunked_prefill_size=32,
+):
+    def workload_func(base_url, model):
+        # Run the eval
+        args = SimpleNamespace(
+            base_url=base_url,
+            model=model,
+            eval_name="mmlu",
+            num_examples=128,
+            num_threads=128,
+        )
+
+        try:
+            metrics = run_eval(args)
+            assert metrics["score"] >= 0.65, f"{metrics=}"
+        finally:
+            pass
+
+    run_and_check_memory_leak(
+        workload_func,
+        disable_radix_cache,
+        enable_mixed_chunk,
+        disable_overlap,
+        chunked_prefill_size,
+        assert_has_abort=False,
+    )
