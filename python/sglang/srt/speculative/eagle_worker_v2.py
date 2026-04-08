@@ -385,7 +385,6 @@ class EagleDraftWorker(BaseDraftWorker):
 
     @draft_wrapper
     def prepare_verify_fully_async_decoding(self, model_worker_batch):
-        # TODO: draft_input.prepare_for_v2_draft will update model_worker_batch.out_cache_loc, but here is not.
         draft_input = model_worker_batch.spec_info
         parent_list, top_scores_index, draft_tokens = self.draft_forward_for_prepare(
             draft_input
@@ -429,7 +428,7 @@ class EagleDraftWorker(BaseDraftWorker):
         self,
         model_worker_batch: ModelWorkerBatch,
         batch_result: GenerationBatchResult,
-        draft_input,
+        draft_input: EagleDraftInput,
     ):
         if self.speculative_num_steps <= 1:
             return
@@ -489,7 +488,7 @@ class EagleDraftWorker(BaseDraftWorker):
         ) = (
             torch.cat(ret_topk_p_list, dim=1).clone(),
             torch.cat(ret_topk_index_list, dim=1).clone(),
-            None,  # if use spec overlap reflow, we do not need to save hidden_states for target mode
+            None,  # When enable `spec_v2_zero_bubble` feature, we don't need to save hidden_states for next step
         )
 
     def draft_forward_for_prepare(self, spec_info):
@@ -637,10 +636,6 @@ class EagleDraftWorker(BaseDraftWorker):
         return parent_list, top_scores_index, draft_tokens
 
     def draft_forward_zero_bubble(self, forward_batch: ForwardBatch):
-        assert (
-            self.speculative_num_steps > 1
-        ), "draft_forward_v2 only can work when spec_num_steps > 1"
-
         # Parse args
         spec_info: EagleDraftInput = forward_batch.spec_info
         out_cache_loc = forward_batch.out_cache_loc
@@ -844,6 +839,7 @@ class EagleDraftWorker(BaseDraftWorker):
             ret_hidden_states,
         )
 
+        # If enable spec_v2_zero_bubble, draft will be handled after draft_extend, not before verify
         if self.enable_spec_v2_zero_bubble:
             self.draft_zero_bubble(batch, batch_result, draft_input)
 
