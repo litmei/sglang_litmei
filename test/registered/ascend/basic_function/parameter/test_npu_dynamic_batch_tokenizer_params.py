@@ -23,9 +23,7 @@ from sglang.test.test_utils import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ------------------------------------------------------------
-# Constants
-# ------------------------------------------------------------
+
 NUM_REQUESTS = 20
 NUM_CONCURRENT = 8
 
@@ -47,10 +45,7 @@ SAMPLING_CONFIGS = [
     {"temperature": 0.0, "top_p": 0.9, "max_new_tokens": 32},
 ]
 
-# ------------------------------------------------------------
-# Single‑card parameter tests (Llama-3.2-1B)
-# ------------------------------------------------------------
-register_npu_ci(est_time=300, suite="nightly-1-npu-a3", nightly=True)
+register_npu_ci(est_time=400, suite="nightly-4-npu-a3", nightly=True)
 
 class TestBatchSize64Timeout0p001(CustomTestCase):
     """batch_size=64, timeout=0.001: large capacity with minimal wait."""
@@ -231,10 +226,8 @@ class TestDynamicBatchTokenizerCombo(CustomTestCase):
             self.assertIn("Paris", r["text"])
 
 
-# ------------------------------------------------------------
-# Four‑card GSM8K accuracy test (Qwen3-32B)
-# ------------------------------------------------------------
-register_npu_ci(est_time=400, suite="nightly-4-npu-a3", nightly=True)
+
+
 
 BASE_OTHER_ARGS = [
     "--chunked-prefill-size", "256",
@@ -247,13 +240,13 @@ BASE_OTHER_ARGS = [
     "--log-level", "debug",
 ]
 
-def launch_server_with_timeout(model_name, base_url, timeout, other_args_base):
+def launch_server_with_batch_timeout(model_name, base_url, batch_timeout, other_args_base):
     other_args = other_args_base.copy()
     idx = other_args.index("--dynamic-batch-tokenizer-batch-timeout") + 1 if "--dynamic-batch-tokenizer-batch-timeout" in other_args else -1
     if idx > 0:
-        other_args[idx] = str(timeout)
+        other_args[idx] = str(batch_timeout)
     else:
-        other_args.extend(["--dynamic-batch-tokenizer-batch-timeout", str(timeout)])
+        other_args.extend(["--dynamic-batch-tokenizer-batch-timeout", str(batch_timeout)])
     return popen_launch_server(model_name, base_url, timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH, other_args=other_args)
 
 def run_gsm8k_test(base_url, scenario):
@@ -264,7 +257,7 @@ def run_gsm8k_test(base_url, scenario):
         num_questions=200,
         max_new_tokens=512,
         parallel=128,
-        host="127.0.0.1",
+        host="http://127.0.0.1",
         port=int(base_url.split(":")[-1]),
     )
     metrics = run_eval(args)
@@ -277,28 +270,28 @@ class TestQwen32BTimeout001(CustomTestCase):
     @classmethod
     def setUpClass(cls):
         cls.base_url = DEFAULT_URL_FOR_TEST
-        cls.process = launch_server_with_timeout(QWEN3_32B_WEIGHTS_PATH, cls.base_url, 0.001, BASE_OTHER_ARGS)
+        cls.process = launch_server_with_batch_timeout(QWEN3_32B_WEIGHTS_PATH, cls.base_url, 0.001, BASE_OTHER_ARGS)
 
     @classmethod
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
 
     def test_gsm8k_timeout_001(self):
-        run_gsm8k_test(self.base_url, "timeout=0.001")
+        run_gsm8k_test(self.base_url, "batch_timeout=0.001")
 
 class TestQwen32BTimeout005(CustomTestCase):
     """GSM8K accuracy with dynamic batch tokenizer timeout = 0.005s."""
     @classmethod
     def setUpClass(cls):
-        cls.base_url = DEFAULT_URL_FOR_TEST   # 修正拼写
-        cls.process = launch_server_with_timeout(QWEN3_32B_WEIGHTS_PATH, cls.base_url, 0.005, BASE_OTHER_ARGS)
+        cls.base_url = DEFAULT_URL_FOR_TEST   #
+        cls.process = launch_server_with_batch_timeout(QWEN3_32B_WEIGHTS_PATH, cls.base_url, 0.005, BASE_OTHER_ARGS)
 
     @classmethod
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
 
-    def test_gsm8k_timeout_005(self):          # 方法名与实际 timeout 一致
-        run_gsm8k_test(self.base_url, "timeout=0.005")
+    def test_gsm8k_timeout_005(self):
+        run_gsm8k_test(self.base_url, "batch_timeout=0.005")
 
 if __name__ == "__main__":
     unittest.main()
