@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import QWEN3_30B_A3B_W8A8_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
-from sglang.test.few_shot_gsm8k import run_eval
+from sglang.test.run_eval import run_eval
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
@@ -55,6 +55,8 @@ class TestEplbMinRebalancingUtilizationThresholdBase(CustomTestCase):
         "--expert-distribution-recorder-buffer-size",
         50,
         "--enable-expert-distribution-metrics",
+        "--eplb-rebalance-layers-per-chunk",
+        "1",
     ]
     test_args = []
     out_file = None
@@ -68,10 +70,9 @@ class TestEplbMinRebalancingUtilizationThresholdBase(CustomTestCase):
         if hasattr(cls, "err_file_path"):
             cls.err_file = open(cls.err_file_path, "w+", encoding="utf-8")
 
-        cls.base_url = DEFAULT_URL_FOR_TEST
         cls.process = popen_launch_server(
             cls.model,
-            cls.base_url,
+            DEFAULT_URL_FOR_TEST,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=cls.common_args + cls.test_args,
             env={
@@ -99,20 +100,22 @@ class TestEplbMinRebalancingUtilizationThresholdBase(CustomTestCase):
             num_questions=200,
             max_new_tokens=512,
             parallel=128,
-            host="http://127.0.0.1",
-            port=int(self.base_url.split(":")[-1]),
+            base_url=DEFAULT_URL_FOR_TEST,
+            eval_name="gsm8k",
+            api="completion",
         )
         metrics = run_eval(args)
         self.assertGreaterEqual(
-            metrics["accuracy"],
+            metrics["score"],
             self.accuracy,
-            f'Accuracy of {self.model} is {str(metrics["accuracy"])}, is lower than {self.accuracy}',
+            f'Accuracy of {self.model} is {str(metrics["score"])}, is lower than {self.accuracy}',
         )
 
     def test_eplb_min_rebalancing_utilization_threshold(self):
         self.err_file.seek(0)
         content = self.err_file.read()
         self.assertIn(self.log_info, content)
+        self.assertIn("[EPLBManger] rebalance start", content)
 
 
 class TestEplbMinRebalancingUtilizationThreshold005(
