@@ -26,6 +26,15 @@ class TestNPUGCWarningThreshold(TestNPULoggingBase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        # overwrite other_args to reduce log printing by removing --log-requests
+        cls.other_args = [
+            "--trust-remote-code",
+            "--mem-fraction-static",
+            "0.8",
+            "--attention-backend",
+            "ascend",
+            "--disable-cuda-graph",
+        ]
         # --gc-warning-threshold-secs=0.01 (a tiny value) is set to ensure GC duration exceeds the alarm threshold.
         cls.other_args.extend(["--gc-warning-threshold-secs", "0.01"])
         cls.launch_server()
