@@ -1,12 +1,13 @@
 import os
 import unittest
+from types import SimpleNamespace
+from urllib.parse import urlparse
 
-import requests
-
+from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import (
-    QWEN3_8B_WEIGHTS_PATH,
     QWEN3_8B_EAGLE3_WEIGHTS_PATH,
+    QWEN3_8B_WEIGHTS_PATH,
     run_command,
 )
 from sglang.test.ci.ci_register import register_npu_ci
@@ -26,7 +27,7 @@ register_npu_ci(
 
 class TestSetForwardHooks(CustomTestCase):
     """Testcase: Verify set --decrypted-config-file, --decrypted-draft-config-file parameter,
-    will use the specified config.json and the inference request is successfully processed.
+    will use the specified config.json and the GSM8K dataset is no less than 0.95.
 
     [Test Category] Parameter
     [Test Target] --decrypted-config-file, --decrypted-draft-config-file
@@ -105,19 +106,21 @@ class TestSetForwardHooks(CustomTestCase):
         )
         kill_process_tree(cls.process.pid)
 
-    def test_decrypted_draft_config_file(self):
-        response = requests.post(
-            f"{DEFAULT_URL_FOR_TEST}/generate",
-            json={
-                "text": "The capital of France is",
-                "sampling_params": {
-                    "temperature": 0,
-                    "max_new_tokens": 32,
-                },
-            },
+    def test_gsm8k(self):
+        parsed_url = urlparse(DEFAULT_URL_FOR_TEST)
+        host = parsed_url.hostname
+        port = parsed_url.port
+        args = SimpleNamespace(
+            num_shots=5,
+            data_path=None,
+            num_questions=200,
+            max_new_tokens=512,
+            parallel=128,
+            host=host,
+            port=port,
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("Paris", response.text)
+        metrics = run_eval_few_shot_gsm8k(args)
+        self.assertGreater(metrics["accuracy"], 0.95)
 
 
 if __name__ == "__main__":
