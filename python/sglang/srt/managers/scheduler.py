@@ -217,6 +217,7 @@ from sglang.srt.utils import (
     get_available_gpu_memory,
     get_bool_env_var,
     get_int_env_var,
+    is_cuda,
     is_mps,
     kill_itself_when_parent_died,
     point_to_point_pyobj,
@@ -1395,55 +1396,56 @@ class Scheduler(
         prof_cnt = 0
         prof = None
         if enable_profiling:
-            import torch_npu
+            if is_npu():
+                import torch_npu
 
-            experimental_config = torch_npu.profiler._ExperimentalConfig(
-                export_type=torch_npu.profiler.ExportType.Text,
-                profiler_level=torch_npu.profiler.ProfilerLevel.Level2,
-                msprof_tx=False,
-                aic_metrics=torch_npu.profiler.AiCMetrics.AiCoreNone,
-                l2_cache=False,
-                op_attr=False,
-                data_simplification=False,
-                record_op_args=False,
-                gc_detect_threshold=None,
-            )
-            prof = torch_npu.profiler.profile(
-                activities=[
-                    torch_npu.profiler.ProfilerActivity.CPU,
-                    torch_npu.profiler.ProfilerActivity.NPU,
-                ],
-                schedule=torch_npu.profiler.schedule(
-                    wait=1, warmup=1, active=1000, repeat=1, skip_first=20
-                ),
-                on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(
-                    "./my_profiling"
-                ),
-                record_shapes=True,
-                profile_memory=False,
-                with_stack=False,
-                with_modules=False,
-                with_flops=False,
-                experimental_config=experimental_config,
-            )
-
-            # prof = torch.profiler.profile(
-            #     activities=[
-            #         torch.profiler.ProfilerActivity.CPU,
-            #         torch.profiler.ProfilerActivity.CUDA,
-            #     ],
-            #     schedule=torch.profiler.schedule(
-            #         wait=1, warmup=1, active=1000, repeat=1, skip_first=1
-            #     ),
-            #     on_trace_ready=lambda p: p.export_chrome_trace(
-            #         "./my_profiling/trace.json"
-            #     ),
-            #     record_shapes=True,
-            #     profile_memory=False,
-            #     with_stack=False,
-            #     with_modules=False,
-            #     with_flops=False,
-            # )
+                experimental_config = torch_npu.profiler._ExperimentalConfig(
+                    export_type=torch_npu.profiler.ExportType.Text,
+                    profiler_level=torch_npu.profiler.ProfilerLevel.Level2,
+                    msprof_tx=False,
+                    aic_metrics=torch_npu.profiler.AiCMetrics.AiCoreNone,
+                    l2_cache=False,
+                    op_attr=False,
+                    data_simplification=False,
+                    record_op_args=False,
+                    gc_detect_threshold=None,
+                )
+                prof = torch_npu.profiler.profile(
+                    activities=[
+                        torch_npu.profiler.ProfilerActivity.CPU,
+                        torch_npu.profiler.ProfilerActivity.NPU,
+                    ],
+                    schedule=torch_npu.profiler.schedule(
+                        wait=1, warmup=1, active=1000, repeat=1, skip_first=20
+                    ),
+                    on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(
+                        "./my_profiling"
+                    ),
+                    record_shapes=True,
+                    profile_memory=False,
+                    with_stack=False,
+                    with_modules=False,
+                    with_flops=False,
+                    experimental_config=experimental_config,
+                )
+            elif is_cuda():
+                prof = torch.profiler.profile(
+                    activities=[
+                        torch.profiler.ProfilerActivity.CPU,
+                        torch.profiler.ProfilerActivity.CUDA,
+                    ],
+                    schedule=torch.profiler.schedule(
+                        wait=1, warmup=1, active=1000, repeat=1, skip_first=1
+                    ),
+                    on_trace_ready=lambda p: p.export_chrome_trace(
+                        "./my_profiling/trace.json"
+                    ),
+                    record_shapes=True,
+                    profile_memory=False,
+                    with_stack=False,
+                    with_modules=False,
+                    with_flops=False,
+                )
 
         while True:
             # Receive requests
