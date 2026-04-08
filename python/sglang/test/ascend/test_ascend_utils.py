@@ -455,6 +455,12 @@ def run_bench_serving(
     need_warmup=False,
     seed: int = 0,
     device="auto",
+    gsp_num_groups=None,
+    gsp_prompts_per_group=None,
+    gsp_system_prompt_len=None,
+    gsp_question_len=None,
+    gsp_output_len=None,
+    max_concurrency=None,
     background_task: Optional[Callable[[str, asyncio.Event], Awaitable[None]]] = None,
     lora_name: Optional[str] = None,
 ):
@@ -485,6 +491,12 @@ def run_bench_serving(
         seed=seed,
         device=device,
         lora_name=lora_name,
+        gsp_num_groups=gsp_num_groups,
+        gsp_prompts_per_group=gsp_prompts_per_group,
+        gsp_system_prompt_len=gsp_system_prompt_len,
+        gsp_question_len=gsp_question_len,
+        gsp_output_len=gsp_output_len,
+        max_concurrency=max_concurrency,
     )
 
     async def _run():

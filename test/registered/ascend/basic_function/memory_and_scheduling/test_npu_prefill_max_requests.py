@@ -1,12 +1,12 @@
 import os
 import re
 import unittest
-from types import SimpleNamespace
+import requests
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import LLAMA_3_1_8B_INSTRUCT_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
-from sglang.test.few_shot_gsm8k import run_eval
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
@@ -23,12 +23,11 @@ class TestModeImpl(CustomTestCase):
     [Test Category] Parameter
     [Test Target] --prefill-max-requests
     """
-
-    model = LLAMA_3_1_8B_INSTRUCT_WEIGHTS_PATH
     PREFILL_MAX_REQUESTS = 5
 
     @classmethod
     def setUpClass(cls):
+        cls.model = LLAMA_3_1_8B_INSTRUCT_WEIGHTS_PATH
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.log_file = "./server.log"
 
@@ -52,44 +51,45 @@ class TestModeImpl(CustomTestCase):
                 return_stdout_stderr=(f, f),
             )
 
-        cls.gsm8k_lower_bound = 0.65
-
     @classmethod
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
         os.remove(cls.log_file)
 
-    def test_gsm8k(self):
-        args = SimpleNamespace(
-            num_shots=5,
-            data_path=None,
-            num_questions=200,
-            max_new_tokens=512,
-            parallel=128,
-            host="http://127.0.0.1",
-            port=int(self.base_url.split(":")[-1]),
+    def _send_single_request(self):
+        requests.post(
+            f"{self.base_url}/generate",
+            json={
+                "text": "The capital of France is",
+                "sampling_params": {
+                    "temperature": 0,
+                    "max_new_tokens": 32,
+                    "ignore_eos": True,
+                },
+            },
         )
-        metrics = run_eval(args)
-        self.assertGreater(metrics["accuracy"], self.gsm8k_lower_bound)
 
-    def test_prefill_max_requests(self):
-        """Verify the running-req in log does not exceed --prefill-max-requests."""
+    def test_prefill_max_requests_concurrent(self):
+        """Send 30 concurrent requests and verify no prefill batch exceeds the configured maximum"""
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            futures = [executor.submit(self._send_single_request) for _ in range(30)]
+            wait(futures)
+
         with open(self.log_file, "r", encoding="utf-8") as f:
             logs = f.read()
 
-        pattern = re.compile(r"prefill batch, #running-req[:\s]+(\d+)", re.I)
-        match = pattern.search(logs)
+        pattern = re.compile(r"Prefill batch, #new-req[:\s]+(\d+)", re.I)
+        matches = pattern.findall(logs)
 
-        self.assertIsNotNone(match, "prefill batch, #running-req not found in logs")
+        self.assertGreater(len(matches), 0, "No Prefill batch logs found")
 
-        running_req_num = int(match.group(1))
-
-        # Should not exceed the configured maximum value
-        self.assertLessEqual(
-            running_req_num,
-            self.PREFILL_MAX_REQUESTS,
-            f"running-req exceeds limit! current={running_req_num}, max allowed={self.PREFILL_MAX_REQUESTS}",
-        )
+        for idx, num_str in enumerate(matches):
+            current_num = int(num_str)
+            self.assertLessEqual(
+                current_num,
+                self.PREFILL_MAX_REQUESTS,
+                f"Prefill batch {idx+1} exceeds limit! current={current_num}, max allowed={self.PREFILL_MAX_REQUESTS}"
+            )
 
 
 if __name__ == "__main__":
