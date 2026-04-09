@@ -13,7 +13,6 @@ from transformers.image_utils import (
     SizeDict,
     get_image_size,
 )
-from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 from transformers.utils import TensorType
 from transformers.video_utils import group_videos_by_shape, reorder_videos
 
@@ -23,6 +22,7 @@ from sglang.srt.utils import apply_module_patch
 # Func refers to transformers.models.qwen2_vl.image_processing_qwen2_vl_fast.py
 # Qwen2VLImageProcessorFast._preprocess
 def npu_wrapper_preprocess_qwen2_vl_image_processor_fast(func):
+    from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 
     def _preprocess(
         self,
@@ -147,6 +147,7 @@ def npu_wrapper_preprocess_qwen2_vl_image_processor_fast(func):
 # Func refers to transformers.models.qwen3_vl.video_processing_qwen3_vl.py
 # Qwen3VLVideoProcessor._preprocess
 def npu_wrapper_preprocess_qwen3_vl_video_processor(func):
+    from transformers.models.qwen3_vl.video_processing_qwen3_vl import smart_resize
 
     def _preprocess(
         self,
