@@ -102,7 +102,7 @@ class TestNpuDebugTensorDumps(CustomTestCase):
         ]
         self.assertGreater(len(subdirs), 0)
 
-        pp0_dirs = [d for d in subdirs if re.search(r'PP0[^0-9]', d)]
+        pp0_dirs = [d for d in subdirs if re.search(r"PP0[^0-9]", d)]
         self.assertGreater(len(pp0_dirs), 0)
 
         # Verify that the contents of tensor_dump exist as .pt format files.
