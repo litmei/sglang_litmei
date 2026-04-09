@@ -1,14 +1,15 @@
 import os
 import unittest
-import requests
 from types import SimpleNamespace
+
+
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import (
+    FR_SPEC_TOKEN_MAP_PATH,
+    LLAMA_3_8B_EAGLE_WEIGHTS_PATH,
+    LLAMA_3_8B_INSTRUCT_WEIGHTS_PATH,
     QWEN3_32B_EAGLE3_WEIGHTS_PATH,
     QWEN3_32B_W8A8_MINDIE_WEIGHTS_PATH,
-    LLAMA_3_8B_INSTRUCT_WEIGHTS_PATH,
-    LLAMA_3_8B_EAGLE_WEIGHTS_PATH,
-    FR_SPEC_TOKEN_MAP_PATH,
 )
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.run_eval import run_eval
@@ -32,27 +33,42 @@ class TestNpuSpeculativeTokenMap(CustomTestCase):
         """EAGLE3 ignores token map; GSM8K accuracy should meet threshold."""
         args = [
             "--trust-remote-code",
-            "--attention-backend", "ascend",
-            "--quantization", "modelslim",
+            "--attention-backend",
+            "ascend",
+            "--quantization",
+            "modelslim",
             "--disable-radix-cache",
-            "--speculative-algorithm", "EAGLE3",
-            "--speculative-draft-model-path", QWEN3_32B_EAGLE3_WEIGHTS_PATH,
-            "--speculative-draft-model-quantization", "unquant",
-            "--speculative-num-steps", "4",
-            "--speculative-eagle-topk", "1",
-            "--speculative-num-draft-tokens", "5",
-            "--speculative-attention-mode", "decode",
-            "--speculative-token-map", "/nonexistent/token_map.pt",  # ignored
-            "--tp-size", "8",
-            "--mem-fraction-static", "0.7",
+            "--speculative-algorithm",
+            "EAGLE3",
+            "--speculative-draft-model-path",
+            QWEN3_32B_EAGLE3_WEIGHTS_PATH,
+            "--speculative-draft-model-quantization",
+            "unquant",
+            "--speculative-num-steps",
+            "4",
+            "--speculative-eagle-topk",
+            "1",
+            "--speculative-num-draft-tokens",
+            "5",
+            "--speculative-attention-mode",
+            "decode",
+            "--speculative-token-map",
+            "/nonexistent/token_map.pt",  # ignored
+            "--tp-size",
+            "8",
+            "--mem-fraction-static",
+            "0.7",
             "--disable-cuda-graph",
-            "--dtype", "bfloat16",
+            "--dtype",
+            "bfloat16",
         ]
         env = os.environ.copy()
-        env.update({
-            "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
-            "SGLANG_ENABLE_SPEC_V2": "1",
-        })
+        env.update(
+            {
+                "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
+                "SGLANG_ENABLE_SPEC_V2": "1",
+            }
+        )
         process = popen_launch_server(
             QWEN3_32B_W8A8_MINDIE_WEIGHTS_PATH,
             DEFAULT_URL_FOR_TEST,
@@ -72,7 +88,9 @@ class TestNpuSpeculativeTokenMap(CustomTestCase):
                 temperature=0.0,
             )
             metrics = run_eval(eval_args)
-            self.assertGreaterEqual(metrics["score"], 0.86)
+            self.assertGreaterEqual(
+                metrics["score"], 0.86
+            )
         finally:
             kill_process_tree(process.pid)
 
@@ -98,17 +116,19 @@ class TestNpuSpeculativeTokenMap(CustomTestCase):
             FR_SPEC_TOKEN_MAP_PATH,
             "--tp-size",
             "4",
-            "--mem-fraction-static"
+            "--mem-fraction-static",
             "0.7",
             "--disable-cuda-graph",
             "--dtype",
             "float16",
         ]
         env = os.environ.copy()
-        env.update({
-            "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
-            "SGLANG_ENABLE_SPEC_V2": "1",
-        })
+        env.update(
+            {
+                "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
+                "SGLANG_ENABLE_SPEC_V2": "1",
+            }
+        )
         process = popen_launch_server(
             LLAMA_3_8B_INSTRUCT_WEIGHTS_PATH,
             DEFAULT_URL_FOR_TEST,
@@ -128,7 +148,9 @@ class TestNpuSpeculativeTokenMap(CustomTestCase):
                 temperature=0.0,
             )
             metrics = run_eval(eval_args)
-            self.assertGreaterEqual(metrics["score"], 0.79)  # adjust threshold as needed
+            self.assertGreaterEqual(
+                metrics["score"], 0.79
+            )  # adjust threshold as needed
         finally:
             kill_process_tree(process.pid)
 

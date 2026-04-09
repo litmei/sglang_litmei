@@ -82,10 +82,12 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
     def setUpClass(cls) -> None:
         cls.base_url = DEFAULT_URL_FOR_TEST
         env = os.environ.copy()
-        env.update({
-            "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
-            "SGLANG_ENABLE_SPEC_V2": "1",
-        })
+        env.update(
+            {
+                "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
+                "SGLANG_ENABLE_SPEC_V2": "1",
+            }
+        )
         cls.process = popen_launch_server(
             QWEN3_32B_W8A8_MINDIE_WEIGHTS_PATH,
             cls.base_url,
@@ -116,12 +118,12 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
         self.assertEqual(
             args_dict.get("speculative_draft_load_format"),
             "dummy",
-            "speculative_draft_load_format should be 'dummy'"
+            "speculative_draft_load_format should be 'dummy'",
         )
         self.assertEqual(
             args_dict.get("speculative_draft_model_revision"),
             "main",
-            "speculative_draft_model_revision should be 'main'"
+            "speculative_draft_model_revision should be 'main'",
         )
 
         prompt = "What is the capital of France?"
