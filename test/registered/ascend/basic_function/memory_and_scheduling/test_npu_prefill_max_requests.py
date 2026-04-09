@@ -88,9 +88,14 @@ class TestModeImpl(CustomTestCase):
         # Iterate through all batches and assert that 1 ≤ num ≤ 5
         for num_str in matches:
             current_num = int(num_str)
-            self.assertGreaterEqual(current_num, 1, f"Batch size {current_num} is invalid, must >= 1")
-            self.assertLessEqual(current_num, self.PREFILL_MAX_REQUESTS,
-                                 f"Batch size {current_num} exceeds limit, must <= {self.PREFILL_MAX_REQUESTS}")
+            self.assertGreaterEqual(
+                current_num, 1, f"Batch size {current_num} is invalid, must >= 1"
+            )
+            self.assertLessEqual(
+                current_num,
+                self.PREFILL_MAX_REQUESTS,
+                f"Batch size {current_num} exceeds limit, must <= {self.PREFILL_MAX_REQUESTS}",
+            )
 
 
 if __name__ == "__main__":
