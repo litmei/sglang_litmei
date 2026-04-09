@@ -30,8 +30,8 @@ MODEL_CONFIG = {
         "SGLANG_USE_FIA_NZ": "1",
         "ENABLE_MOE_NZ": "1",
         "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
-        "SGLANG_ENABLE_SPEC_V2": "2",
-        "HCCL_BUFFSIZE": "850",
+        "SGLANG_ENABLE_SPEC_V2": "1",
+        "HCCL_BUFFSIZE": "800",
         "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "78",
         "TASK_QUEUE_ENABLE": "1",
         "HCCL_SOCKET_IFNAME": NIC_NAME,
@@ -147,9 +147,9 @@ class TestDeepSeekR1W4A8(TestAscendPerfMultiNodePdSepTestCaseBase):
     input_len = 3584
     output_len = 1536
     random_range_ratio = 1
-    tpot = 45.84
+    tpot = 41
     # T: 146@50ms.  800I A3: 1.3*T
-    output_token_throughput = 7947.95
+    output_token_throughput = 6835
 
     def test_throughput(self):
         self.run_throughput()

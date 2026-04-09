@@ -1,6 +1,7 @@
 import unittest
 
 from sglang.test.ascend.e2e.test_npu_performance_utils import (
+    KIMI_K2_5_EAGLE3_MODEL_PATH,
     KIMI_K2_5_W4A8_MODEL_PATH,
     TestAscendPerformanceTestCaseBase,
 )
@@ -20,10 +21,11 @@ KIMI_K2_5_ENVS = {
     "GLOO_SOCKET_IFNAME": "lo",
     "STREAMS_PER_DEVICE": "32",
     "DEEP_NORMAL_MODE_USE_INT8_QUANT": "1",
-    "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "32",
-    "HCCL_BUFFSIZE": "2100",
+    "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "48",
+    "HCCL_BUFFSIZE": "1200",
     "SGLANG_ENABLE_SPEC_V2": "1",
     "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
+    "SGLANG_NPU_USE_MLAPO": "1",
 }
 
 KIMI_K2_5_OTHER_ARGS = [
@@ -39,11 +41,11 @@ KIMI_K2_5_OTHER_ARGS = [
     "--tp-size",
     16,
     "--mem-fraction-static",
-    0.82,
+    0.74,
     "--max-running-requests",
-    256,
+    64,
     "--chunked-prefill-size",
-    65536,
+    32768,
     "--context-length",
     8192,
     "--max-prefill-tokens",
@@ -56,7 +58,6 @@ KIMI_K2_5_OTHER_ARGS = [
     "--enable-dp-attention",
     "--dp-size",
     16,
-    "--enable-dp-lm-head",
     "--moe-a2a-backend",
     "deepep",
     "--deepep-mode",
@@ -64,12 +65,23 @@ KIMI_K2_5_OTHER_ARGS = [
     "--cuda-graph-bs",
     1,
     2,
+    3,
     4,
-    8,
-    16,
     "--disable-radix-cache",
     "--model-loader-extra-config",
     '{"enable_multithread_load": true}',
+    "--speculative-algorithm",
+    "EAGLE3",
+    "--speculative-draft-model-path",
+    KIMI_K2_5_EAGLE3_MODEL_PATH,
+    "--speculative-num-steps",
+    4,
+    "--speculative-eagle-topk",
+    1,
+    "--speculative-num-draft-tokens",
+    5,
+    "--speculative-draft-model-quantization",
+    "unquant",
 ]
 
 
@@ -79,14 +91,14 @@ class TestKimiK25W4A8(TestAscendPerformanceTestCaseBase):
     envs = KIMI_K2_5_ENVS
     backend = "sglang"
     dataset_name = "random"
-    max_concurrency = 16
-    num_prompts = 16
+    max_concurrency = 32
+    num_prompts = 32
     input_len = 3500
     output_len = 1500
     random_range_ratio = 1
-    warmup_requests = 16
+    warmup_requests = 0
     tpot = 20
-    output_token_throughput = 350
+    output_token_throughput = 1120
 
     def test_kimi_k2_5_w4a8(self):
         self.run_throughput()

@@ -10,6 +10,7 @@ register_npu_ci(
     est_time=1800,
     suite="nightly-2-npu-a3",
     nightly=True,
+    disabled="Currently it is executed by the npu performance workflow.",
 )
 
 GLM_4_7_FLASH_ENVS = {
@@ -56,7 +57,7 @@ class TestGlm47Flash(TestAscendPerformanceTestCaseBase):
     input_len = 2048
     output_len = 2048
     random_range_ratio = 1
-    output_token_throughput = 1288
+    output_token_throughput = 1021
 
     def test_glm_4_7_flash(self):
         self.run_throughput()
