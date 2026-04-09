@@ -217,7 +217,6 @@ class TestBatchSize64Timeout0p001(CustomTestCase):
         args = SimpleNamespace(
             host="http://127.0.0.1",
             port=int(self.base_url.split(":")[-1]),
-            # 其他参数使用 few_shot_gsm8k 默认值
         )
         metrics = run_eval(args)
         accuracy = 0.86
