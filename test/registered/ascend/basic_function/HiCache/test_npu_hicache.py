@@ -48,7 +48,6 @@ class TestHiCache(CustomTestCase):
         radix_eviction_policy="lru",
         hicache_io_backend="direct",
         hicache_mem_layout="page_first_direct",
-        disable_hicache_numa_detect=False,
         hicache_storage_backend=None,
     ):
         """Launch server with hierarchical cache parameters."""
@@ -79,9 +78,6 @@ class TestHiCache(CustomTestCase):
                     str(hicache_size),
                 ]
             )
-
-        if disable_hicache_numa_detect:
-            other_args.append("--disable-hicache-numa-detect")
 
         if hicache_storage_backend is not None:
             other_args.extend(
@@ -151,7 +147,6 @@ class TestHiCache(CustomTestCase):
             hicache_io_backend="direct",
             hicache_mem_layout="page_first_direct",
             hicache_storage_backend="file",
-            disable_hicache_numa_detect=True,
         )
 
         try:
@@ -182,7 +177,7 @@ class TestHiCache(CustomTestCase):
             hicache_write_policy="write_through_selective",
             hicache_io_backend="kernel_ascend",
             hicache_mem_layout="page_first_kv_split",
-            disable_hicache_numa_detect=True,
+            # disable_hicache_numa_detect=True,
         )
 
         try:

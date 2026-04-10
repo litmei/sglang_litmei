@@ -452,6 +452,7 @@ def run_bench_serving(
     max_concurrency=None,
     background_task: Optional[Callable[[str, asyncio.Event], Awaitable[None]]] = None,
     lora_name: Optional[str] = None,
+    timeout_for_server_launch=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
 ):
     """Start the service and obtain the inference results.
 
@@ -479,6 +480,7 @@ def run_bench_serving(
         max_concurrency: Maximum number of concurrent requests
         background_task: Background tasks
         lora_name: LoRA fine-tuning model path
+        timeout_for_server_launch: Raise the service timeout period
     Returns:
         res: Number of requests successfully completed
 
@@ -491,7 +493,7 @@ def run_bench_serving(
     process = popen_launch_server(
         model,
         base_url,
-        timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+        timeout=timeout_for_server_launch,
         other_args=other_server_args,
     )
 

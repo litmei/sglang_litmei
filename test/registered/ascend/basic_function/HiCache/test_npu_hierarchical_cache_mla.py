@@ -86,6 +86,7 @@ class TestNpuHierarchicalCacheMla(CustomTestCase):
                 gsp_question_len=1792,
                 gsp_output_len=1,
                 other_server_args=other_args,
+                timeout_for_server_launch=1000,
             )
             TTFT = res["mean_ttft_ms"]
             TTFTS.append(TTFT)
