@@ -24,7 +24,7 @@ register_npu_ci(
 )
 
 
-class TestSetForwardHooks(CustomTestCase):
+class TestDraftConfigFile(CustomTestCase):
     """Testcase: Verify set --decrypted-config-file, --decrypted-draft-config-file parameter,
     will use the specified config.json and the GSM8K dataset is no less than 0.95.
 
@@ -45,7 +45,7 @@ class TestSetForwardHooks(CustomTestCase):
             cls.process = popen_launch_server(
                 QWEN3_8B_WEIGHTS_PATH,
                 DEFAULT_URL_FOR_TEST,
-                timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+                DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
                 other_args=[
                     "--trust-remote-code",
                     "--attention-backend",
@@ -78,13 +78,12 @@ class TestSetForwardHooks(CustomTestCase):
                     "/__w/sglang/sglang/test/registered/ascend/basic_function/checkpoint_decryption/Qwen3-8B_eagle3/config.json",
                 ],
                 env={
-                    "SLANG_ENABLE_SPEC_V2": "1",
+                    "SGLANG_ENABLE_SPEC_V2": "1",
                     "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
                 },
             )
+
         except Exception as e:
-            raise RuntimeError(f"Failed to launch server: {e}") from e
-        finally:
             # Service failed to start, restoring original file name
             run_command(
                 f"mv {os.path.join(QWEN3_8B_WEIGHTS_PATH, '_config.json')} {os.path.join(QWEN3_8B_WEIGHTS_PATH, 'config.json')}"
@@ -94,6 +93,7 @@ class TestSetForwardHooks(CustomTestCase):
             )
             if cls.process:
                 kill_process_tree(cls.process.pid)
+            raise RuntimeError(f"Failed to launch server: {e}") from e
 
     @classmethod
     def tearDownClass(cls):
@@ -107,14 +107,14 @@ class TestSetForwardHooks(CustomTestCase):
 
     def test_gsm8k(self):
         args = SimpleNamespace(
-            num_shots=5,
-            data_path=None,
-            num_questions=200,
             max_new_tokens=512,
-            parallel=128,
             base_url=DEFAULT_URL_FOR_TEST,
+            model=QWEN3_8B_WEIGHTS_PATH,
             eval_name="gsm8k",
             api="completion",
+            num_examples=200,
+            num_threads=128,
+            num_shots=5,
         )
         metrics = run_eval(args)
         self.assertGreater(metrics["score"], 0.95)
