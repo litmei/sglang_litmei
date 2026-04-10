@@ -109,6 +109,10 @@ KIMI_K2_5_W4A8_MODEL_PATH = "/root/.cache/modelscope/hub/models/Eco-Tech/Kimi-K2
 KIMI_K2_5_EAGLE3_MODEL_PATH = "/root/.cache/modelscope/hub/models/Kimi/kimi-k2.5-eagle3"
 GLM_4_7_FLASH_MODEL_PATH = "/root/.cache/modelscope/hub/models/ZhipuAI/GLM-4.7-Flash"
 
+QWEN3_5_397B_W4A8_MODEL_PATH = (
+    "/root/.cache/modelscope/hub/models/Eco-Tech/Qwen3.5-397B-A17B-w4a8-mtp"
+)
+
 ROUND_ROBIN = "round_robin"
 
 DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH = 3600
@@ -378,9 +382,9 @@ def run_aisbench(
         os.path.basename(model_path),
         model_path,
         dataset_path,
-        output_len,
-        max_concurrency,
-        num_prompts,
+        str(output_len),
+        str(max_concurrency),
+        str(num_prompts),
     ]
     process = subprocess.Popen(
         cmd_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
