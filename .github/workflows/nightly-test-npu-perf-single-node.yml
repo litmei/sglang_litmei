@@ -92,23 +92,20 @@ jobs:
           PYTHON_FOR_SGLANG="python"
           PIP_FOR_SGLANG="pip"
           if [ -n "${TRANSFORMERS_VERSION_FOR_SGLANG}" ];then
-            echo "===== Install transformers for sglang in virtual env - Begin ====="
-            python -m venv test_env_transformers_sglang --system-site-packages
+            echo "===== Install transformers for sglang - Begin ====="
             TRANSFORMERS_PKG_PATH_SOURCE=/root/.cache/.cache/transformers/${TRANSFORMERS_VERSION_FOR_SGLANG}
             if [ ! -d "${TRANSFORMERS_PKG_PATH_SOURCE}" ]; then
               echo "The dependent transformers package does not exist: ${TRANSFORMERS_PKG_PATH_SOURCE}."
               echo "Install transformers ${TRANSFORMERS_VERSION_FOR_SGLANG} online."
-              test_env_transformers_sglang/bin/pip install transformers=="${TRANSFORMERS_VERSION_FOR_SGLANG}" -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+              pip install transformers=="${TRANSFORMERS_VERSION_FOR_SGLANG}" -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
             else
               echo "Install transformers ${TRANSFORMERS_VERSION_FOR_SGLANG} locally."
               TRANSFORMERS_PKG_PATH_TARGET=/tmp/transformers/${TRANSFORMERS_VERSION_FOR_SGLANG}
               mkdir -p "${TRANSFORMERS_PKG_PATH_TARGET}"
               cp "${TRANSFORMERS_PKG_PATH_SOURCE}/*" "${TRANSFORMERS_PKG_PATH_TARGET}/"
-              test_env_transformers_sglang/bin/pip install --no-index --find-links="${TRANSFORMERS_PKG_PATH_TARGET}" transformers=="${TRANSFORMERS_VERSION_FOR_SGLANG}"
+              pip install --no-index --find-links="${TRANSFORMERS_PKG_PATH_TARGET}" transformers=="${TRANSFORMERS_VERSION_FOR_SGLANG}"
             fi
             echo "===== Install transformers for sglang in virtual env - End ====="
-            PYTHON_FOR_SGLANG="test_env_transformers_sglang/bin/python"
-            PIP_FOR_SGLANG="test_env_transformers_sglang/bin/pip"
           fi
 
           echo "===== Install transformers in virtual env for test tools - Begin ====="

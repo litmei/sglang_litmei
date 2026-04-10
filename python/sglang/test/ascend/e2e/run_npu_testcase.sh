@@ -24,23 +24,20 @@ echo "===== Install kubernetes - End ====="
 PYTHON_FOR_SGLANG="python"
 PIP_FOR_SGLANG="pip"
 if [ -n "${TRANSFORMERS_VERSION_FOR_SGLANG}" ];then
-  echo "===== Install transformers for sglang in virtual env - Begin ====="
-  python -m venv test_env_transformers_sglang --system-site-packages
+  echo "===== Install transformers for sglang - Begin ====="
   TRANSFORMERS_PKG_PATH_SOURCE=/root/.cache/.cache/transformers/${TRANSFORMERS_VERSION_FOR_SGLANG}
   if [ ! -d "${TRANSFORMERS_PKG_PATH_SOURCE}" ]; then
     echo "The dependent transformers package does not exist: ${TRANSFORMERS_PKG_PATH_SOURCE}."
     echo "Install transformers ${TRANSFORMERS_VERSION_FOR_SGLANG} online."
-    test_env_transformers_sglang/bin/pip install transformers=="${TRANSFORMERS_VERSION_FOR_SGLANG}" -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+    pip install transformers=="${TRANSFORMERS_VERSION_FOR_SGLANG}" -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
   else
     echo "Install transformers ${TRANSFORMERS_VERSION_FOR_SGLANG} locally."
     TRANSFORMERS_PKG_PATH_TARGET=/tmp/transformers/${TRANSFORMERS_VERSION_FOR_SGLANG}
     mkdir -p "${TRANSFORMERS_PKG_PATH_TARGET}"
     cp "${TRANSFORMERS_PKG_PATH_SOURCE}/*" "${TRANSFORMERS_PKG_PATH_TARGET}/"
-    test_env_transformers_sglang/bin/pip install --no-index --find-links="${TRANSFORMERS_PKG_PATH_TARGET}" transformers=="${TRANSFORMERS_VERSION_FOR_SGLANG}"
+    pip install --no-index --find-links="${TRANSFORMERS_PKG_PATH_TARGET}" transformers=="${TRANSFORMERS_VERSION_FOR_SGLANG}"
   fi
   echo "===== Install transformers for sglang in virtual env - End ====="
-  PYTHON_FOR_SGLANG="test_env_transformers_sglang/bin/python"
-  PIP_FOR_SGLANG="test_env_transformers_sglang/bin/pip"
 fi
 
 echo "===== Install transformers in virtual env for test tools - Begin ====="
@@ -64,6 +61,29 @@ echo "===== Install transformers in virtual env for test tools - End ====="
 
 echo "Transformers version for sglang: $(${PIP_FOR_SGLANG} show transformers | grep Version | cut -d: -f2)"
 echo "Transformers version for test tools: $(${PIP_FOR_TEST_TOOL} show transformers | grep Version | cut -d: -f2)"
+
+#echo "===== Install aisbench in virtual env - Begin ====="
+#PYTHON_ENV_FOR_AISBENCH=test_env_aisbench
+#PIP_FOR_AISBENCH=${PYTHON_ENV_FOR_AISBENCH}/bin/pip
+#python -m venv ${PYTHON_ENV_FOR_AISBENCH}
+#AISBENCH_PKG_PATH_SOURCE=/root/.cache/.cache/benchmark
+#if [ ! -d "${AISBENCH_PKG_PATH_SOURCE}" ]; then
+#  echo "The dependent aisbench package does not exist: ${AISBENCH_PKG_PATH_SOURCE}."
+#  echo "Install aisbench online..."
+#  git clone https://github.com/AISBench/benchmark.git
+#  ${PIP_FOR_AISBENCH} install -e ./benchmark/ --use-pep517
+#  ${PIP_FOR_AISBENCH} install -r ./benchmark/requirements/api.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+#  ${PIP_FOR_AISBENCH} install -r ./benchmark/requirements/extra.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+#
+#else
+#  echo "Install aisbench  locally."
+#  AISBENCH_PKG_PATH_TARGET=/tmp/benchmark
+#  cp -r ${AISBENCH_PKG_PATH_SOURCE} ${AISBENCH_PKG_PATH_TARGET}
+#  ${PIP_FOR_AISBENCH} install -e ${AISBENCH_PKG_PATH_TARGET} --use-pep517
+#  ${PIP_FOR_AISBENCH} install -r ${AISBENCH_PKG_PATH_TARGET}/requirements/api.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+#  ${PIP_FOR_AISBENCH} install -r ${AISBENCH_PKG_PATH_TARGET}/requirements/extra.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+#fi
+#echo "===== Install aisbench in virtual env - End ====="
 
 # =============temp step====================
 #bash /root/sglang/python/sglang/test/ascend/e2e/temp.sh

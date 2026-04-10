@@ -22,6 +22,12 @@ jobs:
       max-parallel: 2
       matrix:
         test_config:
+          - name: test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_50ms
+            test_case: test/registered/ascend/performance/v26/test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_50ms.py
+            runner: linux-aarch64-a3-16
+          - name: test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_20ms
+            test_case: test/registered/ascend/performance/v26/test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_20ms.py
+            runner: linux-aarch64-a3-16
           - name: test_ascend_qwen3_5_27b_w8a8_2p_in3k5_out1k5_50ms
             test_case: test/registered/ascend/performance/v26/test_ascend_qwen3_5_27b_w8a8_2p_in3k5_out1k5_50ms.py
             runner: linux-aarch64-a3-4
@@ -31,12 +37,6 @@ jobs:
           - name: test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms
             test_case: test/registered/ascend/performance/v26/test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms.py
             runner: linux-aarch64-a3-4
-          - name: test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_50ms
-            test_case: test/registered/ascend/performance/v26/test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_50ms.py
-            runner: linux-aarch64-a3-16
-          - name: test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_20ms
-            test_case: test/registered/ascend/performance/v26/test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_20ms.py
-            runner: linux-aarch64-a3-16
           - name: test_ascend_glm_4_7_flash_bf16_1p_in2k_out2k_64bs
             test_case: test/registered/ascend/performance/v26/test_ascend_glm_4_7_flash_bf16_1p_in2k_out2k_64bs.py
             runner: linux-aarch64-a3-2
