@@ -25,12 +25,12 @@ on:
         description: 'The a3 running docker image of the test task.'
         required: false
         type: string
-        default: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/ascend-ci/cann:8.5.0-a3-ubuntu22.04-py3.11'
+        default: ''
       skip_install_flag:
         description: 'Indicates whether to skip the installation of sglang, defaulting to false.'
         required: false
         type: string
-        default: 'false'
+        default: ''
 
 
 concurrency:
@@ -76,12 +76,11 @@ jobs:
 
   nightly-1-npu-a3:
     needs: [set-image-config]
-    if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
     strategy:
       fail-fast: false
       matrix:
-        part: [0, 1]
+        part: [0, 1, 2, 3, 4]
     container:
       image: ${{ needs.set-image-config.outputs.image_a3 }}
     steps:
@@ -102,8 +101,17 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
+          sglang_source_path=$(pwd)
+          echo "Source code path: ${sglang_source_path}"
+
           if [ ${{ needs.set-image-config.outputs.skip_install_flag }} != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
+          else
+            sglang_pkg_path=$(pip show sglang | grep Location | awk '{print $2}')
+            ascend_test_util_path=${sglang_pkg_path}/sglang/test/ascend
+            mkdir -p ${ascend_test_util_path}
+            mv ${ascend_test_util_path} ${ascend_test_util_path}_bak
+            cp -r ${sglang_source_path}/python/sglang/test/ascend ${ascend_test_util_path}
           fi
 
           # copy required file from our daily cache
@@ -138,11 +146,10 @@ jobs:
           export PYTHONPATH=$PYTHONPATH:$(pwd)
           cd ../
           cd test
-          python3 run_suite.py --hw npu --suite nightly-1-npu-a3 --nightly --continue-on-error --timeout-per-file 3600 --auto-partition-id ${{ matrix.part }} --auto-partition-size 2
+          python3 run_suite.py --hw npu --suite nightly-1-npu-a3 --nightly --continue-on-error --timeout-per-file 3600 --auto-partition-id ${{ matrix.part }} --auto-partition-size 5
 
   nightly-2-npu-a3:
     needs: [set-image-config]
-    if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-2
     strategy:
       fail-fast: false
@@ -168,8 +175,17 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
+          sglang_source_path=$(pwd)
+          echo "Source code path: ${sglang_source_path}"
+
           if [ ${{ needs.set-image-config.outputs.skip_install_flag }} != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
+          else
+            sglang_pkg_path=$(pip show sglang | grep Location | awk '{print $2}')
+            ascend_test_util_path=${sglang_pkg_path}/sglang/test/ascend
+            mkdir -p ${ascend_test_util_path}
+            mv ${ascend_test_util_path} ${ascend_test_util_path}_bak
+            cp -r ${sglang_source_path}/python/sglang/test/ascend ${ascend_test_util_path}
           fi
 
           # copy required file from our daily cache
@@ -207,12 +223,11 @@ jobs:
 
   nightly-4-npu-a3:
     needs: [set-image-config]
-    if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-4
     strategy:
       fail-fast: false
       matrix:
-        part: [0]
+        part: [0, 1]
     container:
       image: ${{ needs.set-image-config.outputs.image_a3 }}
     steps:
@@ -233,8 +248,17 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
+          sglang_source_path=$(pwd)
+          echo "Source code path: ${sglang_source_path}"
+
           if [ ${{ needs.set-image-config.outputs.skip_install_flag }} != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
+          else
+            sglang_pkg_path=$(pip show sglang | grep Location | awk '{print $2}')
+            ascend_test_util_path=${sglang_pkg_path}/sglang/test/ascend
+            mkdir -p ${ascend_test_util_path}
+            mv ${ascend_test_util_path} ${ascend_test_util_path}_bak
+            cp -r ${sglang_source_path}/python/sglang/test/ascend ${ascend_test_util_path}
           fi
 
           # copy required file from our daily cache
@@ -269,11 +293,10 @@ jobs:
           export PYTHONPATH=$PYTHONPATH:$(pwd)
           cd ../
           cd test
-          python3 run_suite.py --hw npu --suite nightly-4-npu-a3 --nightly --continue-on-error --timeout-per-file 3600 --auto-partition-id ${{ matrix.part }} --auto-partition-size 1
+          python3 run_suite.py --hw npu --suite nightly-4-npu-a3 --nightly --continue-on-error --timeout-per-file 3600 --auto-partition-id ${{ matrix.part }} --auto-partition-size 2
 
   nightly-8-npu-a3:
     needs: [set-image-config]
-    if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-8
     strategy:
       fail-fast: false
@@ -299,8 +322,17 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
+          sglang_source_path=$(pwd)
+          echo "Source code path: ${sglang_source_path}"
+
           if [ ${{ needs.set-image-config.outputs.skip_install_flag }} != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
+          else
+            sglang_pkg_path=$(pip show sglang | grep Location | awk '{print $2}')
+            ascend_test_util_path=${sglang_pkg_path}/sglang/test/ascend
+            mkdir -p ${ascend_test_util_path}
+            mv ${ascend_test_util_path} ${ascend_test_util_path}_bak
+            cp -r ${sglang_source_path}/python/sglang/test/ascend ${ascend_test_util_path}
           fi
 
           # copy required file from our daily cache
@@ -339,7 +371,6 @@ jobs:
 
   nightly-16-npu-a3:
     needs: [set-image-config]
-    if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     runs-on: linux-aarch64-a3-16
     strategy:
       fail-fast: false
@@ -365,8 +396,17 @@ jobs:
           pip config set global.index-url http://${CACHING_URL}/pypi/simple
           pip config set global.trusted-host "${CACHING_URL}"
 
+          sglang_source_path=$(pwd)
+          echo "Source code path: ${sglang_source_path}"
+
           if [ ${{ needs.set-image-config.outputs.skip_install_flag }} != "true" ];then
             bash scripts/ci/npu/npu_ci_install_dependency.sh a3
+          else
+            sglang_pkg_path=$(pip show sglang | grep Location | awk '{print $2}')
+            ascend_test_util_path=${sglang_pkg_path}/sglang/test/ascend
+            mkdir -p ${ascend_test_util_path}
+            mv ${ascend_test_util_path} ${ascend_test_util_path}_bak
+            cp -r ${sglang_source_path}/python/sglang/test/ascend ${ascend_test_util_path}
           fi
 
           # copy required file from our daily cache
@@ -404,7 +444,6 @@ jobs:
           python3 run_suite.py --hw npu --suite nightly-16-npu-a3 --nightly --continue-on-error --timeout-per-file 3600 --auto-partition-id ${{ matrix.part }} --auto-partition-size 2
 
   check-all-jobs:
-    if: github.repository == 'sgl-project/sglang' && always()
     needs:
       - nightly-1-npu-a3
       - nightly-2-npu-a3
