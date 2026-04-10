@@ -56,7 +56,6 @@ class TestMoreRunnerBackendTriton(CustomTestCase):
                 cls.moe_runner_backend,
             ],
             env={
-                "SGLANG_NPUDISABLE_ACL_FORMAT_WEIGHT": "1",
                 "HCCL_BUFFSIZE": "1024",
             },
         )

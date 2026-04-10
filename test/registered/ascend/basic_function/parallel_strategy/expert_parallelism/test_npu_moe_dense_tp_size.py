@@ -51,7 +51,6 @@ class TestAscendMoeDenseTPSize(CustomTestCase):
                 "1",
             ],
             env={
-                "SGLANG_NPUDISABLE_ACL_FORMAT_WEIGHT": "1",
                 "HCCL_BUFFSIZE": "1024",
             },
         )
@@ -62,14 +61,14 @@ class TestAscendMoeDenseTPSize(CustomTestCase):
 
     def test_gsm8k(self):
         args = SimpleNamespace(
-            num_shots=5,
-            data_path=None,
-            num_questions=200,
             max_new_tokens=512,
-            parallel=128,
             base_url=DEFAULT_URL_FOR_TEST,
+            model=self.model,
             eval_name="gsm8k",
             api="completion",
+            num_examples=200,
+            num_threads=128,
+            num_shots=5,
         )
         metrics = run_eval(args)
         self.assertGreater(metrics["score"], 0.79)
