@@ -1,4 +1,6 @@
 import os
+import re
+import tempfile
 import unittest
 
 import requests
@@ -81,6 +83,12 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.out_log_file = tempfile.NamedTemporaryFile(
+            mode="w+", encoding="utf-8", delete=False, suffix=".txt"
+        )
+        cls.err_log_file = tempfile.NamedTemporaryFile(
+            mode="w+", encoding="utf-8", delete=False, suffix=".txt"
+        )
         env = os.environ.copy()
         env.update(
             {
@@ -94,11 +102,16 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH * 5,
             other_args=_SERVER_ARGS,
             env=env,
+            return_stdout_stderr=(cls.out_log_file, cls.err_log_file),
         )
 
     @classmethod
     def tearDownClass(cls) -> None:
         kill_process_tree(cls.process.pid)
+        cls.out_log_file.close()
+        cls.err_log_file.close()
+        os.unlink(cls.out_log_file.name)
+        os.unlink(cls.err_log_file.name)
 
     def test_draft_params_via_server_info(self):
         """Verify draft load format and revision are set correctly via /get_server_info."""
@@ -106,25 +119,17 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
         health_resp = requests.get(f"{self.base_url}/health", timeout=10)
         self.assertEqual(health_resp.status_code, 200)
 
-        # 2. Get server info and assert parameter values
-        info_resp = requests.get(f"{self.base_url}/get_server_info", timeout=10)
-        self.assertEqual(info_resp.status_code, 200)
-        info = info_resp.json()
+        with open(self.out_log_file.name, "r", encoding="utf-8") as f:
+            log_content = f.read()
 
-        # Depending on actual response structure, extract the args
-        # Example: info["args"]["speculative_draft_load_format"] should be "dummy"
-        # Adjust field names as per actual server implementation.
-        args_dict = info.get("args", {})
-        self.assertEqual(
-            args_dict.get("speculative_draft_load_format"),
-            "dummy",
-            "speculative_draft_load_format should be 'dummy'",
+        match = re.search(r"command=sglang serve\s+(.*?)(?:\n|$)", log_content)
+        self.assertIsNotNone(
+            match, f"Command line not found in server logs. Log snippet (first 500 chars): {log_content[:500]}"
         )
-        self.assertEqual(
-            args_dict.get("speculative_draft_model_revision"),
-            "main",
-            "speculative_draft_model_revision should be 'main'",
-        )
+        cmd_line = match.group(1)
+
+        self.assertIn("--speculative-draft-load-format dummy", cmd_line)
+        self.assertIn("--speculative-draft-model-revision main", cmd_line)
 
         prompt = "What is the capital of France?"
         resp = requests.post(

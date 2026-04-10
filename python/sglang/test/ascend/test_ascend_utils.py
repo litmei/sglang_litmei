@@ -116,7 +116,7 @@ LLAMA_3_8B_EAGLE_WEIGHTS_PATH = os.path.join(
     MODEL_WEIGHTS_DIR, "lmsys/sglang-EAGLE-LLaMA3-Instruct-8B"
 )
 LLAMA_3_8B_INSTRUCT_WEIGHTS_PATH = os.path.join(
-    MODEL_WEIGHTS_DIR, "meta-llama/Meta-Llama-3-8B-Instruct"
+    MODEL_WEIGHTS_DIR, "LLM-Research/Meta-Llama-3-8B-Instruct"
 )
 
 LLAMA_4_SCOUT_17B_16E_INSTRUCT_WEIGHTS_PATH = os.path.join(
