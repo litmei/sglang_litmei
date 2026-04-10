@@ -124,7 +124,8 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
 
         match = re.search(r"command=sglang serve\s+(.*?)(?:\n|$)", log_content)
         self.assertIsNotNone(
-            match, f"Command line not found in server logs. Log snippet (first 500 chars): {log_content[:500]}"
+            match,
+            f"Command line not found in server logs. Log snippet (first 500 chars): {log_content[:500]}",
         )
         cmd_line = match.group(1)
 

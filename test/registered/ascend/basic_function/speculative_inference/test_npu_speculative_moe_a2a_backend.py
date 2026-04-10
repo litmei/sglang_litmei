@@ -9,7 +9,6 @@ from sglang.test.ascend.test_ascend_utils import (
 )
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.run_eval import run_eval
-
 from sglang.test.test_utils import (
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
@@ -87,7 +86,7 @@ class TestAscendDistTimeout(CustomTestCase):
             self.assertGreaterEqual(
                 metrics["score"],
                 self.accuracy,
-                f"GSM8K score {metrics['score']} below threshold {self.accuracy}"
+                f"GSM8K score {metrics['score']} below threshold {self.accuracy}",
             )
         finally:
             kill_process_tree(process.pid)

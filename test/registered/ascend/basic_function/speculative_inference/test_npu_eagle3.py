@@ -93,7 +93,7 @@ class TestNpuEagle3(CustomTestCase):
             self.assertGreaterEqual(
                 metrics["score"],
                 self.accuracy,
-                f"GSM8K score {metrics['score']} below threshold {self.accuracy}"
+                f"GSM8K score {metrics['score']} below threshold {self.accuracy}",
             )
         finally:
             kill_process_tree(process.pid)
