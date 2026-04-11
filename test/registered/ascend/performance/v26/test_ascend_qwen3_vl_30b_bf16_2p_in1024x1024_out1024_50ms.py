@@ -1,4 +1,3 @@
-import time
 import unittest
 
 from sglang.test.ascend.e2e.test_npu_performance_utils import (
@@ -91,7 +90,6 @@ class TestQwen3Vl30B(TestAscendPerformanceTestCaseBase):
     output_token_throughput = 6545
 
     def test_qwen3_vl_30b(self):
-        time.sleep(120)
         self.run_throughput()
 
 
