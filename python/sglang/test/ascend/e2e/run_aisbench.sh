@@ -123,13 +123,12 @@ mm_custom_datasets = [
 EOF
 
 
-echo -e "\033[32m✅ Created isolated temp config:\033[0m $TMP_CFG"
 echo "IP: $IP | Port: $PORT | Model: $MODEL | Path: $PATH"
-echo "Batch: $BATCH_SIZE | Max Tokens: $MAX_OUT_LEN"
+echo "Output tokens: $MAX_OUT_LEN | Batch size: $BATCH_SIZE | Prompts num: $NUM_PROMPTS"
+echo -e "API config file: $TMP_CFG"
+echo -e "Dataset config file: $TMP_DATASET"
 
 source ${PYTHON_ENV_FOR_AISBENCH}/bin/activate
-ais_bench \
-  --models "$TMP_CFG" \
-  --datasets "$TMP_DATASET" \
-  --mode perf \
-  --num-prompts "$NUM_PROMPTS"
+CMD="ais_bench --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS"
+echo "Run command: ${CMD}"
+eval "${CMD}"
