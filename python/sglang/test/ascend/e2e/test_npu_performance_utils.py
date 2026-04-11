@@ -272,8 +272,12 @@ def run_bench_serving(
     seed=None,
     output_file=None,
 ):
-    metrics_file = os.getenv("METRICS_DATA_FILE")
-    result_file = "./bench_log.txt" if not metrics_file else metrics_file
+    metrics_path = os.getenv("METRICS_DATA_FILE")
+    result_file = (
+        "./bench_log.txt"
+        if not metrics_path
+        else f"{metrics_path}/bench_serving_metrics.txt"
+    )
     logger.info(f"The metrics result file: {result_file}")
 
     write_pkg_info_to_file(result_file)
@@ -374,6 +378,11 @@ def run_aisbench(
     max_concurrency=None,
     num_prompts=None,
 ):
+
+    metrics_path = os.getenv("METRICS_DATA_FILE")
+    result_file = "./aisbench_result" if not metrics_path else metrics_path
+    logger.info(f"The metrics result file: {result_file}")
+
     cmd_args = [
         "bash",
         "/root/sglang/python/sglang/test/ascend/e2e/run_aisbench.sh",
@@ -385,6 +394,7 @@ def run_aisbench(
         str(output_len),
         str(max_concurrency),
         str(num_prompts),
+        result_file,
     ]
     process = subprocess.Popen(
         cmd_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1

@@ -69,8 +69,9 @@ jobs:
           test_case=${{ inputs.test_case }}
           tc_name=${test_case##*/}
           tc_name=${tc_name%.*}
-          export METRICS_DATA_FILE=${test_data_output_path}/${tc_name}.txt
-          echo "Metrics file: ${METRICS_DATA_FILE}"
+          export METRICS_DATA_FILE=${test_data_output_path}/${tc_name}
+          mkdir -p ${METRICS_DATA_FILE}
+          echo "Metrics file path: ${METRICS_DATA_FILE}"
 
           # copy required file from our daily cache
           cp ~/.cache/modelscope/hub/datasets/otavia/ShareGPT_Vicuna_unfiltered/ShareGPT_V3_unfiltered_cleaned_split.json /tmp

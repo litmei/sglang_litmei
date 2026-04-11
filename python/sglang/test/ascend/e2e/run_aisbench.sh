@@ -19,10 +19,10 @@ ${PIP_FOR_AISBENCH} install -r ${AISBENCH_SOURCE_PATH}/requirements/extra.txt -i
 echo "===== Install aisbench in virtual env - End ====="
 
 # Check if the correct number of arguments are provided
-if [ $# -ne 8 ]; then
+if [ $# -ne 9 ]; then
     echo -e "\033[31mUsage:\033[0m"
-    echo "  $0 <IP> <PORT> <MODEL_NAME> <MODEL_PATH> <DATASET> <MAX_OUT_LEN> <BATCH_SIZE> <NUM_PROMPTS>"
-    echo "  Example: $0 127.0.0.1 54321 Qwen2-7B-Instruct /models/qwen gsm8k_gen 1024 32 128"
+    echo "  $0 <IP> <PORT> <MODEL_NAME> <MODEL_PATH> <DATASET> <MAX_OUT_LEN> <BATCH_SIZE> <NUM_PROMPTS> <OUTPUT_PATH>"
+    echo "  Example: $0 127.0.0.1 54321 Qwen2-7B-Instruct /models/qwen gsm8k_gen 1024 32 128 ./result"
     exit 1
 fi
 
@@ -35,11 +35,9 @@ DATASET_PATH=$5
 MAX_OUT_LEN=$6
 BATCH_SIZE=$7
 NUM_PROMPTS=$8
+OUTPUT_PATH=$9
 
-# Create a unique temporary config file (prevents conflicts in parallel execution)
-TMP_CFG=$(touch "/tmp/vllm_api_${MODEL}.py")
-
-# Generate dynamic VLLM API config with user-provided parameters
+TMP_CFG=/tmp/vllm_api_${MODEL}.py
 cat > "$TMP_CFG" << EOF
 from ais_bench.benchmark.models import VLLMCustomAPIChatStream
 models = [
@@ -70,7 +68,7 @@ models = [
 EOF
 
 
-TMP_DATASET=$(touch "/tmp/mm_custom_gen_${MODEL}.py")
+TMP_DATASET=/tmp/mm_custom_gen_${MODEL}.py
 cat > "$TMP_DATASET" << EOF
 from ais_bench.benchmark.openicl.icl_prompt_template.icl_prompt_template_mm import MMPromptTemplate
 from ais_bench.benchmark.openicl.icl_retriever import ZeroRetriever
@@ -129,6 +127,6 @@ echo -e "API config file: $TMP_CFG"
 echo -e "Dataset config file: $TMP_DATASET"
 
 source ${PYTHON_ENV_FOR_AISBENCH}/bin/activate
-CMD="ais_bench --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS"
+CMD="ais_bench --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS --output-dir $OUTPUT_PATH"
 echo "Run command: ${CMD}"
 eval "${CMD}"
