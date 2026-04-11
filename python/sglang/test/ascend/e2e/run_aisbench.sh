@@ -7,7 +7,7 @@ PYTHON_ENV_FOR_AISBENCH=test_env_aisbench
 PIP_FOR_AISBENCH=${PYTHON_ENV_FOR_AISBENCH}/bin/pip
 python -m venv ${PYTHON_ENV_FOR_AISBENCH}
 AISBENCH_SOURCE_PATH=/root/.cache/.cache/benchmark
-AISBENCH_PKG_PATH=/root/.cache/.cache/aisbench-packages-local
+AISBENCH_PKG_PATH=/root/.cache/.cache/aisbench-packages
 if [ ! -d "${AISBENCH_SOURCE_PATH}" ]; then
   echo "The aisbench source does not exist: ${AISBENCH_SOURCE_PATH}."
   echo "git clone https://github.com/AISBench/benchmark.git"
@@ -139,6 +139,6 @@ echo -e "API config file: $TMP_CFG"
 echo -e "Dataset config file: $TMP_DATASET"
 
 source ${PYTHON_ENV_FOR_AISBENCH}/bin/activate
-CMD="ais_bench --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS --output-dir $OUTPUT_PATH"
+CMD="ais_bench --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH"
 echo "Run command: ${CMD}"
 eval "${CMD}"
