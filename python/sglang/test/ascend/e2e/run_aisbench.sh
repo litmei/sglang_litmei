@@ -74,10 +74,7 @@ models = [
         max_out_len=$MAX_OUT_LEN,
         batch_size=$BATCH_SIZE,
         trust_remote_code=True,
-        generation_kwargs=dict(
-            temperature=0,
-            ignore_eos=True
-        )
+        generation_kwargs=dict(temperature=0,ignore_eos=True),
         pred_postprocessor=dict(type=extract_non_reasoning_content),
     )
 ]

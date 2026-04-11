@@ -27,6 +27,8 @@ KIMI_K2_5_ENVS = {
     "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
     "SGLANG_NPU_USE_MLAPO": "1",
     "SGLANG_NPU_USE_MULTI_STREAM": "1",
+    "SGLANG_SCHEDULER_DECREASE_PREFILL_IDLE": "1",
+    "SGLANG_PREFILL_DELAYER_MAX_DELAY_PASSES": "200",
 }
 
 KIMI_K2_5_OTHER_ARGS = [
@@ -93,7 +95,7 @@ class TestKimiK25W4A8(TestAscendPerformanceTestCaseBase):
     envs = KIMI_K2_5_ENVS
     backend = "sglang"
     dataset_name = "random"
-    max_concurrency = 64
+    max_concurrency = 96
     num_prompts = 64
     input_len = 3500
     output_len = 1500

@@ -34,7 +34,7 @@ jobs:
       install_sglang_from_source: false
       transformers_version: ''
 
-  nightly-performance-baseline-single-node-tests:
+  nightly-performance-baseline-single-node-tests-transformers-5p5:
     name: single-node
     if: ${{ !cancelled() && (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     needs: nightly-performance-baseline-single-node-tests-pre
@@ -43,15 +43,39 @@ jobs:
       max-parallel: 2
       matrix:
         test_config:
-#          - name: test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms
-#            test_case: test/registered/ascend/performance/v26/test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms.py
-#            runner: linux-aarch64-a3-4
           - name: test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_50ms
             test_case: test/registered/ascend/performance/v26/test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_50ms.py
             runner: linux-aarch64-a3-16
           - name: test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_20ms
             test_case: test/registered/ascend/performance/v26/test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_20ms.py
             runner: linux-aarch64-a3-16
+    uses: ./.github/workflows/nightly-test-npu-perf-single-node.yml
+    with:
+      runner: ${{ matrix.test_config.runner }}
+      test_config_name: ${{ matrix.test_config.name }}
+      test_case: ${{ matrix.test_config.test_case }}
+      image: 'swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:cann8.5.0-a3-B111'
+      install_sglang_from_source: false
+      transformers_version: '5.5.0'
+
+  nightly-performance-baseline-single-node-tests:
+    name: single-node
+    if: ${{ !cancelled() && (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
+    needs: nightly-performance-baseline-single-node-tests-transformers-5p5
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        test_config:
+#          - name: test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms
+#            test_case: test/registered/ascend/performance/v26/test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms.py
+#            runner: linux-aarch64-a3-4
+#          - name: test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_50ms
+#            test_case: test/registered/ascend/performance/v26/test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_50ms.py
+#            runner: linux-aarch64-a3-16
+#          - name: test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_20ms
+#            test_case: test/registered/ascend/performance/v26/test_ascend_kimi_k2_5_w4a8_8p_in3k5_out1k5_20ms.py
+#            runner: linux-aarch64-a3-16
           - name: test_ascend_qwen3_5_27b_w8a8_2p_in3k5_out1k5_50ms
             test_case: test/registered/ascend/performance/v26/test_ascend_qwen3_5_27b_w8a8_2p_in3k5_out1k5_50ms.py
             runner: linux-aarch64-a3-4
