@@ -49,8 +49,8 @@ BATCH_SIZE=$7
 NUM_PROMPTS=$8
 OUTPUT_PATH=$9
 
-TMP_CFG=/tmp/vllm_api_${MODEL}.py
-/bin/cat > "$TMP_CFG" << EOF
+TMP_CFG=vllm_api_${MODEL}
+/bin/cat > "/tmp/ais_configs/${TMP_CFG}.py" << EOF
 from ais_bench.benchmark.models import VLLMCustomAPIChatStream
 models = [
     dict(
@@ -80,8 +80,8 @@ models = [
 EOF
 
 
-TMP_DATASET=/tmp/mm_custom_gen_${MODEL}.py
-/bin/cat > "$TMP_DATASET" << EOF
+TMP_DATASET=mm_custom_gen_${MODEL}
+/bin/cat > "/tmp/ais_configs/${TMP_DATASET}.py" << EOF
 from ais_bench.benchmark.openicl.icl_prompt_template.icl_prompt_template_mm import MMPromptTemplate
 from ais_bench.benchmark.openicl.icl_retriever import ZeroRetriever
 from ais_bench.benchmark.openicl.icl_inferencer import GenInferencer
@@ -135,10 +135,10 @@ EOF
 
 echo "IP: $IP | Port: $PORT | Model: $MODEL | Path: $PATH"
 echo "Output tokens: $MAX_OUT_LEN | Batch size: $BATCH_SIZE | Prompts num: $NUM_PROMPTS"
-echo -e "API config file: $TMP_CFG"
-echo -e "Dataset config file: $TMP_DATASET"
+echo -e "API config: $TMP_CFG"
+echo -e "Dataset config: $TMP_DATASET"
 
 source ${PYTHON_ENV_FOR_AISBENCH}/bin/activate
-CMD="ais_bench --search --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH"
+CMD="ais_bench --config-dir /tmp/ais_configs --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH"
 echo "Run command: ${CMD}"
 eval "${CMD}"
