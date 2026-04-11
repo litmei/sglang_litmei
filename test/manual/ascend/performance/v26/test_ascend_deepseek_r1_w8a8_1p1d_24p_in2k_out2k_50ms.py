@@ -95,7 +95,7 @@ MODEL_CONFIG = {
         "--quantization",
         "modelslim",
         "--moe-a2a-backend",
-        "deepep",
+        "ascend_fuseep",
         "--enable-dp-attention",
         "--deepep-mode",
         "low_latency",

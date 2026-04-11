@@ -81,7 +81,7 @@ OTHER_ARGS = [
     "--speculative-num-draft-tokens",
     4,
     # "--base-gpu-id",
-    # 2,
+    # 4,
 ]
 
 
