@@ -380,24 +380,25 @@ def run_aisbench(
 ):
 
     metrics_path = os.getenv("METRICS_DATA_FILE")
-    result_file = "./aisbench_result" if not metrics_path else metrics_path
-    logger.info(f"The metrics result file: {result_file}")
+    result_path = "./aisbench_result" if not metrics_path else metrics_path
+    logger.info(f"The metrics result file: {result_path}")
 
-    cmd_args = [
-        "/bin/bash",
-        "/root/sglang/python/sglang/test/ascend/e2e/run_aisbench.sh",
-        host,
-        str(port),
-        os.path.basename(model_path),
-        model_path,
-        dataset_path,
-        str(output_len),
-        str(max_concurrency),
-        str(num_prompts),
-        result_file,
-    ]
+    # 构造完整的命令字符串
+    cmd = f"/bin/bash /root/sglang/python/sglang/test/ascend/e2e/run_aisbench.sh "
+    cmd += f"{host} "
+    cmd += f"{str(port)} "
+    cmd += f"{os.path.basename(model_path)} "
+    cmd += f"{model_path} "
+    cmd += f"{dataset_path} "
+    cmd += f"{str(output_len)} "
+    cmd += f"{str(max_concurrency)} "
+    cmd += f"{str(num_prompts)} "
+    cmd += f"{result_path}"
+
+    logger.info(f"Command: {cmd}")
+
     process = subprocess.Popen(
-        cmd_args,
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -416,7 +417,7 @@ def run_aisbench(
 
         if process.returncode != 0:
             logger.error(f"Command failed with return code: {process.returncode}")
-            raise subprocess.CalledProcessError(process.returncode, cmd_args)
+            raise subprocess.CalledProcessError(process.returncode, cmd)
 
         logger.info("Command executed successfully")
         return "\n".join(output_lines)
