@@ -11,7 +11,7 @@ from sglang.test.ascend.test_ascend_utils import (
     send_concurrent_requests,
 )
 from sglang.test.ci.ci_register import register_npu_ci
-from sglang.test.few_shot_gsm8k import run_eval
+from sglang.test.run_eval import run_eval
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
@@ -215,18 +215,25 @@ class TestBatchSize64Timeout0p001(CustomTestCase):
 
     def test_gsm8k_accuracy(self):
         args = SimpleNamespace(
-            host="http://127.0.0.1",
-            port=int(self.base_url.split(":")[-1]),
+            base_url=self.base_url,
+            eval_name="gsm8k",
+            api="completion",
+            num_examples=200,
+            num_threads=128,
+            max_new_tokens=512,
         )
         metrics = run_eval(args)
         accuracy = 0.86
         self.assertGreaterEqual(
-            metrics["accuracy"],
+            metrics["score"],
             accuracy,
-            f"GSM8K accuracy {metrics['accuracy']} < {accuracy}",
+            f"GSM8K accuracy {metrics['score']} < {accuracy}",
         )
         logger.info(
-            f"GSM8K accuracy with batch_size=64 timeout=0.001: {metrics['accuracy']}"
+            f"GSM8K accuracy with batch_size=64 timeout=0.001: {metrics['score']}"
+        )
+        logger.info(
+            f"GSM8K latency: {metrics['latency']:.2f}s, throughput: {metrics['output_throughput']:.2f} tok/s"
         )
 
 
@@ -266,18 +273,25 @@ class TestBatchSize1Timeout0p005(CustomTestCase):
 
     def test_gsm8k_accuracy(self):
         args = SimpleNamespace(
-            host="http://127.0.0.1",
-            port=int(self.base_url.split(":")[-1]),
+            base_url=self.base_url,
+            eval_name="gsm8k",
+            api="completion",
+            num_examples=200,
+            num_threads=128,
+            max_new_tokens=512,
         )
         metrics = run_eval(args)
         accuracy = 0.86
         self.assertGreaterEqual(
-            metrics["accuracy"],
+            metrics["score"],
             accuracy,
-            f"GSM8K accuracy {metrics['accuracy']} < {accuracy}",
+            f"GSM8K accuracy {metrics['score']} < {accuracy}",
         )
         logger.info(
-            f"GSM8K accuracy with batch_size=1 timeout=0.005: {metrics['accuracy']}"
+            f"GSM8K accuracy with batch_size=1 timeout=0.005: {metrics['score']}"
+        )
+        logger.info(
+            f"GSM8K latency: {metrics['latency']:.2f}s, throughput: {metrics['output_throughput']:.2f} tok/s"
         )
 
 
