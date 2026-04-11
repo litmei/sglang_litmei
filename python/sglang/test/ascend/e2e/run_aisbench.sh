@@ -5,12 +5,12 @@ set -e
 echo "===== Install aisbench in virtual env - Begin ====="
 PYTHON_ENV_FOR_AISBENCH=test_env_aisbench
 PIP_FOR_AISBENCH=${PYTHON_ENV_FOR_AISBENCH}/bin/pip
-python -m venv ${PYTHON_ENV_FOR_AISBENCH}
+/usr/bin/python -m venv ${PYTHON_ENV_FOR_AISBENCH}
 AISBENCH_SOURCE_PATH=/root/.cache/.cache/benchmark
 if [ ! -d "${AISBENCH_SOURCE_PATH}" ]; then
   echo "The dependent aisbench package does not exist: ${AISBENCH_SOURCE_PATH}."
   echo "git clone https://github.com/AISBench/benchmark.git"
-  git clone https://github.com/AISBench/benchmark.git
+  /usr/bin/git clone https://github.com/AISBench/benchmark.git
   AISBENCH_SOURCE_PATH="./benchmark/"
 fi
 ${PIP_FOR_AISBENCH} install -U pip -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
@@ -39,7 +39,7 @@ NUM_PROMPTS=$8
 OUTPUT_PATH=$9
 
 TMP_CFG=/tmp/vllm_api_${MODEL}.py
-cat > "$TMP_CFG" << EOF
+/bin/cat > "$TMP_CFG" << EOF
 from ais_bench.benchmark.models import VLLMCustomAPIChatStream
 models = [
     dict(
@@ -70,7 +70,7 @@ EOF
 
 
 TMP_DATASET=/tmp/mm_custom_gen_${MODEL}.py
-cat > "$TMP_DATASET" << EOF
+/bin/cat > "$TMP_DATASET" << EOF
 from ais_bench.benchmark.openicl.icl_prompt_template.icl_prompt_template_mm import MMPromptTemplate
 from ais_bench.benchmark.openicl.icl_retriever import ZeroRetriever
 from ais_bench.benchmark.openicl.icl_inferencer import GenInferencer
