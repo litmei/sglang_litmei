@@ -75,7 +75,7 @@ class TestDeepepLowlatencyQwen3(CustomTestCase):
     def test_gsm8k(self):
         # Test Scenario: Verify the model's mathematical reasoning accuracy on the GSM8K dataset
         args = SimpleNamespace(
-            num_shots=8,
+            num_shots=5,
             data_path=None,
             num_questions=200,
             max_new_tokens=512,
@@ -89,6 +89,23 @@ class TestDeepepLowlatencyQwen3(CustomTestCase):
             self.accuracy,
             f'Accyracy of {self.model} is {str(metrics["accuracy"])}, is lower than {self.accuracy}',
         )
+        # # Test Scenario: Verify the model's accuracy on GSM8K dataset (mathematical reasoning evaluation)
+        # args = SimpleNamespace(
+        #     base_url=self.base_url,
+        #     model=self.model,
+        #     eval_name="gsm8k",
+        #     data_path=None,
+        #     num_examples=200,
+        #     num_threads=64,
+        #     num_shots=5,
+        #     max_new_tokens=512,
+        # )
+        # metrics = run_eval(args)
+        # self.assertGreaterEqual(
+        #     metrics["score"],
+        #     self.accuracy,
+        #     f'Accuracy of {self.model} is {str(metrics["score"])}, is lower than {self.accuracy}',
+        # )
 
 
 if __name__ == "__main__":
