@@ -1,8 +1,6 @@
 #!/bin/bash
 
 set -e
-. ~/.bashrc
-export PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin:$PATH
 
 echo "===== Install aisbench in virtual env - Begin ====="
 PYTHON_ENV_FOR_AISBENCH=test_env_aisbench

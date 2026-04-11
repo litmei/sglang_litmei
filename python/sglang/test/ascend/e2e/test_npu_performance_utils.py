@@ -397,7 +397,12 @@ def run_aisbench(
         result_file,
     ]
     process = subprocess.Popen(
-        cmd_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        cmd_args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        shell=True,
     )
 
     output_lines = []
