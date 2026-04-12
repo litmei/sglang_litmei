@@ -31,10 +31,10 @@ fi
 echo "===== Install aisbench in virtual env - End ====="
 
 # Check if the correct number of arguments are provided
-if [ $# -ne 9 ]; then
+if [ $# -ne 10 ]; then
     echo -e "\033[31mUsage:\033[0m"
-    echo "  $0 <IP> <PORT> <MODEL_NAME> <MODEL_PATH> <DATASET> <MAX_OUT_LEN> <BATCH_SIZE> <NUM_PROMPTS> <OUTPUT_PATH>"
-    echo "  Example: $0 127.0.0.1 54321 Qwen2-7B-Instruct /models/qwen gsm8k_gen 1024 32 128 ./result"
+    echo "  $0 <IP> <PORT> <MODEL_NAME> <MODEL_PATH> <DATASET_TYPE> <DATASET_PATH> <MAX_OUT_LEN> <BATCH_SIZE> <NUM_PROMPTS> <OUTPUT_PATH>"
+    echo "  Example: $0 127.0.0.1 54321 Qwen2-7B-Instruct /models/qwen gsm8k_gen /path/to/gsm8k 1024 32 128 ./result"
     exit 1
 fi
 
@@ -42,12 +42,13 @@ fi
 IP=$1
 PORT=$2
 MODEL=$3
-PATH=$4
-DATASET_PATH=$5
-MAX_OUT_LEN=$6
-BATCH_SIZE=$7
-NUM_PROMPTS=$8
-OUTPUT_PATH=$9
+MODEL_PATH=$4
+DATASET_TYPE=$5
+DATASET_PATH=$6
+MAX_OUT_LEN=$7
+BATCH_SIZE=$8
+NUM_PROMPTS=$9
+OUTPUT_PATH=${10}
 
 AISBENCH_CINFG_PATH=/tmp/ais_configs
 
@@ -62,7 +63,7 @@ models = [
         attr="service",
         type=VLLMCustomAPIChatStream,
         abbr='vllm-api-stream-chat',
-        path="$PATH",
+        path="$MODEL_PATH",
         model="$MODEL",
         stream=True,
         request_rate=0,
@@ -84,8 +85,15 @@ EOF
 
 DATASETS_CONFIG_PATH=${AISBENCH_CINFG_PATH}/datasets
 /bin/mkdir -p ${DATASETS_CONFIG_PATH}
-TMP_DATASET=mm_custom_gen_${MODEL}
-/bin/cat > "${DATASETS_CONFIG_PATH}/${TMP_DATASET}.py" << EOF
+TMP_DATASET=$DATASET_PATH
+if [ "$DATASET_TYPE" == "mm-custom-gen" ]; then
+    if [ ! -f "$DATASET_PATH" ]; then
+        echo "The mm-custom-gen dataset file does not exist: ${DATASET_PATH}."
+        exit 1
+    fi
+
+    TMP_DATASET=mm_custom_gen_${MODEL}
+    /bin/cat > "${DATASETS_CONFIG_PATH}/${TMP_DATASET}.py" << EOF
 from ais_bench.benchmark.openicl.icl_prompt_template.icl_prompt_template_mm import MMPromptTemplate
 from ais_bench.benchmark.openicl.icl_retriever import ZeroRetriever
 from ais_bench.benchmark.openicl.icl_inferencer import GenInferencer
@@ -136,13 +144,51 @@ mm_custom_datasets = [
 ]
 EOF
 
+elif [ "$DATASET_TYPE" == "gsm8k" ]; then
+    TMP_DATASET=gsm8k_gen_${MODEL}
+    /bin/cat > "${DATASETS_CONFIG_PATH}/${TMP_DATASET}.py" << EOF
+from ais_bench.benchmark.openicl.icl_prompt_template import PromptTemplate
+from ais_bench.benchmark.openicl.icl_retriever import ZeroRetriever
+from ais_bench.benchmark.openicl.icl_inferencer import GenInferencer
+from ais_bench.benchmark.openicl.icl_evaluator import AccEvaluator
+from ais_bench.benchmark.datasets import GSM8KDataset, gsm8k_postprocess, gsm8k_dataset_postprocess, Gsm8kEvaluator
+gsm8k_reader_cfg = dict(input_columns=['question'], output_column='answer')
 
-echo "IP: $IP | Port: $PORT | Model: $MODEL | Path: $PATH"
+gsm8k_infer_cfg = dict(
+    prompt_template=dict(
+        type=PromptTemplate,
+        template="{question}"),
+    retriever=dict(type=ZeroRetriever),
+    inferencer=dict(type=GenInferencer))
+
+gsm8k_eval_cfg = dict(evaluator=dict(type=Gsm8kEvaluator),
+                      pred_role='BOT',
+                      pred_postprocessor=dict(type=gsm8k_postprocess),
+                      dataset_postprocessor=dict(type=gsm8k_dataset_postprocess))
+
+gsm8k_datasets = [
+    dict(
+        abbr='gsm8k',
+        type=GSM8KDataset,
+        path='ais_bench/datasets/gsm8k',  # 数据集路径，使用相对路径时相对于源码根路径，支持绝对路径
+        reader_cfg=gsm8k_reader_cfg,
+        infer_cfg=gsm8k_infer_cfg,
+        eval_cfg=gsm8k_eval_cfg)
+]
+EOF
+
+else
+    echo "The dataset type $DATASET_TYPE is not supported."
+    exit 1
+fi
+
+
+echo "IP: $IP | Port: $PORT | Model: $MODEL | Model Path: $MODEL_PATH"
 echo "Output tokens: $MAX_OUT_LEN | Batch size: $BATCH_SIZE | Prompts num: $NUM_PROMPTS"
-echo -e "API config: $TMP_CFG"
+echo -e "Model config: $TMP_CFG"
 echo -e "Dataset config: $TMP_DATASET"
 
 source ${PYTHON_ENV_FOR_AISBENCH}/bin/activate
-CMD="ais_bench --config-dir /tmp/ais_configs --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH"
+CMD="ais_bench --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH"
 echo "Run command: ${CMD}"
 eval "${CMD}"
