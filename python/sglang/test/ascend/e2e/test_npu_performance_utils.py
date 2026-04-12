@@ -437,27 +437,28 @@ def run_aisbench(
             )
 
         tps_matches = re.findall(
-            r"Output\s+Token\s+Throughput\s+total\s+([\d.]+)\s+token/s",
+            r"Output\s+Token\s+Throughput\s+total\s+([\d.]+)\s+token\s*/?\s*s",
             simplified_output,
         )
         if len(tps_matches) < 2:
             tps_matches += re.findall(
-                r"OutputTokenThroughput\s+total\s+([\d.]+)\s+token/s", simplified_output
+                r"OutputTokenThroughput\s+total\s+([\d.]+)\s+token\s*/?\s*s", simplified_output
             )
 
         logger.info(
             f"Found {len(tps_matches)} matches for Output Token Throughput: {tps_matches}"
         )
-        if len(tps_matches) >= 2:
-            metrics["total_tps"] = tps_matches[1]
-            logger.info(
-                f"Extracted total_tps: {metrics['total_tps']} token/s (from Common Metric section)"
-            )
-        elif tps_matches:
+        if tps_matches:
+            # The first match is from the Common Metric section, which is the total throughput
             metrics["total_tps"] = tps_matches[0]
-            logger.info(
-                f"Extracted total_tps: {metrics['total_tps']} token/s (only one match found)"
-            )
+            if len(tps_matches) >= 2:
+                logger.info(
+                    f"Extracted total_tps: {metrics['total_tps']} token/s (from Common Metric section)"
+                )
+            else:
+                logger.info(
+                    f"Extracted total_tps: {metrics['total_tps']} token/s (only one match found)"
+                )
         else:
             logger.warning("Could not extract total_tps from output")
             logger.info(

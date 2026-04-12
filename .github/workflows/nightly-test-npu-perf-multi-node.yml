@@ -130,9 +130,9 @@ jobs:
           test_case="${{ inputs.test_case }}"
           tc_name=${test_case##*/}
           tc_name=${tc_name%.*}
-          metrics_data_file=${test_data_output_path}/${tc_name}
-          mkdir -p ${METRICS_DATA_FILE}
-          echo "Metrics file path: ${metrics_data_file}"
+          metrics_data_path=${test_data_output_path}/${tc_name}
+          mkdir -p ${metrics_data_path}
+          echo "Metrics file path: ${metrics_data_path}"
 
           prefill_decode_deployment="${{ inputs.prefill_decode_deployment }}"
           kube_job_type=""
@@ -151,7 +151,7 @@ jobs:
             --env ci \
             --image ${{ inputs.image }} \
             --sglang-source-relative-path ${sglang_source_relative_path} \
-            --metrics-data-file ${metrics_data_file} \
+            --metrics-data-file ${metrics_data_path} \
             --test-case ${test_case} \
             --kube-name-space ${NAMESPACE} \
             --kube-job-type ${kube_job_type} \
