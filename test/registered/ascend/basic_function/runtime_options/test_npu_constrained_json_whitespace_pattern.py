@@ -6,6 +6,7 @@ import unittest
 import openai
 
 from sglang.srt.utils import kill_process_tree
+from sglang.test.ascend.test_ascend_utils import LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -13,7 +14,6 @@ from sglang.test.test_utils import (
     CustomTestCase,
     popen_launch_server,
 )
-from sglang.test.ascend.test_ascend_utils import LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH
 
 register_npu_ci(est_time=400, suite="nightly-1-npu-a3", nightly=True)
 
@@ -30,7 +30,10 @@ class TestJSONModeMixin:
                     "role": "system",
                     "content": "You are a helpful AI assistant that strictly follows the provided JSON schema. Do not generate empty objects or extra characters outside the JSON.",
                 },
-                {"role": "user", "content": "Introduce a popular coffee drink. Use the exact Json schema provided."},
+                {
+                    "role": "user",
+                    "content": "Introduce a popular coffee drink. Use the exact Json schema provided.",
+                },
             ],
             temperature=0,
             max_tokens=128,
@@ -39,12 +42,26 @@ class TestJSONModeMixin:
                 "schema": {
                     "type": "object",
                     "properties": {
-                        "drink_name": {"type": "string", "minLength": 3, "maxLength": 50},
+                        "drink_name": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 50
+                        },
                         "origin": {"type": "string", "minLength": 2, "maxLength": 50},
-                        "main_ingredients": {"type": "array", "items":{"type": "string", "minLength": 2}, "minItems": 3, "maxItems": 6},
+                        "main_ingredients": {
+                            "type": "array",
+                            "items":{"type": "string", "minLength": 2},
+                            "minItems": 3,
+                            "maxItems": 6
+                        },
                         "taste_profile": {"type": "string", "minLength": 10, "maxLength": 100},
                     },
-                    "required": ["drink_name", "origin", "main_ingredients", "taste_profile"],
+                    "required": [
+                        "drink_name",
+                        "origin",
+                        "main_ingredients",
+                        "taste_profile"
+                    ],
                     "additionalProperties": False,
                 },
             },
@@ -57,7 +74,9 @@ class TestJSONModeMixin:
         try:
             js_obj = json.loads(text)
         except json.JSONDecodeError as e:
-            self.fail(f"Response is not valid JSON. Error: {e}. Response content: {text}")
+            self.fail(
+                f"Response is not valid JSON. Error: {e}. Response content: {text}"
+            )
 
         # Verify it is a JSON object (dict)
         self.assertIsInstance(js_obj, dict, f"Response is not a JSON object: {text}")
@@ -72,7 +91,10 @@ class TestJSONModeMixin:
                     "role": "system",
                     "content": "You are a helpful AI assistant that strictly follows the provided JSON schema. Do not generate empty objects or extra characters outside the JSON.",
                 },
-                {"role": "user", "content": "Introduce a popular coffee drink. Use the exact Json schema provided."},
+                {
+                    "role": "user",
+                    "content": "Introduce a popular coffee drink. Use the exact Json schema provided.",
+                },
             ],
             temperature=0,
             max_tokens=128,
@@ -81,13 +103,26 @@ class TestJSONModeMixin:
                 "schema": {
                     "type": "object",
                     "properties": {
-                        "drink_name": {"type": "string", "minLength": 3, "maxLength": 50},
+                        "drink_name": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 50
+                        },
                         "origin": {"type": "string", "minLength": 2, "maxLength": 50},
-                        "main_ingredients": {"type": "array", "items": {"type": "string", "minLength": 2},
-                                             "minItems": 3, "maxItems": 6},
+                        "main_ingredients": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 2},
+                            "minItems": 3,
+                            "maxItems": 6
+                        },
                         "taste_profile": {"type": "string", "minLength": 10, "maxLength": 100},
                     },
-                    "required": ["drink_name", "origin", "main_ingredients", "taste_profile"],
+                    "required": [
+                        "drink_name",
+                        "origin",
+                        "main_ingredients",
+                        "taste_profile"
+                    ],
                     "additionalProperties": False,
                 },
             },
@@ -101,13 +136,17 @@ class TestJSONModeMixin:
                 chunks.append(chunk.choices[0].delta.content)
         full_response = "".join(chunks)
 
-        print(f"Concatenated response ({len(full_response)} characters): {full_response}")
+        print(
+            f"Concatenated response ({len(full_response)} characters): {full_response}"
+        )
 
         # Verify the concatenated result is valid JSON
         try:
             js_obj = json.loads(full_response)
         except json.JSONDecodeError as e:
-            self.fail(f"Streamed response is not valid JSON. Error: {e}. Response content: {full_response}")
+            self.fail(
+                f"Streamed response is not valid JSON. Error: {e}. Response content: {full_response}"
+            )
 
         self.assertIsInstance(js_obj, dict)
         self._verify_whitespace_pattern_constraint(full_response)
@@ -118,13 +157,14 @@ class TestJSONModeMixin:
         when the grammar backend is outlines/llguidance (pattern: [\n]?); for other backends, the parameter has no effect (no whitespace).
         """
         # Detect newline whitespace (\n) in JSON string (matching pattern [\n]?)
-        has_newline_whitespace = bool(re.search(r'\n', json_str))
+        has_newline_whitespace = bool(re.search(r"\n", json_str))
 
         # Expect newline whitespace (parameter takes effect)
         self.assertTrue(
             has_newline_whitespace,
-            f"[{self.backend}] Missing expected newline whitespace after enabling --constrained-json-whitespace-pattern! JSON: {json_str}"
+            f"[{self.backend}] Missing expected newline whitespace after enabling --constrained-json-whitespace-pattern! JSON: {json_str}",
         )
+
 
 class ServerWithGrammarBackend(CustomTestCase):
     """Testcase: Verify that when the grammar backend is outlines/llguidance, --constrained-json-whitespace-pattern=[\n]? takes effect (JSON output contains newline whitespace)

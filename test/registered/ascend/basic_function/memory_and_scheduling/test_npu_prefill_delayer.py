@@ -14,7 +14,10 @@ import torch
 from sglang.bench_serving import run_benchmark
 from sglang.srt.managers.prefill_delayer import PrefillDelayer
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ascend.test_ascend_utils import QWEN3_0_6B_WEIGHTS_PATH, DEEPSEEK_CODER_V2_LITE_WEIGHTS_PATH
+from sglang.test.ascend.test_ascend_utils import (
+    DEEPSEEK_CODER_V2_LITE_WEIGHTS_PATH,
+    QWEN3_0_6B_WEIGHTS_PATH,
+)
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.run_eval import run_eval
 from sglang.test.test_utils import (
@@ -211,6 +214,7 @@ class TestPrefillDelayerNegotiate(unittest.TestCase):
 
 # ============================ E2E Tests ============================
 
+
 class TestPrefillDelayerThroughputOnlineServing(CustomTestCase):
     """Testcase: Online serving scenario: Verify that throughput is improved by at least 5%
     when PrefillDelayer is enabled, compared with disabled.
@@ -218,6 +222,7 @@ class TestPrefillDelayerThroughputOnlineServing(CustomTestCase):
     [Test Category] Parameter
     [Test Target] --enable-prefill-delayer
     """
+
     def test_throughput_comparison(self):
         _run_throughput_comparison(
             self,
@@ -245,11 +250,17 @@ class TestPrefillDelayerThroughputOfflineGen(CustomTestCase):
     [Test Category] Parameter
     [Test Target] --enable-prefill-delayer; --prefill-delayer-token-usage-low-watermark
     """
+
     def test_throughput_comparison(self):
         _run_throughput_comparison(
             self,
             test_name="offline_gen",
-            other_launch_args=["--max-total-tokens", "200000", "--attention-backend", "ascend",],
+            other_launch_args=[
+                "--max-total-tokens",
+                "200000",
+                "--attention-backend",
+                "ascend",
+            ],
             other_benchmark_args=dict(
                 num_prompts=800,
                 random_input_len=30000,
@@ -448,6 +459,7 @@ class TestPrefillDelayerAccuracy(CustomTestCase):
     [Test Category] Parameter
     [Test Target] --enable-prefill-delayer
     """
+
     def test_1_mgsm_en_has_prefill_delayer(self):
         self._run_accuracy_test(prefill_delayer=True)
 

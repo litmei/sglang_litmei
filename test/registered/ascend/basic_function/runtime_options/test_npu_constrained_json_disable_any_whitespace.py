@@ -5,6 +5,7 @@ import unittest
 import openai
 
 from sglang.srt.utils import kill_process_tree
+from sglang.test.ascend.test_ascend_utils import LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -12,7 +13,6 @@ from sglang.test.test_utils import (
     CustomTestCase,
     popen_launch_server,
 )
-from sglang.test.ascend.test_ascend_utils import LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH
 
 register_npu_ci(est_time=400, suite="nightly-1-npu-a3", nightly=True)
 
@@ -101,11 +101,12 @@ class TestJSONModeMixin:
         self._verify_whitespace_constraint(full_response)
 
     def _verify_whitespace_constraint(self, json_str):
-        has_whitespace = bool(re.search(r'\n', json_str))
+        has_newline = bool(re.search(r'\n', json_str))
         self.assertFalse(
-            has_whitespace,
-            f"[{self.backend}] Whitespace characters still exist after enabling --constrained-json-disable-any-whitespace! JSON: {json_str}"
+            has_newline,
+            f"[{self.backend}] Whitespace characters still exist after enabling --constrained-json-disable-any-whitespace! JSON: {json_str}",
         )
+
 
 class ServerWithGrammarBackend(CustomTestCase):
     """Testcase: Verify that when the grammar backend is xgrammar/outlines and the --constrained-json-disable-any-whitespace parameter is enabled, the JSON output contains no whitespace characters
