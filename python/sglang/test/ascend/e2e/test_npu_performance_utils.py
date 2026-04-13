@@ -29,6 +29,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+BENCHMARK_TOOL_DEFAULT = "aisbench"
+
 PYTHON_FOR_TEST_TOOL = "test_env_transformers_tool/bin/python"
 if not os.path.exists(PYTHON_FOR_TEST_TOOL) or not os.access(
     PYTHON_FOR_TEST_TOOL, os.X_OK
@@ -248,7 +250,11 @@ def write_pkg_info_to_file(result_file):
                 f.write(pkg + "\n")
                 logger.info(pkg)
             f.write(get_cann_version() + "\n")
-            f.write("transformers: " + transformers.__version__ + "\n")
+            transformers_version_info = (
+                "transformers: " + transformers.__version__ + "\n"
+            )
+            f.write(transformers_version_info)
+            logger.info(transformers_version_info)
 
     except Exception as e:
         logger.error(f"Error getting packages: {e}")
@@ -373,11 +379,12 @@ def run_bench_serving(
 def run_aisbench(
     host,
     port,
-    model_path=None,
-    dataset_path=None,
-    output_len=None,
-    max_concurrency=None,
-    num_prompts=None,
+    model_path,
+    dataset_type,
+    dataset_path,
+    output_len,
+    max_concurrency,
+    num_prompts,
 ):
 
     metrics_path = os.getenv("METRICS_DATA_FILE")
@@ -389,6 +396,7 @@ def run_aisbench(
     cmd += f"{str(port)} "
     cmd += f"{os.path.basename(model_path)} "
     cmd += f"{model_path} "
+    cmd += f"{dataset_type} "
     cmd += f"{dataset_path} "
     cmd += f"{str(output_len)} "
     cmd += f"{str(max_concurrency)} "
@@ -437,27 +445,29 @@ def run_aisbench(
             )
 
         tps_matches = re.findall(
-            r"Output\s+Token\s+Throughput\s+total\s+([\d.]+)\s+token/s",
+            r"Output\s+Token\s+Throughput\s+total\s+([\d.]+)\s+token\s*/?\s*s",
             simplified_output,
         )
         if len(tps_matches) < 2:
             tps_matches += re.findall(
-                r"OutputTokenThroughput\s+total\s+([\d.]+)\s+token/s", simplified_output
+                r"OutputTokenThroughput\s+total\s+([\d.]+)\s+token\s*/?\s*s",
+                simplified_output,
             )
 
         logger.info(
             f"Found {len(tps_matches)} matches for Output Token Throughput: {tps_matches}"
         )
-        if len(tps_matches) >= 2:
-            metrics["total_tps"] = tps_matches[1]
-            logger.info(
-                f"Extracted total_tps: {metrics['total_tps']} token/s (from Common Metric section)"
-            )
-        elif tps_matches:
+        if tps_matches:
+            # The first match is from the Common Metric section, which is the total throughput
             metrics["total_tps"] = tps_matches[0]
-            logger.info(
-                f"Extracted total_tps: {metrics['total_tps']} token/s (only one match found)"
-            )
+            if len(tps_matches) >= 2:
+                logger.info(
+                    f"Extracted total_tps: {metrics['total_tps']} token/s (from Common Metric section)"
+                )
+            else:
+                logger.info(
+                    f"Extracted total_tps: {metrics['total_tps']} token/s (only one match found)"
+                )
         else:
             logger.warning("Could not extract total_tps from output")
             logger.info(
@@ -539,7 +549,10 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
-    aisbench_dataset_config = None
+    aisbench_dataset_type = "gsm8k"  # gsm8k or mm-custom-gen
+    aisbench_dataset_path = (
+        None  # keep none for gsm8k; set a json config file for mm_custom_gen
+    )
     other_args = None
     timeout = DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH
     envs = None
@@ -598,14 +611,15 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
                 host=host,
                 port=port,
                 model_path=self.model,
-                dataset_path=self.aisbench_dataset_config,
+                dataset_type=self.aisbench_dataset_type,
+                dataset_path=self.aisbench_dataset_path,
                 output_len=self.output_len,
                 max_concurrency=self.max_concurrency,
                 num_prompts=self.num_prompts,
             )
             assert_metrics(self, metrics)
-        else:
 
+        else:
             bench_params = {
                 "host": host,
                 "port": port,
@@ -631,9 +645,14 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
 
 class TestAscendPerfMultiNodePdMixTestCaseBase(CustomTestCase):
     model_config = None
+    benchmark_tool = "bench-serving"
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
+    aisbench_dataset_type = "gsm8k"  # gsm8k or mm-custom-gen
+    aisbench_dataset_path = (
+        None  # keep none for gsm8k; set a json config file for mm_custom_gen
+    )
     max_attempts = 2
     request_rate = None
     max_concurrency = None
@@ -698,34 +717,53 @@ class TestAscendPerfMultiNodePdMixTestCaseBase(CustomTestCase):
     @retry()
     @check_role(allowed_roles=["master", "worker"])
     def run_throughput(self):
-        bench_params = {
-            "host": self.host,
-            "port": str(self.port),
-            "model_path": self.model_config.get("model_path"),
-            "backend": self.backend,
-            "dataset_name": self.dataset_name,
-            "dataset_path": self.dataset_path,
-            "request_rate": self.request_rate,
-            "max_concurrency": self.max_concurrency,
-            "num_prompts": self.num_prompts,
-            "input_len": self.input_len,
-            "output_len": self.output_len,
-            "random_range_ratio": self.random_range_ratio,
-            "image_resolution": self.image_resolution,
-            "image_count": self.image_count,
-            "warmup_requests": self.warmup_requests,
-            "seed": self.seed,
-        }
-        logger.info(f"Starting benchmark with parameters: {bench_params}")
-        metrics = run_bench_serving(**bench_params)
-        assert_metrics(self, metrics)
+        if self.benchmark_tool == "aisbench":
+            metrics = run_aisbench(
+                host=self.host,
+                port=str(self.port),
+                model_path=self.model,
+                dataset_type=self.aisbench_dataset_type,
+                dataset_path=self.aisbench_dataset_path,
+                output_len=self.output_len,
+                max_concurrency=self.max_concurrency,
+                num_prompts=self.num_prompts,
+            )
+            assert_metrics(self, metrics)
+
+        else:
+            bench_params = {
+                "host": self.host,
+                "port": str(self.port),
+                "model_path": self.model_config.get("model_path"),
+                "backend": self.backend,
+                "dataset_name": self.dataset_name,
+                "dataset_path": self.dataset_path,
+                "request_rate": self.request_rate,
+                "max_concurrency": self.max_concurrency,
+                "num_prompts": self.num_prompts,
+                "input_len": self.input_len,
+                "output_len": self.output_len,
+                "random_range_ratio": self.random_range_ratio,
+                "image_resolution": self.image_resolution,
+                "image_count": self.image_count,
+                "warmup_requests": self.warmup_requests,
+                "seed": self.seed,
+            }
+            logger.info(f"Starting benchmark with parameters: {bench_params}")
+            metrics = run_bench_serving(**bench_params)
+            assert_metrics(self, metrics)
 
 
 class TestAscendPerfMultiNodePdSepTestCaseBase(CustomTestCase):
     model_config = None
+    benchmark_tool = "bench-serving"
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
+    aisbench_dataset_type = "gsm8k"  # gsm8k or mm-custom-gen
+    aisbench_dataset_path = (
+        None  # keep none for gsm8k; set a json config file for mm_custom_gen
+    )
     max_attempts = 2
     request_rate = None
     max_concurrency = None
@@ -807,24 +845,38 @@ class TestAscendPerfMultiNodePdSepTestCaseBase(CustomTestCase):
     @retry()
     @check_role(allowed_roles=["router"])
     def run_throughput(self):
-        bench_params = {
-            "host": self.host,
-            "port": str(self.port),
-            "model_path": self.model_config.get("model_path"),
-            "backend": self.backend,
-            "dataset_name": self.dataset_name,
-            "dataset_path": self.dataset_path,
-            "request_rate": self.request_rate,
-            "max_concurrency": self.max_concurrency,
-            "num_prompts": self.num_prompts,
-            "input_len": self.input_len,
-            "output_len": self.output_len,
-            "random_range_ratio": self.random_range_ratio,
-            "image_resolution": self.image_resolution,
-            "image_count": self.image_count,
-            "warmup_requests": self.warmup_requests,
-            "seed": self.seed,
-        }
-        logger.info(f"Starting benchmark with parameters: {bench_params}")
-        metrics = run_bench_serving(**bench_params)
-        assert_metrics(self, metrics)
+        if self.benchmark_tool == "aisbench":
+            metrics = run_aisbench(
+                host=self.host,
+                port=str(self.port),
+                model_path=self.model,
+                dataset_type=self.aisbench_dataset_type,
+                dataset_path=self.aisbench_dataset_path,
+                output_len=self.output_len,
+                max_concurrency=self.max_concurrency,
+                num_prompts=self.num_prompts,
+            )
+            assert_metrics(self, metrics)
+
+        else:
+            bench_params = {
+                "host": self.host,
+                "port": str(self.port),
+                "model_path": self.model_config.get("model_path"),
+                "backend": self.backend,
+                "dataset_name": self.dataset_name,
+                "dataset_path": self.dataset_path,
+                "request_rate": self.request_rate,
+                "max_concurrency": self.max_concurrency,
+                "num_prompts": self.num_prompts,
+                "input_len": self.input_len,
+                "output_len": self.output_len,
+                "random_range_ratio": self.random_range_ratio,
+                "image_resolution": self.image_resolution,
+                "image_count": self.image_count,
+                "warmup_requests": self.warmup_requests,
+                "seed": self.seed,
+            }
+            logger.info(f"Starting benchmark with parameters: {bench_params}")
+            metrics = run_bench_serving(**bench_params)
+            assert_metrics(self, metrics)
