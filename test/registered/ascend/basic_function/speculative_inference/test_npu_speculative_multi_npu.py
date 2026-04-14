@@ -1,6 +1,4 @@
 import os
-import re
-import tempfile
 import unittest
 
 import requests
@@ -83,12 +81,6 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.base_url = DEFAULT_URL_FOR_TEST
-        cls.out_log_file = tempfile.NamedTemporaryFile(
-            mode="w+", encoding="utf-8", delete=False, suffix=".txt"
-        )
-        cls.err_log_file = tempfile.NamedTemporaryFile(
-            mode="w+", encoding="utf-8", delete=False, suffix=".txt"
-        )
         env = os.environ.copy()
         env.update(
             {
@@ -102,36 +94,37 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH * 5,
             other_args=_SERVER_ARGS,
             env=env,
-            return_stdout_stderr=(cls.out_log_file, cls.err_log_file),
         )
 
     @classmethod
     def tearDownClass(cls) -> None:
         kill_process_tree(cls.process.pid)
-        cls.out_log_file.close()
-        cls.err_log_file.close()
-        os.unlink(cls.out_log_file.name)
-        os.unlink(cls.err_log_file.name)
 
     def test_draft_params_via_server_info(self):
-        """Verify draft load format and revision are set correctly via /get_server_info."""
+        """Verify draft load format and revision are set correctly via /server_info."""
         # 1. Health check
         health_resp = requests.get(f"{self.base_url}/health", timeout=10)
         self.assertEqual(health_resp.status_code, 200)
 
-        with open(self.out_log_file.name, "r", encoding="utf-8") as f:
-            log_content = f.read()
+        # 2. Get server info and assert parameter values
+        # Note: /get_server_info is deprecated, use /server_info instead.
+        info_resp = requests.get(f"{self.base_url}/server_info", timeout=10)
+        self.assertEqual(info_resp.status_code, 200)
+        info = info_resp.json()
 
-        match = re.search(r"command=sglang serve\s+(.*?)(?:\n|$)", log_content)
-        self.assertIsNotNone(
-            match,
-            f"Command line not found in server logs. Log snippet (first 500 chars): {log_content[:500]}",
+        server_args = info.get("server_args", {})
+        self.assertEqual(
+            server_args.get("speculative_draft_load_format"),
+            "dummy",
+            "speculative_draft_load_format should be 'dummy'",
         )
-        cmd_line = match.group(1)
+        self.assertEqual(
+            server_args.get("speculative_draft_model_revision"),
+            "main",
+            "speculative_draft_model_revision should be 'main'",
+        )
 
-        self.assertIn("--speculative-draft-load-format dummy", cmd_line)
-        self.assertIn("--speculative-draft-model-revision main", cmd_line)
-
+        # 3. Simple generation test to ensure service is functional
         prompt = "What is the capital of France?"
         resp = requests.post(
             f"{self.base_url}/v1/chat/completions",
@@ -149,6 +142,7 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
         content = data["choices"][0]["message"]["content"]
         self.assertGreater(len(content.strip()), 0)
 
+        # With dummy draft weights, the main model still produces correct answer.
         self.assertIn(
             "paris",
             content.lower(),
