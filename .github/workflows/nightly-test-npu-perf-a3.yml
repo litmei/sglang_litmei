@@ -16,12 +16,15 @@ concurrency:
 jobs:
   nightly-performance-baseline-single-node-tests-bugfix:
     name: single-node
-    if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') && false }}
+    if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
         test_config:
+          - name: test_ascend_qwen3_8b_w8a8_1d_in3k5_out1k5_50ms
+            test_case: test/registered/ascend/performance/v26/test_ascend_qwen3_8b_w8a8_1d_in3k5_out1k5_50ms.py
+            runner: linux-aarch64-a3-2
 #          - name: test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms
 #            test_case: test/registered/ascend/performance/v26/test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms.py
 #            runner: linux-aarch64-a3-4
