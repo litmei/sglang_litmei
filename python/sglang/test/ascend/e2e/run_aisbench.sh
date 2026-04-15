@@ -60,7 +60,6 @@ mkdir -p ${MODEL_CONFIG_PATH}
 TMP_CFG=vllm_api_${MODEL}
 DATASETS_CONFIG_PATH=${AISBENCH_CINFG_PATH}/datasets
 mkdir -p ${DATASETS_CONFIG_PATH}
-TMP_DATASET=$DATASET_PATH
 
 function gen_model_config_file() {
   model_config_file=${MODEL_CONFIG_PATH}/${TMP_CFG}.py
@@ -198,16 +197,18 @@ if [ "$DATASET_TYPE" == "mm-custom-gen" ]; then
         echo "The mm-custom-gen dataset file does not exist: ${DATASET_PATH}."
         exit 1
     fi
-    TMP_DATASET=mm_custom_gen_${MODEL}
-    gen_dataset_mm_custom_config_file "$TMP_DATASET"
+    dataset_file=mm_custom_gen_${MODEL}
+    gen_dataset_mm_custom_config_file "${dataset_file}"
+    echo "Use dataset: ${dataset_file}"
     gen_model_config_file
-    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets $TMP_DATASET --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
+    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_file} --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
 
 elif [ "$DATASET_TYPE" == "gsm8k-gen" ]; then
-    TMP_DATASET=gsm8k_gen_${MODEL}
-    gen_dataset_gsm8k_config_file "$TMP_DATASET"
-    echo "Use dataset: ${TMP_DATASET}"
-    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets $TMP_DATASET --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
+    dataset_file=gsm8k_gen_${MODEL}
+    gen_dataset_gsm8k_config_file "${dataset_file}"
+    echo "Use dataset: ${dataset_file}"
+    gen_model_config_file
+    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_file} --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
 
 elif [ "$DATASET_TYPE" == "gsm8k" ]; then
     if [ ! -f "$DATASET_PATH" ]; then
