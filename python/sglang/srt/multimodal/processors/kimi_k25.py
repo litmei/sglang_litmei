@@ -313,7 +313,11 @@ class KimiGPUProcessorWrapper:
             # Convert to medias format for Kimi's HF processor
             kwargs["medias"] = [{"type": "image", "image": img} for img in images]
 
-        return self._hf_processor(text=[input_text], **kwargs)
+        hf_processor_output = self._hf_processor(text=[input_text], **kwargs)
+        hf_processor_output["image_grid_thw"] = hf_processor_output.pop(
+            "grid_thws", None
+        )
+        return hf_processor_output
 
     def _get_gpu_norm_tensors(self, device="cuda"):
         if self._gpu_norm_tensors is None:
