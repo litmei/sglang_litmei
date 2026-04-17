@@ -20,7 +20,12 @@ from sglang.test.test_utils import (
     popen_launch_pd_server,
 )
 
-register_npu_ci(est_time=400, suite="nightly-4-npu-a3", nightly=True, disabled="The parameters are under planning")
+register_npu_ci(
+    est_time=400,
+    suite="nightly-4-npu-a3",
+    nightly=True,
+    disabled="The parameters are under planning",
+)
 
 
 class DisaggregationHiCacheBase(PDDisaggregationServerBase):
@@ -100,7 +105,7 @@ class DisaggregationHiCacheBase(PDDisaggregationServerBase):
         return self.tokenizer.decode(selected_tokens)
 
     def send_request(
-        self, prompt: str, max_tokens: int = 100, temperature: float = 0.0
+            self, prompt: str, max_tokens: int = 100, temperature: float = 0.0
     ) -> Dict:
         # Send a generate request and return response
         response = requests.post(

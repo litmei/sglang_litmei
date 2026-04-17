@@ -19,7 +19,12 @@ from sglang.test.test_utils import (
     popen_launch_pd_server,
 )
 
-register_npu_ci(est_time=400, suite="nightly-4-npu-a3", nightly=True, disabled="The parameters are under planning")
+register_npu_ci(
+    est_time=400,
+    suite="nightly-4-npu-a3",
+    nightly=True,
+    disabled="The parameters are under planning"
+)
 
 
 class DisaggregationHiCacheBase(PDDisaggregationServerBase):
