@@ -15,11 +15,6 @@ from sglang.test.test_utils import (
 
 register_npu_ci(est_time=400, suite="nightly-8-npu-a3", nightly=True)
 
-SKIP_OUT_LOG = "./skip_out_log.txt"
-SKIP_ERR_LOG = "./skip_err_log.txt"
-REBALANCE_OUT_LOG = "./rebalance_out_log.txt"
-REBALANCE_ERR_LOG = "./rebalance_err_log.txt"
-
 
 class TestEplbMinRebalancingUtilizationThresholdBase(CustomTestCase):
     """
@@ -58,9 +53,10 @@ class TestEplbMinRebalancingUtilizationThresholdBase(CustomTestCase):
         "--eplb-rebalance-layers-per-chunk",
         "1",
     ]
+
+    out_file_path = "./rebalance_out_log.txt"
+    err_file_path = "./rebalance_err_log.txt"
     log_info = "Skipped ep rebalancing: current GPU utilization"
-    out_file_path = SKIP_OUT_LOG
-    err_file_path = SKIP_ERR_LOG
     test_args = ["--eplb-min-rebalancing-utilization-threshold", 0.05]
 
     @classmethod
@@ -89,10 +85,10 @@ class TestEplbMinRebalancingUtilizationThresholdBase(CustomTestCase):
     @classmethod
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
-        if hasattr(cls, "out_file") and cls.out_file:
-            cls.out_file.close()
-        if hasattr(cls, "err_file") and cls.err_file:
-            cls.err_file.close()
+        cls.out_file.close()
+        cls.err_file.close()
+        os.remove("./rebalance_out_log.txt")
+        os.remove("./rebalance_err_log.txt")
 
     def test_gsm8k(self):
         args = SimpleNamespace(
@@ -131,8 +127,6 @@ class TestEplbMinRebalancingUtilizationThreshold095(
     """
 
     log_info = "rebalance end"
-    out_file_path = REBALANCE_OUT_LOG
-    err_file_path = REBALANCE_ERR_LOG
     test_args = ["--eplb-min-rebalancing-utilization-threshold", 0.95]
 
     @classmethod
