@@ -96,9 +96,9 @@ class TestBatchSize64Timeout0p001(CustomTestCase):
                 "Roman",
             ),
             (
-                "Explain how large language models are trained, evaluated, and deployed "
+                "Describe the role of the United Nations in maintaining international peace and security "
                 * 3,
-                "trained",
+                "United Nations",
             ),
         ]
         all_prompts = short + medium + long
