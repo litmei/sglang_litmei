@@ -225,14 +225,14 @@ if [ "$DATASET_TYPE" == "mm-custom-gen" ]; then
     gen_dataset_mm_custom_config_file "${dataset_name}"
     echo "Use dataset: ${dataset_name}"
     gen_model_config_file
-    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_name} --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
+    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_name} --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH --num-warmups 0 "
 
 elif [ "$DATASET_TYPE" == "gsm8k-gen" ]; then
     dataset_name=gsm8k_gen_${MODEL}
     gen_dataset_gsm8k_config_file "${dataset_name}"
     echo "Use dataset: ${dataset_name}"
     gen_model_config_file
-    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_name} --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
+    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_name} --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH --num-warmups 0 "
 
 elif [ "$DATASET_TYPE" == "gsm8k" ]; then
     if [ ! -f "$DATASET_PATH" ]; then
@@ -242,7 +242,7 @@ elif [ "$DATASET_TYPE" == "gsm8k" ]; then
     # import jsonl file from testcase
     dataset_file=$DATASET_PATH
     echo "Use dataset: ${dataset_file}"
-    CMD="${CMD} --models vllm_api_stream_chat --custom-dataset-path $dataset_file --debug --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
+    CMD="${CMD} --models vllm_api_stream_chat --custom-dataset-path $dataset_file --debug --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH --num-warmups 0 "
 
 else
     echo "The dataset type $DATASET_TYPE is not supported."

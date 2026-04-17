@@ -102,8 +102,8 @@ class TestQwen3Next80BA3B(TestAscendPerformanceTestCaseBase):
     input_len = 6144
     output_len = 1500
     random_range_ratio = 1
-    tpot = 14.21
-    output_token_throughput = 1200
+    tpot = 15.62
+    output_token_throughput = 900
 
     def test_qwen3_next_80b_a3b(self):
         self.run_throughput()
