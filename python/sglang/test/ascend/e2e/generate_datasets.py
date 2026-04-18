@@ -49,6 +49,10 @@ def generate_dataset(
             f"Generate DataSet Error: the size of new dataset is {len(dataset_new)}, not {batch_size}"
         )
 
+    output_dir = os.path.dirname(output_file)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
     with open(output_file, "w", encoding="utf-8") as f:
         for i in range(len(dataset_new)):
             f.write(
