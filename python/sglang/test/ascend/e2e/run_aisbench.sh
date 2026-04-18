@@ -278,13 +278,12 @@ elif [ "$DATASET_TYPE" == "gsm8k" ]; then
         echo "The gsm8k dataset file does not exist: ${DATASET_PATH}."
         exit 1
     fi
-    # import jsonl file from testcase
-    dataset_file=$DATASET_PATH
+    dataset_file=${DATASET_PATH}/test.jsonl
     dataset_name=gsm8k_custom_${MODEL}
     gen_dataset_gsm8k_custom_config_file "${dataset_name}"
     echo "Use dataset: ${dataset_name}, dataset_file: ${dataset_file}"
     gen_model_config_file
-    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_name} --debug --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
+    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets $DATASET_PATH --debug --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
 
 else
     echo "The dataset type $DATASET_TYPE is not supported."

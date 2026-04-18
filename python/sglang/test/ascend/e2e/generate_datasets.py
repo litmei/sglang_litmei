@@ -22,14 +22,16 @@ def generate_dataset(
     dataset_new = []
     for sentence in dataset:
         words = tokenizer.tokenize(sentence)
-        print(len(words))
         len_num = len(words) // input_len
         if len_num == 0:
             multiplier = (input_len // len(words)) + 1
             repeated_len = words * multiplier
             words = repeated_len[:input_len]
             decoded_text = tokenizer.convert_tokens_to_string(words)
-            print(len(words))
+            if len(words) != input_len:
+                print(
+                    f"Generate DataSet Error: the length of new input is {len(words)}, not {input_len}"
+                )
             dataset_new.append(decoded_text)
 
     batch_num = len(dataset_new) // batch_size
@@ -42,7 +44,10 @@ def generate_dataset(
 
     random.shuffle(dataset_new)
 
-    print(len(dataset_new))
+    if len(dataset_new) != batch_size:
+        print(
+            f"Generate DataSet Error: the size of new dataset is {len(dataset_new)}, not {batch_size}"
+        )
 
     with open(output_file, "w", encoding="utf-8") as f:
         for i in range(len(dataset_new)):

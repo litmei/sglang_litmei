@@ -38,6 +38,10 @@ AISBENCHMARK_DATASET_GSM8K_GEN = "gsm8k-gen"
 AISBENCHMARK_DATASET_MM_CUSTOM_GEN = "mm-custom-gen"
 AISBENCHMARK_DATASET_DEFAULT = AISBENCHMARK_DATASET_GSM8K_GEN
 
+GSM8K_TEST_DATASET_FILE = (
+    "/root/.cache/modelscope/hub/datasets/grade_school_math/test.jsonl"
+)
+
 PYTHON_FOR_TEST_TOOL = "test_env_transformers_tool/bin/python"
 if not os.path.exists(PYTHON_FOR_TEST_TOOL) or not os.access(
     PYTHON_FOR_TEST_TOOL, os.X_OK
@@ -400,19 +404,19 @@ def run_aisbench(
 ):
 
     if dataset_type == AISBENCHMARK_DATASET_GSM8K and not dataset_path:
-        dataset_file = f"/tmp/gsm8k_in{input_len}_bs{num_prompts}.jsonl"
+        dataset_file = f"/tmp/ais_configs/datasets/test.jsonl"
         logger.info(
             f"Generating gsm8k dataset: {dataset_file}, "
             f"model_path={model_path}, batch_size={num_prompts}, input_len={input_len}"
         )
         generate_dataset(
             model_path=model_path,
-            source_dataset_path="/root/.cache/modelscope/hub/datasets/grade_school_math/test.jsonl",
+            source_dataset_path=GSM8K_TEST_DATASET_FILE,
             batch_size=num_prompts,
             input_len=input_len,
             output_file=dataset_file,
         )
-        dataset_path = dataset_file
+        dataset_path = os.path.dirname(dataset_file)
         logger.info(f"Dataset generated at: {dataset_path}")
 
     metrics_path = os.getenv("METRICS_DATA_FILE")
