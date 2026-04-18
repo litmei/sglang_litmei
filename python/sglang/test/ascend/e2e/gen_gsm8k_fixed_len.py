@@ -2,7 +2,6 @@ import json
 import os
 import random
 import string
-from test.manual.ascend.lts.test_ascend_lts_qwen3_coder_next import logger
 
 import Image
 import np
@@ -128,7 +127,7 @@ def generate_random_images(mm_dataset_data, size):
 
         for image_path in image_paths:
             if not image_path:
-                logger.error("The image path is none.")
+                print("Error: The image path is none.")
                 continue
 
             dir_name = os.path.dirname(image_path)
