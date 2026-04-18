@@ -217,6 +217,7 @@ EOF
 
 function gen_dataset_gsm8k_custom_config_file() {
   dataset_config_name=$1
+  dataset_dir=$2
   dataset_config_file=${DATASETS_CONFIG_PATH}/${dataset_config_name}.py
   echo "Writing gsm8k config info into file: ${dataset_config_file}"
   cat > "${dataset_config_file}" << EOF
@@ -243,7 +244,7 @@ gsm8k_datasets = [
     dict(
         abbr='gsm8k',
         type=GSM8KDataset,
-        path="$DATASET_PATH",
+        path="${dataset_dir}",
         reader_cfg=gsm8k_reader_cfg,
         infer_cfg=gsm8k_infer_cfg,
         eval_cfg=gsm8k_eval_cfg)
@@ -274,16 +275,17 @@ elif [ "$DATASET_TYPE" == "gsm8k-gen" ]; then
     CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_name} --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
 
 elif [ "$DATASET_TYPE" == "gsm8k" ]; then
-    if [ ! -d "$DATASET_PATH" ]; then
-        echo "The gsm8k dataset path does not exist: ${DATASET_PATH}."
+    dataset_file=$DATASET_PATH
+    if [ ! -f "${dataset_file}" ]; then
+        echo "The gsm8k dataset file does not exist: ${DATASET_PATH}."
         exit 1
     fi
-    dataset_file=${DATASET_PATH}/test.jsonl
+    dataset_dir=$(dirname "$DATASET_PATH")
     dataset_name=gsm8k_custom_${MODEL}
-    gen_dataset_gsm8k_custom_config_file "${dataset_name}"
+    gen_dataset_gsm8k_custom_config_file "${dataset_name}" "${dataset_dir}"
     echo "Use dataset: ${dataset_name}, dataset_file: ${dataset_file}"
     gen_model_config_file
-    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets $DATASET_PATH --debug --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
+    CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_name} --debug --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
 
 else
     echo "The dataset type $DATASET_TYPE is not supported."

@@ -416,8 +416,8 @@ def run_aisbench(
             input_len=input_len,
             output_file=dataset_file,
         )
-        dataset_path = os.path.dirname(dataset_file)
-        logger.info(f"Dataset generated at: {dataset_path}")
+        dataset_path = dataset_file
+        logger.info(f"Dataset generated: {dataset_path}")
 
     metrics_path = os.getenv("METRICS_DATA_FILE")
     result_path = "./aisbench_result" if not metrics_path else metrics_path
