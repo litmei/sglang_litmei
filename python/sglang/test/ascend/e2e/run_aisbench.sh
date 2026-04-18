@@ -274,8 +274,8 @@ elif [ "$DATASET_TYPE" == "gsm8k-gen" ]; then
     CMD="${CMD} --config-dir ${AISBENCH_CINFG_PATH} --models $TMP_CFG --datasets ${dataset_name} --summarizer default_perf --mode perf --num-prompts $NUM_PROMPTS --work-dir $OUTPUT_PATH "
 
 elif [ "$DATASET_TYPE" == "gsm8k" ]; then
-    if [ ! -f "$DATASET_PATH" ]; then
-        echo "The gsm8k dataset file does not exist: ${DATASET_PATH}."
+    if [ ! -d "$DATASET_PATH" ]; then
+        echo "The gsm8k dataset path does not exist: ${DATASET_PATH}."
         exit 1
     fi
     dataset_file=${DATASET_PATH}/test.jsonl
