@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 AISBENCHMARK = "aisbench"
 BENCHSERVING = "bench-serving"
-BENCHMARK_TOOL_DEFAULT = BENCHSERVING
+BENCHMARK_TOOL_DEFAULT = AISBENCHMARK
 AISBENCHMARK_DATASET_GSM8K = "gsm8k"
 AISBENCHMARK_DATASET_GSM8K_GEN = "gsm8k-gen"
 AISBENCHMARK_DATASET_MM_CUSTOM_GEN = "mm-custom-gen"
@@ -414,50 +414,53 @@ def run_aisbench(
 
     if dataset_type == AISBENCHMARK_DATASET_GSM8K and not dataset_path:
         dataset_file = f"/tmp/datasets/test.jsonl"
-        logger.info(
-            f"Generating gsm8k dataset: {dataset_file}, "
-            f"model_path={model_path}, batch_size={num_prompts}, input_len={input_len}"
-        )
-        generate_dataset(
-            model_path=model_path,
-            source_dataset_path=GSM8K_DATASET_TEST_FILE,
-            batch_size=num_prompts,
-            input_len=input_len,
-            output_file=dataset_file,
-        )
+        if not os.path.exists(dataset_file):
+            logger.info(
+                f"Generating gsm8k dataset: {dataset_file}, "
+                f"model_path={model_path}, batch_size={num_prompts}, input_len={input_len}"
+            )
+            generate_dataset(
+                model_path=model_path,
+                source_dataset_path=GSM8K_DATASET_TEST_FILE,
+                batch_size=num_prompts,
+                input_len=input_len,
+                output_file=dataset_file,
+            )
         dataset_path = dataset_file
         logger.info(f"Dataset generated: {dataset_path}")
 
     if dataset_type == AISBENCHMARK_DATASET_GSM8K_GEN:
         dataset_file = f"/tmp/datasets/test.jsonl"
-        logger.info(
-            f"Generating gsm8k dataset: {dataset_file}, "
-            f"model_path={model_path}, batch_size={num_prompts}, input_len={input_len}"
-        )
-        data = generate_fixed_len_dataset(
-            train_path=GSM8K_DATASET_TRAIN_FILE,
-            test_path=GSM8K_DATASET_TEST_FILE,
-            tokenizer_path=model_path,
-            target_tokens=input_len,
-            num_prompts=num_prompts,
-        )
-        save_jsonl(data, dataset_file)
+        if not os.path.exists(dataset_file):
+            logger.info(
+                f"Generating gsm8k dataset: {dataset_file}, "
+                f"model_path={model_path}, batch_size={num_prompts}, input_len={input_len}"
+            )
+            data = generate_fixed_len_dataset(
+                train_path=GSM8K_DATASET_TRAIN_FILE,
+                test_path=GSM8K_DATASET_TEST_FILE,
+                tokenizer_path=model_path,
+                target_tokens=input_len,
+                num_prompts=num_prompts,
+            )
+            save_jsonl(data, dataset_file)
         dataset_path = dataset_file
         logger.info(f"Dataset generated: {dataset_file}")
 
     if dataset_type == AISBENCHMARK_DATASET_MM_CUSTOM_GEN and not dataset_path:
         dataset_file = f"/tmp/datasets/mm.jsonl"
-        image_dir = f"/tmp/datasets/images"
-        data = generate_mm_dataset(
-            train_path=GSM8K_DATASET_TRAIN_FILE,
-            test_path=GSM8K_DATASET_TEST_FILE,
-            tokenizer_path=model_path,
-            target_tokens=input_len,
-            num_prompts=num_prompts,
-            image_dir=image_dir,
-            size=image_resolution,
-        )
-        save_jsonl(data, dataset_file)
+        if not os.path.exists(dataset_file):
+            image_dir = f"/tmp/datasets/images"
+            data = generate_mm_dataset(
+                train_path=GSM8K_DATASET_TRAIN_FILE,
+                test_path=GSM8K_DATASET_TEST_FILE,
+                tokenizer_path=model_path,
+                target_tokens=input_len,
+                num_prompts=num_prompts,
+                image_dir=image_dir,
+                size=image_resolution,
+            )
+            save_jsonl(data, dataset_file)
         dataset_path = dataset_file
         logger.info(f"Dataset generated: {dataset_file}")
 
@@ -697,10 +700,8 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
-    aisbench_dataset_type = "gsm8k"  # gsm8k or mm-custom-gen
-    aisbench_dataset_path = (
-        None  # keep none for gsm8k; set a json config file for mm_custom_gen
-    )
+    aisbench_dataset_type = "gsm8k-gen"  # gsm8k-gen | mm-custom-gen
+    aisbench_dataset_path = None  # auto generate dataset if none
     other_args = None
     timeout = DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH
     envs = None
@@ -798,10 +799,8 @@ class TestAscendPerfMultiNodePdMixTestCaseBase(CustomTestCase):
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
-    aisbench_dataset_type = "gsm8k"  # gsm8k or mm-custom-gen
-    aisbench_dataset_path = (
-        None  # keep none for gsm8k; set a json config file for mm_custom_gen
-    )
+    aisbench_dataset_type = "gsm8k-gen"  # gsm8k-gen | mm-custom-gen
+    aisbench_dataset_path = None  # auto generate dataset if none
     max_attempts = 2
     request_rate = None
     max_concurrency = None
@@ -910,10 +909,8 @@ class TestAscendPerfMultiNodePdSepTestCaseBase(CustomTestCase):
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
-    aisbench_dataset_type = "gsm8k"  # gsm8k or mm-custom-gen
-    aisbench_dataset_path = (
-        None  # keep none for gsm8k; set a json config file for mm_custom_gen
-    )
+    aisbench_dataset_type = "gsm8k-gen"  # gsm8k-gen | mm-custom-gen
+    aisbench_dataset_path = None  # auto generate dataset if none
     max_attempts = 2
     request_rate = None
     max_concurrency = None

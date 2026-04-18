@@ -41,7 +41,7 @@ def pad_to_target_tokens(
     test_template="Question: {question}\nLet's think step by step\nAnswer:\n",
 ):
     test_prompt = test_template.format(question=question)
-    test_token_count = len(tokenizer.encode(test_prompt))
+    test_token_count = len(tokenizer.encode(test_prompt, add_special_tokens=False))
 
     remaining_tokens = target_tokens - test_token_count
     if remaining_tokens <= 0:
@@ -50,7 +50,7 @@ def pad_to_target_tokens(
     few_shot_text = ""
     few_shot_token_count = 0
     for fs in few_shot_pool:
-        fs_tokens = len(tokenizer.encode(fs))
+        fs_tokens = len(tokenizer.encode(fs, add_special_tokens=False))
         if few_shot_token_count + fs_tokens <= remaining_tokens:
             few_shot_text += fs
             few_shot_token_count += fs_tokens
@@ -63,7 +63,17 @@ def pad_to_target_tokens(
         padding_text = tokenizer.decode(tokenizer.convert_tokens_to_ids(padding_tokens))
         few_shot_text += padding_text
 
-    return few_shot_text + test_prompt
+    full_text = few_shot_text + test_prompt
+    actual_tokens = len(tokenizer.encode(full_text, add_special_tokens=False))
+    if actual_tokens < target_tokens:
+        extra_gap = target_tokens - actual_tokens
+        extra_padding_tokens = ["A"] * extra_gap
+        extra_padding_text = tokenizer.decode(
+            tokenizer.convert_tokens_to_ids(extra_padding_tokens)
+        )
+        full_text = extra_padding_text + full_text
+
+    return full_text
 
 
 def generate_fixed_len_dataset(

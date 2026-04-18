@@ -61,9 +61,9 @@ QWEN2_5_VL_72B_OTHER_ARGS = [
 class TestQwen25Vl72B(TestAscendPerformanceTestCaseBase):
     benchmark_tool = AISBENCHMARK
     aisbench_dataset_type = AISBENCHMARK_DATASET_MM_CUSTOM_GEN
-    aisbench_dataset_path = (
-        "/root/.cache/modelscope/hub/datasets/sglang_test/1920x1080_256.jsonl"
-    )
+    # aisbench_dataset_path = (
+    #     "/root/.cache/modelscope/hub/datasets/sglang_test/1920x1080_256.jsonl"
+    # )
     model = QWEN2_5_VL_72B_MODEL_PATH
     other_args = QWEN2_5_VL_72B_OTHER_ARGS
     envs = QWEN2_5_VL_72B_ENVS
