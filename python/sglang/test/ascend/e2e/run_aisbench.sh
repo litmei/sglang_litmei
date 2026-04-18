@@ -64,7 +64,7 @@ mkdir -p ${DATASETS_CONFIG_PATH}
 GSM8K_TRAIN_FILE="/root/.cache/modelscope/hub/datasets/grade_school_math/train.jsonl"
 if [ ! -f "${GSM8K_TRAIN_FILE}" ];then
   ${PIP_FOR_AISBENCH} install modelscope -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
-  ${PYTHON_ENV_FOR_AISBENCH} -c "
+  ${PYTHON_ENV_FOR_AISBENCH}/bin/python -c "
   from modelscope import MsDataset
   ds = MsDataset.load('AI-ModelScope/gsm8k', split='train')
   ds.to_json('/root/.cache/modelscope/hub/datasets/grade_school_math/train.jsonl')
