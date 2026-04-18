@@ -1,10 +1,8 @@
 import unittest
 
-from build.lib.sglang.test.ascend.e2e.test_npu_performance_utils import (
-    AISBENCHMARK_DATASET_GSM8K_GEN,
-)
 from sglang.test.ascend.e2e.test_npu_performance_utils import (
     AISBENCHMARK,
+    AISBENCHMARK_DATASET_GSM8K_GEN,
     QWEN3_8B_EAGLE_MODEL_PATH,
     QWEN3_8B_W8A8_MODEL_PATH,
     TestAscendPerformanceTestCaseBase,
