@@ -5,7 +5,7 @@ from sglang.test.ascend.e2e.test_npu_performance_utils import (
     BENCHMARK_TOOL_DEFAULT,
     QWEN3_8B_EAGLE_MODEL_PATH,
     QWEN3_8B_W8A8_MODEL_PATH,
-    TestAscendPerformanceTestCaseBase,
+    TestAscendPerformanceTestCaseBase, AISBENCHMARK,
 )
 from sglang.test.ci.ci_register import register_npu_ci
 
@@ -69,7 +69,7 @@ QWEN3_8B_OTHER_ARGS = [
 
 
 class TestQwen8B(TestAscendPerformanceTestCaseBase):
-    benchmark_tool = BENCHMARK_TOOL_DEFAULT
+    benchmark_tool = AISBENCHMARK
     aisbench_dataset_type = AISBENCHMARK_DATASET_DEFAULT
     model = QWEN3_8B_W8A8_MODEL_PATH
     other_args = QWEN3_8B_OTHER_ARGS

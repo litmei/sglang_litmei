@@ -629,7 +629,7 @@ def assert_metrics(self, metrics):
 
 class TestAscendPerformanceTestCaseBase(CustomTestCase):
     model = None
-    benchmark_tool = "bench-serving"
+    benchmark_tool = BENCHMARK_TOOL_DEFAULT
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
@@ -690,7 +690,7 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
         parsed_url = urlparse(self.base_url)
         host = parsed_url.hostname
         port = parsed_url.port
-        if self.benchmark_tool == "aisbench":
+        if self.benchmark_tool == AISBENCHMARK:
             metrics = run_aisbench(
                 host=host,
                 port=port,
@@ -730,7 +730,7 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
 
 class TestAscendPerfMultiNodePdMixTestCaseBase(CustomTestCase):
     model_config = None
-    benchmark_tool = "bench-serving"
+    benchmark_tool = BENCHMARK_TOOL_DEFAULT
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
@@ -802,7 +802,7 @@ class TestAscendPerfMultiNodePdMixTestCaseBase(CustomTestCase):
     @retry()
     @check_role(allowed_roles=["master", "worker"])
     def run_throughput(self):
-        if self.benchmark_tool == "aisbench":
+        if self.benchmark_tool == AISBENCHMARK:
             metrics = run_aisbench(
                 host=self.host,
                 port=str(self.port),
@@ -842,7 +842,7 @@ class TestAscendPerfMultiNodePdMixTestCaseBase(CustomTestCase):
 
 class TestAscendPerfMultiNodePdSepTestCaseBase(CustomTestCase):
     model_config = None
-    benchmark_tool = "bench-serving"
+    benchmark_tool = BENCHMARK_TOOL_DEFAULT
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
@@ -931,7 +931,7 @@ class TestAscendPerfMultiNodePdSepTestCaseBase(CustomTestCase):
     @retry()
     @check_role(allowed_roles=["router"])
     def run_throughput(self):
-        if self.benchmark_tool == "aisbench":
+        if self.benchmark_tool == AISBENCHMARK:
             metrics = run_aisbench(
                 host=self.host,
                 port=str(self.port),
