@@ -35,53 +35,52 @@ def format_qa(item):
 
 def pad_to_target_tokens(
     question,
-    few_shot_pool,
+    few_shot_pool_token_ids,
     tokenizer,
     target_tokens,
     test_template="Question: {question}\nLet's think step by step\nAnswer:\n",
 ):
     test_prompt = test_template.format(question=question)
-    test_token_count = len(tokenizer.encode(test_prompt, add_special_tokens=False))
+    test_token_ids = tokenizer.encode(test_prompt, add_special_tokens=False)
 
-    remaining_tokens = target_tokens - test_token_count
+    remaining_tokens = target_tokens - len(test_token_ids)
     if remaining_tokens <= 0:
-        return test_prompt
+        return tokenizer.decode(
+            test_token_ids[:target_tokens], skip_special_tokens=True
+        )
 
-    few_shot_text = ""
-    few_shot_token_count = 0
-    for fs in few_shot_pool:
-        fs_tokens = len(tokenizer.encode(fs, add_special_tokens=False))
-        if few_shot_token_count + fs_tokens <= remaining_tokens:
-            few_shot_text += fs
-            few_shot_token_count += fs_tokens
+    shuffled_ids = list(range(len(few_shot_pool_token_ids)))
+    random.shuffle(shuffled_ids)
+
+    prefix_ids = []
+    for idx in shuffled_ids:
+        fs_ids = few_shot_pool_token_ids[idx]
+        if len(prefix_ids) + len(fs_ids) <= remaining_tokens:
+            prefix_ids.extend(fs_ids)
         else:
+            partial_gap = remaining_tokens - len(prefix_ids)
+            if partial_gap > 0:
+                prefix_ids.extend(fs_ids[:partial_gap])
             break
 
-    gap = remaining_tokens - few_shot_token_count
-    if gap > 0:
-        padding_tokens = ["A"] * gap
-        padding_text = tokenizer.decode(tokenizer.convert_tokens_to_ids(padding_tokens))
-        few_shot_text += padding_text
+    if len(prefix_ids) < remaining_tokens and few_shot_pool_token_ids:
+        padding_source_ids = few_shot_pool_token_ids[shuffled_ids[0]]
+        repeat_count = (remaining_tokens // len(padding_source_ids)) + 1
+        padding_ids = (padding_source_ids * repeat_count)[
+            : remaining_tokens - len(prefix_ids)
+        ]
+        prefix_ids.extend(padding_ids)
 
-    full_text = few_shot_text + test_prompt
-    actual_tokens = len(tokenizer.encode(full_text, add_special_tokens=False))
-    if actual_tokens < target_tokens:
-        extra_gap = target_tokens - actual_tokens
-        extra_padding_tokens = ["A"] * extra_gap
-        extra_padding_text = tokenizer.decode(
-            tokenizer.convert_tokens_to_ids(extra_padding_tokens)
-        )
-        full_text = extra_padding_text + full_text
-
-    return full_text
+    full_ids = prefix_ids + test_token_ids
+    return tokenizer.decode(full_ids[:target_tokens], skip_special_tokens=True)
 
 
 def generate_fixed_len_dataset(
     train_path,
     test_path,
     tokenizer_path,
-    target_tokens=3500,
-    num_prompts=0,
+    target_tokens,
+    num_prompts,
     trust_remote_code=False,
     test_template="Question: {question}\nLet's think step by step\nAnswer:\n",
 ):
@@ -95,12 +94,15 @@ def generate_fixed_len_dataset(
         test_data = test_data[:num_prompts]
 
     few_shot_pool = [format_qa(item) for item in train_data]
+    few_shot_pool_token_ids = [
+        tokenizer.encode(fs, add_special_tokens=False) for fs in few_shot_pool
+    ]
 
     output_data = []
     for i, test_item in enumerate(test_data):
         padded_question = pad_to_target_tokens(
             question=test_item["question"],
-            few_shot_pool=few_shot_pool,
+            few_shot_pool_token_ids=few_shot_pool_token_ids,
             tokenizer=tokenizer,
             target_tokens=target_tokens,
             test_template=test_template,
@@ -112,12 +114,17 @@ def generate_fixed_len_dataset(
             }
         )
         if (i + 1) % 100 == 0:
-            actual_tokens = len(tokenizer.encode(padded_question))
+            actual_tokens = len(
+                tokenizer.encode(padded_question, add_special_tokens=False)
+            )
             print(
                 f"Processed {i + 1}/{len(test_data)}, last item tokens: {actual_tokens}"
             )
 
-    token_counts = [len(tokenizer.encode(item["question"])) for item in output_data]
+    token_counts = [
+        len(tokenizer.encode(item["question"], add_special_tokens=False))
+        for item in output_data
+    ]
     print(
         f"Token count stats: min={min(token_counts)}, max={max(token_counts)}, avg={sum(token_counts)/len(token_counts):.1f}"
     )
@@ -187,6 +194,61 @@ def generate_mm_dataset(
     size = tuple(map(int, size.split("x")))
     generate_random_images(output_data, size)
     return output_data
+
+
+def generate_dataset_from_gsm8k(
+    model_path, source_dataset_path, batch_size, input_len, output_file
+):
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    dataset = []
+    with open(source_dataset_path, "r", encoding="utf-8") as f:
+        for line in f:
+            data = json.loads(line)
+            dataset.append(data["question"])
+
+    dataset_new = []
+    for sentence in dataset:
+        words = tokenizer.tokenize(sentence)
+        len_num = len(words) // input_len
+        if len_num == 0:
+            multiplier = (input_len // len(words)) + 1
+            repeated_len = words * multiplier
+            words = repeated_len[:input_len]
+            decoded_text = tokenizer.convert_tokens_to_string(words)
+            if len(words) != input_len:
+                print(
+                    f"Generate DataSet Error: the length of new input is {len(words)}, not {input_len}"
+                )
+            dataset_new.append(decoded_text)
+
+    batch_num = len(dataset_new) // batch_size
+    if batch_num == 0:
+        multiplier = (batch_size // len(dataset_new)) + 1
+        repeated_batch = dataset_new * multiplier
+        dataset_new = repeated_batch[:batch_size]
+    else:
+        dataset_new = dataset_new[:batch_size]
+
+    random.shuffle(dataset_new)
+
+    if len(dataset_new) != batch_size:
+        print(
+            f"Generate DataSet Error: the size of new dataset is {len(dataset_new)}, not {batch_size}"
+        )
+
+    output_dir = os.path.dirname(output_file)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        for i in range(len(dataset_new)):
+            f.write(
+                json.dumps(
+                    {"question": f"{dataset_new[i]}", "answer": "none"},
+                    ensure_ascii=False,
+                )
+            )
+            f.write("\n")
 
 
 def main():

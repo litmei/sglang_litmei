@@ -9,11 +9,11 @@ from urllib.parse import urlparse
 
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.e2e.gen_gsm8k_fixed_len import (
+    generate_dataset_from_gsm8k,
     generate_fixed_len_dataset,
     generate_mm_dataset,
     save_jsonl,
 )
-from sglang.test.ascend.e2e.generate_datasets import generate_dataset
 from sglang.test.ascend.e2e.test_npu_multi_node_utils import (
     SERVICE_PORT,
     check_role,
@@ -41,7 +41,7 @@ BENCHMARK_TOOL_DEFAULT = AISBENCHMARK
 AISBENCHMARK_DATASET_GSM8K = "gsm8k"
 AISBENCHMARK_DATASET_GSM8K_GEN = "gsm8k-gen"
 AISBENCHMARK_DATASET_MM_CUSTOM_GEN = "mm-custom-gen"
-AISBENCHMARK_DATASET_DEFAULT = AISBENCHMARK_DATASET_GSM8K_GEN
+AISBENCHMARK_DATASET_DEFAULT = AISBENCHMARK_DATASET_GSM8K
 
 GSM8K_DATASET_TEST_FILE = (
     "/root/.cache/modelscope/hub/datasets/grade_school_math/test.jsonl"
@@ -419,7 +419,7 @@ def run_aisbench(
                 f"Generating gsm8k dataset: {dataset_file}, "
                 f"model_path={model_path}, batch_size={num_prompts}, input_len={input_len}"
             )
-            generate_dataset(
+            generate_dataset_from_gsm8k(
                 model_path=model_path,
                 source_dataset_path=GSM8K_DATASET_TEST_FILE,
                 batch_size=num_prompts,
@@ -766,6 +766,7 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
                 output_len=self.output_len,
                 max_concurrency=self.max_concurrency,
                 num_prompts=self.num_prompts,
+                image_resolution=self.image_resolution,
             )
             assert_metrics(self, metrics)
 
@@ -876,6 +877,7 @@ class TestAscendPerfMultiNodePdMixTestCaseBase(CustomTestCase):
                 output_len=self.output_len,
                 max_concurrency=self.max_concurrency,
                 num_prompts=self.num_prompts,
+                image_resolution=self.image_resolution,
             )
             assert_metrics(self, metrics)
 
@@ -1003,6 +1005,7 @@ class TestAscendPerfMultiNodePdSepTestCaseBase(CustomTestCase):
                 output_len=self.output_len,
                 max_concurrency=self.max_concurrency,
                 num_prompts=self.num_prompts,
+                image_resolution=self.image_resolution,
             )
             assert_metrics(self, metrics)
 
