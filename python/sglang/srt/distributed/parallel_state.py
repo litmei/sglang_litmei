@@ -812,11 +812,16 @@ class GroupCoordinator:
         self,
         input_: torch.Tensor,
     ) -> torch.Tensor:
+        # For NPUs, use NPU communicator.
         npu_comm = self.npu_communicator
         if npu_comm is not None and not npu_comm.disabled:
             return npu_comm.all_to_all(input_)
-        else:
-            raise ValueError(f"All to all only support npu for now.")
+
+        world_size = self.world_size
+        input_list = [t.contiguous() for t in torch.tensor_split(input_, world_size, 0)]
+        output_list = [torch.empty_like(input_list[i]) for i in range(world_size)]
+        torch.distributed.all_to_all(output_list, input_list, group=self.device_group)
+        return torch.cat(output_list, dim=-1).contiguous()
 
     def all_gather(
         self,
