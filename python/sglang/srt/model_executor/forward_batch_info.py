@@ -29,6 +29,7 @@ ScheduleBatch -> ModelWorkerBatch -> ForwardBatch
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from enum import IntEnum, auto
 from functools import total_ordering
@@ -76,6 +77,7 @@ if TYPE_CHECKING:
     from sglang.srt.speculative.spec_info import SpecInput, SpeculativeAlgorithm
 
 _is_npu = is_npu()
+_debug_forward_batch_counter = itertools.count(1)
 
 
 class ForwardMode(IntEnum):
@@ -439,6 +441,13 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # For dumper: request IDs for cross-step sequence tracking
     rids: Optional[List[str]] = None
 
+    # Event recorded after async host->device staging tensors are enqueued.
+    # Consumers can wait on this event to avoid cross-stream races.
+    h2d_copy_done: Optional[object] = None
+
+    # Process-local monotonically increasing id for debug correlation.
+    debug_step_id: int = -1
+
     @classmethod
     def init_new(
         cls,
@@ -489,18 +498,22 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             return_pooled_hidden_states=batch.return_pooled_hidden_states,
             rids=[req.rid for req in batch.reqs],
         )
+        ret.debug_step_id = next(_debug_forward_batch_counter)
         device = model_runner.device
+        has_async_h2d = False
 
         if batch.extend_input_logprob_token_ids is not None:
             ret.extend_input_logprob_token_ids_gpu = (
                 batch.extend_input_logprob_token_ids.to(device, non_blocking=True)
             )
+            has_async_h2d = True
 
         num_tokens = len(batch.input_ids) if batch.input_ids is not None else 0
         if enable_num_token_non_padded(model_runner.server_args):
             ret.num_token_non_padded = torch.tensor(
                 num_tokens, dtype=torch.int32, pin_memory=True
             ).to(device, non_blocking=True)
+            has_async_h2d = True
         ret.num_token_non_padded_cpu = num_tokens
 
         # For MLP sync
@@ -522,16 +535,22 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             ret.global_num_tokens_gpu = torch.tensor(
                 global_num_tokens, dtype=torch.int64, pin_memory=True
             ).to(device, non_blocking=True)
+            has_async_h2d = True
 
             ret.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
             ret.global_num_tokens_for_logprob_gpu = torch.tensor(
                 global_num_tokens_for_logprob, dtype=torch.int64, pin_memory=True
             ).to(device, non_blocking=True)
+            has_async_h2d = True
+
+        if _is_npu and has_async_h2d:
+            ret.h2d_copy_done = torch.get_device_module(device).Event()
+            ret.h2d_copy_done.record()
 
         if ret.forward_mode.is_idle():
-            if _is_npu:
-                # This synchronize is necessary to prevent the system from hanging.
-                torch.cuda.synchronize()
+            # if _is_npu:
+            #     # This synchronize is necessary to prevent the system from hanging.
+            #     torch.cuda.synchronize()
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
             return ret
 
@@ -549,6 +568,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 dtype=positions_dtype,
                 pin_memory=True,
             ).to(device, non_blocking=True)
+            has_async_h2d = True
         elif (
             ret.spec_info is not None
             and getattr(ret.spec_info, "positions", None) is not None
@@ -568,6 +588,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             ret.extend_prefix_lens = torch.tensor(
                 batch.extend_prefix_lens, dtype=torch.int32, pin_memory=True
             ).to(device, non_blocking=True)
+            has_async_h2d = True
             ret.extend_num_tokens = batch.extend_num_tokens
             positions, ret.extend_start_loc = compute_position(
                 model_runner.server_args.attention_backend,
@@ -609,6 +630,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 model_runner.lora_manager.fetch_new_loras(set(ret.lora_ids))
 
             model_runner.lora_manager.prepare_lora_batch(ret)
+
+        if _is_npu and has_async_h2d and ret.h2d_copy_done is not None:
+            ret.h2d_copy_done.record()
 
         return ret
 

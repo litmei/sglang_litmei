@@ -15,6 +15,7 @@
 
 import dataclasses
 import logging
+import os
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -58,6 +59,12 @@ from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils.common import is_npu, use_intel_amx_backend
 
 logger = logging.getLogger(__name__)
+
+
+def _debug_hang_log(message: str):
+    if os.environ.get("SGLANG_DEBUG_HANG"):
+        logger.warning(message)
+
 
 _is_npu = is_npu()
 
@@ -110,6 +117,7 @@ class LogitsProcessorOutput:
 @dataclasses.dataclass
 class LogitsMetadata:
     forward_mode: ForwardMode
+    debug_step_id: int = -1
     capture_hidden_mode: CaptureHiddenMode = CaptureHiddenMode.NULL
     next_token_logits_buffer: Optional[torch.Tensor] = None
 
@@ -179,6 +187,7 @@ class LogitsMetadata:
 
         return cls(
             forward_mode=forward_batch.forward_mode,
+            debug_step_id=getattr(forward_batch, "debug_step_id", -1),
             capture_hidden_mode=forward_batch.capture_hidden_mode,
             next_token_logits_buffer=forward_batch.next_token_logits_buffer,
             extend_return_logprob=extend_return_logprob,
@@ -848,7 +857,17 @@ class LogitsProcessor(nn.Module):
             hidden_states, logits_metadata
         )
 
+        _debug_hang_log(
+            "before logits.compute_lm_head "
+            f"step={logits_metadata.debug_step_id} mode={int(logits_metadata.forward_mode)} "
+            f"hidden_shape={list(hidden_states.shape)}"
+        )
         logits = self._compute_lm_head(hidden_states, lm_head, embedding_bias)
+        _debug_hang_log(
+            "after logits.compute_lm_head "
+            f"step={logits_metadata.debug_step_id} mode={int(logits_metadata.forward_mode)} "
+            f"logits_shape={list(logits.shape)}"
+        )
 
         if self.logit_scale is not None:
             logits.mul_(self.logit_scale)
@@ -857,7 +876,15 @@ class LogitsProcessor(nn.Module):
             if self.use_attn_tp_group:
                 logits = self._gather_attn_tp_logits(logits)
             else:
+                _debug_hang_log(
+                    "before logits.tensor_model_parallel_all_gather "
+                    f"step={logits_metadata.debug_step_id} local_shape={list(logits.shape)}"
+                )
                 logits = tensor_model_parallel_all_gather(logits)
+                _debug_hang_log(
+                    "after logits.tensor_model_parallel_all_gather "
+                    f"step={logits_metadata.debug_step_id} local_shape={list(logits.shape)}"
+                )
 
         logits = self._scatter_dp_attn_logits(
             logits, local_hidden_states, logits_metadata
@@ -872,6 +899,12 @@ class LogitsProcessor(nn.Module):
                 logits = self.final_logit_softcapping * torch.tanh(
                     logits / self.final_logit_softcapping
                 )
+
+        _debug_hang_log(
+            "after logits._get_logits "
+            f"step={logits_metadata.debug_step_id} mode={int(logits_metadata.forward_mode)} "
+            f"out_shape={list(logits.shape)}"
+        )
 
         return logits
 
@@ -927,7 +960,17 @@ class LogitsProcessor(nn.Module):
             logits_metadata.compute_dp_attention_metadata()
             local_hidden_states = hidden_states
             hidden_states = logits_metadata.gathered_buffer
+            _debug_hang_log(
+                "before logits.dp_gather_replicate "
+                f"step={logits_metadata.debug_step_id} mode={int(logits_metadata.forward_mode)} "
+                f"local_shape={list(local_hidden_states.shape)} "
+                f"global_shape={list(hidden_states.shape)}"
+            )
             dp_gather_replicate(hidden_states, local_hidden_states, logits_metadata)
+            _debug_hang_log(
+                "after logits.dp_gather_replicate "
+                f"step={logits_metadata.debug_step_id} mode={int(logits_metadata.forward_mode)}"
+            )
             return hidden_states, local_hidden_states
         return hidden_states, hidden_states
 
@@ -972,7 +1015,17 @@ class LogitsProcessor(nn.Module):
                 device=global_logits.device,
                 dtype=global_logits.dtype,
             )
+            _debug_hang_log(
+                "before logits.dp_scatter "
+                f"step={logits_metadata.debug_step_id} mode={int(logits_metadata.forward_mode)} "
+                f"global_shape={list(global_logits.shape)} "
+                f"local_shape={list(logits.shape)}"
+            )
             dp_scatter(logits, global_logits, logits_metadata)
+            _debug_hang_log(
+                "after logits.dp_scatter "
+                f"step={logits_metadata.debug_step_id} mode={int(logits_metadata.forward_mode)}"
+            )
         return logits
 
     def _copy_logits_to_buffer(

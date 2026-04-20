@@ -270,30 +270,41 @@ class EmbeddingBatchResult:
 
     def copy_to_cpu(self):
         """Copy embeddings and pooled hidden states to CPU for overlap scheduling."""
+        use_async_d2h = not _is_npu
         if isinstance(self.embeddings, torch.Tensor):
-            self.copy_done = torch.get_device_module(self.embeddings.device).Event()
-            self.embeddings = self.embeddings.to("cpu", non_blocking=True)
+            if use_async_d2h:
+                self.copy_done = torch.get_device_module(self.embeddings.device).Event()
+            else:
+                self.copy_done = None
+            self.embeddings = self.embeddings.to("cpu", non_blocking=use_async_d2h)
         else:
             assert isinstance(self.embeddings, list)
             if len(self.embeddings) == 0:
                 return
 
-            self.copy_done = torch.get_device_module(self.embeddings[0].device).Event()
+            if use_async_d2h:
+                self.copy_done = torch.get_device_module(
+                    self.embeddings[0].device
+                ).Event()
+            else:
+                self.copy_done = None
             self.embeddings = [
-                emb.to("cpu", non_blocking=True) for emb in self.embeddings
+                emb.to("cpu", non_blocking=use_async_d2h) for emb in self.embeddings
             ]
 
         if self.pooled_hidden_states is not None:
             if isinstance(self.pooled_hidden_states, list):
                 self.pooled_hidden_states = [
-                    t.to("cpu", non_blocking=True) for t in self.pooled_hidden_states
+                    t.to("cpu", non_blocking=use_async_d2h)
+                    for t in self.pooled_hidden_states
                 ]
             else:
                 self.pooled_hidden_states = self.pooled_hidden_states.to(
-                    "cpu", non_blocking=True
+                    "cpu", non_blocking=use_async_d2h
                 )
 
-        self.copy_done.record()
+        if self.copy_done is not None:
+            self.copy_done.record()
 
 
 def validate_dflash_request(req: Req) -> Optional[str]:
@@ -2969,7 +2980,9 @@ class Scheduler(
         return ret
 
     def launch_batch_sample_if_needed(
-        self, batch_result: GenerationBatchResult
+        self,
+        batch_result: GenerationBatchResult,
+        return_logprob: Optional[bool] = None,
     ) -> Union[GenerationBatchResult]:
         # TODO(lsyin): make the delayed sample a default behavior after
         # unifying the forward_batch_generation interface (related to spec V2).
@@ -2981,7 +2994,13 @@ class Scheduler(
             _batch_result = batch_result.delay_sample_func()
             assert _batch_result is batch_result
             self.future_map.store_to_map(batch_result.future_indices, batch_result)
-            batch_result.copy_to_cpu(return_logprob=self.cur_batch.return_logprob)
+            if return_logprob is None:
+                if self.cur_batch is None:
+                    raise RuntimeError(
+                        "cur_batch is None when launching delayed sample; pass return_logprob explicitly."
+                    )
+                return_logprob = self.cur_batch.return_logprob
+            batch_result.copy_to_cpu(return_logprob=return_logprob)
 
         # Release the closure and large GPU tensors that are no longer needed.
         # The delay_sample_func closure captures forward_batch (which holds

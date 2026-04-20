@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import torch
@@ -50,6 +51,10 @@ class SchedulerOutputProcessorMixin:
             if storage_backend is not None:
                 storage_backend_type = type(storage_backend).__name__
         return storage_backend_type
+
+    def _debug_hang_log(self: Scheduler, message: str):
+        if os.environ.get("SGLANG_DEBUG_HANG"):
+            logger.warning(message)
 
     def _get_cached_tokens_details(self: Scheduler, req: Req) -> Optional[dict]:
         """Get detailed cache breakdown for a request, if available.
@@ -376,8 +381,34 @@ class SchedulerOutputProcessorMixin:
         batch: ScheduleBatch,
         result: GenerationBatchResult,
     ):
+        self._debug_hang_log(
+            "before idle copy_done synchronize "
+            f"tp_rank={self.tp_rank} step={getattr(result, 'debug_step_id', -1)} reqs={len(batch.reqs)} "
+            f"copy_done={result.copy_done is not None} "
+            f"copy_done_recorded={getattr(result, 'copy_done_recorded', None)}"
+        )
+
+        if (
+            result.copy_done is not None
+            and not getattr(result, "copy_done_recorded", True)
+            and getattr(result, "delay_sample_func", None) is not None
+        ):
+            logger.warning(
+                "Detected unrecorded copy_done in idle result; forcing delayed sample before synchronize. "
+                "reqs=%d",
+                len(batch.reqs),
+            )
+            self.launch_batch_sample_if_needed(
+                result, return_logprob=batch.return_logprob
+            )
+
         if result.copy_done is not None:
             result.copy_done.synchronize()
+
+        self._debug_hang_log(
+            "after idle copy_done synchronize "
+            f"tp_rank={self.tp_rank} step={getattr(result, 'debug_step_id', -1)} reqs={len(batch.reqs)}"
+        )
 
         self.stream_output_generation(
             batch.reqs, batch.return_logprob, is_idle_batch=True
@@ -388,8 +419,34 @@ class SchedulerOutputProcessorMixin:
         batch: ScheduleBatch,
         result: GenerationBatchResult,
     ):
+        self._debug_hang_log(
+            "before decode copy_done synchronize "
+            f"tp_rank={self.tp_rank} step={getattr(result, 'debug_step_id', -1)} reqs={len(batch.reqs)} "
+            f"copy_done={result.copy_done is not None} "
+            f"copy_done_recorded={getattr(result, 'copy_done_recorded', None)}"
+        )
+
+        if (
+            result.copy_done is not None
+            and not getattr(result, "copy_done_recorded", True)
+            and getattr(result, "delay_sample_func", None) is not None
+        ):
+            logger.warning(
+                "Detected unrecorded copy_done in decode result; forcing delayed sample before synchronize. "
+                "reqs=%d",
+                len(batch.reqs),
+            )
+            self.launch_batch_sample_if_needed(
+                result, return_logprob=batch.return_logprob
+            )
+
         if result.copy_done is not None:
             result.copy_done.synchronize()
+
+        self._debug_hang_log(
+            "after decode copy_done synchronize "
+            f"tp_rank={self.tp_rank} step={getattr(result, 'debug_step_id', -1)} reqs={len(batch.reqs)}"
+        )
 
         logits_output, next_token_ids, can_run_cuda_graph = (
             result.logits_output,

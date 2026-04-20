@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 from contextlib import contextmanager
 from enum import IntEnum, auto
 from typing import TYPE_CHECKING, List, Optional, Tuple
@@ -33,6 +34,12 @@ if TYPE_CHECKING:
     from sglang.srt.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
+
+
+def _debug_hang_log(message: str):
+    if os.environ.get("SGLANG_DEBUG_HANG"):
+        logger.warning(message)
+
 
 if TYPE_CHECKING:
     from sglang.srt.model_executor.forward_batch_info import ForwardBatch
@@ -446,6 +453,12 @@ def _dp_gather_via_all_reduce(
     forward_batch: ForwardBatch,
     is_partial: bool,
 ):
+    _debug_hang_log(
+        "before dp_gather_all_reduce "
+        f"tp_rank={get_tensor_model_parallel_rank()} dp_rank={get_attention_dp_rank()} "
+        f"is_partial={is_partial} mode={int(forward_batch.forward_mode)} "
+        f"local_shape={list(local_tokens.shape)} global_shape={list(global_tokens.shape)}"
+    )
     local_start_pos, local_num_tokens = get_dp_local_info(forward_batch)
 
     global_tokens.fill_(0)
@@ -474,6 +487,12 @@ def _dp_gather_via_all_reduce(
     else:
         global_tokens[:] = tensor_model_parallel_all_reduce(global_tokens)
 
+    _debug_hang_log(
+        "after dp_gather_all_reduce "
+        f"tp_rank={get_tensor_model_parallel_rank()} dp_rank={get_attention_dp_rank()} "
+        f"is_partial={is_partial}"
+    )
+
 
 def _dp_gather_via_all_gather(
     global_tokens: torch.Tensor,
@@ -481,8 +500,23 @@ def _dp_gather_via_all_gather(
     forward_batch: ForwardBatch,
     is_partial: bool,
 ):
+    _debug_hang_log(
+        "before dp_gather_all_gather "
+        f"tp_rank={get_tensor_model_parallel_rank()} dp_rank={get_attention_dp_rank()} "
+        f"attn_tp_rank={get_attention_tp_rank()} attn_tp_size={get_attention_tp_size()} "
+        f"is_partial={is_partial} mode={int(forward_batch.forward_mode)} "
+        f"local_shape={list(local_tokens.shape)} global_shape={list(global_tokens.shape)}"
+    )
     if get_attention_tp_size() == 1:
+        _debug_hang_log(
+            "before dp_gather_all_gather.tp_all_gather_into_tensor "
+            f"tp_rank={get_tensor_model_parallel_rank()}"
+        )
         get_tp_group().all_gather_into_tensor(global_tokens, local_tokens)
+        _debug_hang_log(
+            "after dp_gather_all_gather.tp_all_gather_into_tensor "
+            f"tp_rank={get_tensor_model_parallel_rank()}"
+        )
         return
 
     if not is_partial:
@@ -491,8 +525,30 @@ def _dp_gather_via_all_gather(
     scattered_local_tokens = local_tokens.tensor_split(get_attention_tp_size())[
         get_attention_tp_rank()
     ]
+    _debug_hang_log(
+        "before dp_gather_all_gather.attn_tp_reduce_scatter "
+        f"tp_rank={get_tensor_model_parallel_rank()} attn_tp_rank={get_attention_tp_rank()}"
+    )
     get_attention_tp_group().reduce_scatter_tensor(scattered_local_tokens, local_tokens)
+    _debug_hang_log(
+        "after dp_gather_all_gather.attn_tp_reduce_scatter "
+        f"tp_rank={get_tensor_model_parallel_rank()} attn_tp_rank={get_attention_tp_rank()}"
+    )
+    _debug_hang_log(
+        "before dp_gather_all_gather.tp_all_gather_into_tensor "
+        f"tp_rank={get_tensor_model_parallel_rank()}"
+    )
     get_tp_group().all_gather_into_tensor(global_tokens, scattered_local_tokens)
+    _debug_hang_log(
+        "after dp_gather_all_gather.tp_all_gather_into_tensor "
+        f"tp_rank={get_tensor_model_parallel_rank()}"
+    )
+
+    _debug_hang_log(
+        "after dp_gather_all_gather "
+        f"tp_rank={get_tensor_model_parallel_rank()} dp_rank={get_attention_dp_rank()} "
+        f"is_partial={is_partial}"
+    )
 
 
 def _dp_gather(

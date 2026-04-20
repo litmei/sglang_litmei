@@ -12,6 +12,7 @@ from sglang.srt.managers.overlap_utils import FutureIndices
 from sglang.srt.managers.schedule_batch import Req
 from sglang.srt.model_executor.forward_batch_info import PPProxyTensors
 from sglang.srt.server_args import ServerArgs
+from sglang.srt.utils import is_npu
 
 if TYPE_CHECKING:
     from sglang.srt.managers.scheduler import GenerationBatchResult
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+_is_npu = is_npu()
 
 
 @dataclasses.dataclass
@@ -29,6 +31,7 @@ class GenerationBatchResult:
     num_accepted_tokens: int = 0
     accept_length_per_req_cpu: Optional[List[int]] = None
     can_run_cuda_graph: bool = False
+    debug_step_id: int = -1
 
     # For output processing
     extend_input_len_per_req: Optional[List[int]] = None
@@ -36,6 +39,7 @@ class GenerationBatchResult:
 
     # For overlap scheduling
     copy_done: Optional[torch.cuda.Event] = None
+    copy_done_recorded: bool = False
     delay_sample_func: Optional[callable] = None
     future_indices: Optional[FutureIndices] = None
 
@@ -54,43 +58,69 @@ class GenerationBatchResult:
         Only the tensors which are needed for processing results are copied,
         e.g., next_token_ids, logits outputs
         """
+        # NPU: async D2H + event synchronize can intermittently stall under overlap.
+        # Keep H2D async optimizations, but use blocking D2H for output copies.
+        use_async_d2h = not _is_npu
+        if use_async_d2h and self.copy_done is None:
+            if self.next_token_ids is not None:
+                event_device = self.next_token_ids.device
+            elif (
+                self.logits_output is not None
+                and self.logits_output.hidden_states is not None
+            ):
+                event_device = self.logits_output.hidden_states.device
+            else:
+                raise RuntimeError(
+                    "GenerationBatchResult.copy_to_cpu requires a device tensor to create copy_done event."
+                )
+            self.copy_done = torch.get_device_module(event_device).Event()
+
         if return_logprob:
             if self.logits_output.next_token_logprobs is not None:
                 self.logits_output.next_token_logprobs = (
-                    self.logits_output.next_token_logprobs.to("cpu", non_blocking=True)
+                    self.logits_output.next_token_logprobs.to(
+                        "cpu", non_blocking=use_async_d2h
+                    )
                 )
             if self.logits_output.input_token_logprobs is not None:
                 self.logits_output.input_token_logprobs = (
-                    self.logits_output.input_token_logprobs.to("cpu", non_blocking=True)
+                    self.logits_output.input_token_logprobs.to(
+                        "cpu", non_blocking=use_async_d2h
+                    )
                 )
             if self.logits_output.next_token_top_logprobs_val is not None:
                 self.logits_output.next_token_top_logprobs_val = [
-                    v.to("cpu", non_blocking=True) if torch.is_tensor(v) else v
+                    v.to("cpu", non_blocking=use_async_d2h) if torch.is_tensor(v) else v
                     for v in self.logits_output.next_token_top_logprobs_val
                 ]
             if self.logits_output.next_token_top_logprobs_idx is not None:
                 self.logits_output.next_token_top_logprobs_idx = [
-                    x.to("cpu", non_blocking=True) if torch.is_tensor(x) else x
+                    x.to("cpu", non_blocking=use_async_d2h) if torch.is_tensor(x) else x
                     for x in self.logits_output.next_token_top_logprobs_idx
                 ]
             if self.logits_output.next_token_token_ids_logprobs_val is not None:
                 self.logits_output.next_token_token_ids_logprobs_val = [
-                    v.to("cpu", non_blocking=True) if torch.is_tensor(v) else v
+                    v.to("cpu", non_blocking=use_async_d2h) if torch.is_tensor(v) else v
                     for v in self.logits_output.next_token_token_ids_logprobs_val
                 ]
         if self.logits_output.hidden_states is not None:
             self.logits_output.hidden_states = self.logits_output.hidden_states.to(
-                "cpu", non_blocking=True
+                "cpu", non_blocking=use_async_d2h
             )
-        self.next_token_ids = self.next_token_ids.to("cpu", non_blocking=True)
+        self.next_token_ids = self.next_token_ids.to("cpu", non_blocking=use_async_d2h)
 
         if self.accept_lens is not None:
-            self.accept_lens = self.accept_lens.to("cpu", non_blocking=True)
+            self.accept_lens = self.accept_lens.to("cpu", non_blocking=use_async_d2h)
 
         if (x := self.expert_distribution_metrics) is not None:
             x.copy_to_cpu()
 
-        self.copy_done.record()
+        if use_async_d2h:
+            self.copy_done.record()
+            self.copy_done_recorded = True
+        else:
+            self.copy_done = None
+            self.copy_done_recorded = True
 
     @classmethod
     def from_pp_proxy(

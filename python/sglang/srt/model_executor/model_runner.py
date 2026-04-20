@@ -2929,6 +2929,29 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         reinit_attn_backend: bool = False,
         split_forward_count: int = 1,
     ) -> ModelRunnerOutput:
+        if is_npu() and getattr(forward_batch, "h2d_copy_done", None) is not None:
+            if os.environ.get("SGLANG_DEBUG_HANG"):
+                logger.warning(
+                    "before h2d wait_event tp_rank=%s step=%s mode=%s batch_size=%s",
+                    self.tp_rank,
+                    getattr(forward_batch, "debug_step_id", -1),
+                    int(forward_batch.forward_mode),
+                    forward_batch.batch_size,
+                )
+            # Keep async pinned-memory copies on NPU, but enforce an explicit
+            # dependency before DP metadata/collective consumers read them.
+            torch.get_device_module(self.device).current_stream().wait_event(
+                forward_batch.h2d_copy_done
+            )
+            if os.environ.get("SGLANG_DEBUG_HANG"):
+                logger.warning(
+                    "after h2d wait_event tp_rank=%s step=%s mode=%s batch_size=%s",
+                    self.tp_rank,
+                    getattr(forward_batch, "debug_step_id", -1),
+                    int(forward_batch.forward_mode),
+                    forward_batch.batch_size,
+                )
+
         mode_check = (
             forward_batch.forward_mode.is_cpu_graph
             if self.device == "cpu"

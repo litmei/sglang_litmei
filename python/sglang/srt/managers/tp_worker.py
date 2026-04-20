@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
@@ -462,7 +463,9 @@ class TpModelWorker(BaseTpWorker):
             assert forward_batch is not None
 
         if self.is_dllm():
-            return self._forward_batch_generation_dllm(forward_batch)
+            result = self._forward_batch_generation_dllm(forward_batch)
+            result.debug_step_id = getattr(forward_batch, "debug_step_id", -1)
+            return result
 
         if self.pp_group.is_last_rank:
             out = self.model_runner.forward(
@@ -474,6 +477,7 @@ class TpModelWorker(BaseTpWorker):
             batch_result = GenerationBatchResult(
                 logits_output=logits_output,
                 can_run_cuda_graph=can_run_cuda_graph,
+                debug_step_id=getattr(forward_batch, "debug_step_id", -1),
                 expert_distribution_metrics=out.expert_distribution_metrics,
             )
 
@@ -488,9 +492,19 @@ class TpModelWorker(BaseTpWorker):
             ):
 
                 def sample_batch_func():
+                    if os.environ.get("SGLANG_DEBUG_HANG"):
+                        logger.warning(
+                            "before tp_worker.delay_sample step=%s",
+                            getattr(forward_batch, "debug_step_id", -1),
+                        )
                     batch_result.next_token_ids = self.model_runner.sample(
                         logits_output, forward_batch
                     )
+                    if os.environ.get("SGLANG_DEBUG_HANG"):
+                        logger.warning(
+                            "after tp_worker.delay_sample step=%s",
+                            getattr(forward_batch, "debug_step_id", -1),
+                        )
                     return batch_result
 
                 batch_result.delay_sample_func = sample_batch_func
@@ -498,9 +512,19 @@ class TpModelWorker(BaseTpWorker):
 
             if not model_worker_batch.is_prefill_only:
                 # For normal requests, sample the next token ids.
+                if os.environ.get("SGLANG_DEBUG_HANG"):
+                    logger.warning(
+                        "before tp_worker.sample step=%s",
+                        getattr(forward_batch, "debug_step_id", -1),
+                    )
                 batch_result.next_token_ids = self.model_runner.sample(
                     logits_output, forward_batch
                 )
+                if os.environ.get("SGLANG_DEBUG_HANG"):
+                    logger.warning(
+                        "after tp_worker.sample step=%s",
+                        getattr(forward_batch, "debug_step_id", -1),
+                    )
             else:
                 # For prefill-only requests, create dummy token IDs on CPU
                 # The size should match the batch size (number of sequences), not total tokens
@@ -529,6 +553,7 @@ class TpModelWorker(BaseTpWorker):
             return GenerationBatchResult(
                 pp_hidden_states_proxy_tensors=pp_proxy_tensors,
                 can_run_cuda_graph=can_run_cuda_graph,
+                debug_step_id=getattr(forward_batch, "debug_step_id", -1),
                 expert_distribution_metrics=out.expert_distribution_metrics,
             )
 
@@ -552,6 +577,7 @@ class TpModelWorker(BaseTpWorker):
         batch_result = GenerationBatchResult(
             logits_output=logits_output,
             can_run_cuda_graph=can_run_cuda_graph,
+            debug_step_id=getattr(batch.split_forward_batch, "debug_step_id", -1),
             expert_distribution_metrics=out.expert_distribution_metrics,
         )
         batch_result.next_token_ids = next_token_ids

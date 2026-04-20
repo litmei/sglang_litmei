@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import itertools
+import logging
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -19,6 +22,13 @@ if TYPE_CHECKING:
 
 
 _ENABLE_METRICS_DP_ATTENTION = envs.SGLANG_ENABLE_METRICS_DP_ATTENTION.get()
+logger = logging.getLogger(__name__)
+_mlp_sync_debug_counter = itertools.count(1)
+
+
+def _debug_hang_log(message: str):
+    if os.environ.get("SGLANG_DEBUG_HANG"):
+        logger.warning(message)
 
 
 @dataclass
@@ -33,6 +43,7 @@ class MLPSyncBatchInfo:
     is_extend_in_batch: bool
     local_can_run_tbo: bool
     local_forward_mode: int
+    debug_step_id: int = -1
 
     # some gathered elements
     tp0_info: torch.Tensor = None
@@ -78,10 +89,21 @@ class MLPSyncBatchInfo:
             device=device,
         )
 
+        _debug_hang_log(
+            "before mlp_sync all_gather "
+            f"sync_step={self.debug_step_id} device={device} local=[{self.num_tokens},{self.num_tokens_for_logprob},"
+            f"{int(self.can_cuda_graph)},{int(self.is_extend_in_batch)},"
+            f"{int(self.local_can_run_tbo)},{self.local_forward_mode}]"
+        )
+
         torch.distributed.all_gather_into_tensor(
             global_info_tensor.flatten(),
             local_info_tensor,
             group=group,
+        )
+        _debug_hang_log(
+            "after mlp_sync all_gather "
+            f"sync_step={self.debug_step_id} device={device}"
         )
         if device == "cpu":
             tp_active_ranks = get_tp_group().active_ranks_cpu
@@ -100,6 +122,13 @@ class MLPSyncBatchInfo:
         self.global_num_tokens_for_logprob = cpu_data[:, 1].tolist()
         self.can_cuda_graph = bool(tp0_info[:, 2].min().item())
         self.is_extend_in_batch = bool(tp0_info[:, 3].max().item())
+        _debug_hang_log(
+            "mlp_sync gathered "
+            f"sync_step={self.debug_step_id} "
+            f"global_num_tokens={self.global_num_tokens} "
+            f"global_num_tokens_for_logprob={self.global_num_tokens_for_logprob} "
+            f"global_forward_mode={tp0_info[:, 5].tolist()}"
+        )
         if _ENABLE_METRICS_DP_ATTENTION:
             self.dp_cooperation_info = DPCooperationInfo.create(tp0_info[:, 5].tolist())
 
@@ -196,6 +225,7 @@ def prepare_mlp_sync_batch_raw(
         is_extend_in_batch=is_extend_in_batch,
         local_can_run_tbo=local_can_run_tbo,
         local_forward_mode=local_forward_mode,
+        debug_step_id=next(_mlp_sync_debug_counter),
     )
 
     if not skip_all_gather:
