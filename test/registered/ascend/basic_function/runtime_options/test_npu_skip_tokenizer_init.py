@@ -1,6 +1,5 @@
 import json
 import unittest
-from io import BytesIO
 
 import requests
 from PIL import Image
@@ -9,12 +8,12 @@ from transformers import AutoProcessor, AutoTokenizer
 from sglang.lang.chat_template import get_chat_template_by_model_path
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import (
+    IMAGES_EXAMPLE_PATH,
     LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH,
     QWEN2_5_VL_3B_INSTRUCT_WEIGHTS_PATH,
 )
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import (
-    DEFAULT_IMAGE_URL,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
@@ -230,10 +229,8 @@ class TestSkipTokenizerInitVLM(TestSkipTokenizerInit):
 
     @classmethod
     def setUpClass(cls):
-        image_path = DEFAULT_IMAGE_URL
-        cls.image_url = "https://gh.llkk.cc/" + image_path
-        response = requests.get(cls.image_url)
-        cls.image = Image.open(BytesIO(response.content))
+        cls.image = Image.open(IMAGES_EXAMPLE_PATH).convert("RGB")
+        cls.image_url = f"file://{IMAGES_EXAMPLE_PATH}"
         cls.tokenizer = AutoTokenizer.from_pretrained(cls.model, use_fast=False)
         cls.processor = AutoProcessor.from_pretrained(cls.model, trust_remote_code=True)
         cls.base_url = DEFAULT_URL_FOR_TEST

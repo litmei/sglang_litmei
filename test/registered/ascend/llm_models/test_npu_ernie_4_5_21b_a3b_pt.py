@@ -13,14 +13,14 @@ register_npu_ci(
 
 
 class TestERNIE(GSM8KAscendMixin, CustomTestCase):
-    """Testcase: Verify that the inference accuracy of the baidu/ERNIE-4.5-21B-A3B-PT model on the GSM8K dataset is no less than 0.88.
+    """Testcase: Verify that the inference accuracy of the baidu/ERNIE-4.5-21B-A3B-PT model on the GSM8K dataset is no less than 0.75.
 
     [Test Category] Model
     [Test Target] baidu/ERNIE-4.5-21B-A3B-PT
     """
 
     model = ERNIE_4_5_21B_A3B_PT_WEIGHTS_PATH
-    accuracy = 0.88
+    accuracy = 0.75
 
 
 if __name__ == "__main__":

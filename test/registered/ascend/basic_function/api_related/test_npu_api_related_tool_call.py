@@ -8,6 +8,7 @@ from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.test_ascend_utils import (
     LLAMA_3_2_1B_INSTRUCT_WEIGHTS_PATH,
     QWEN3_5_27B_MODEL_WEIGHTS_PATH,
+    QWEN3_32B_WEIGHTS_PATH,
 )
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import (
@@ -230,6 +231,115 @@ class TestApiRelatedToolCallParserPythonic(CustomTestCase):
             "get_weather" in names or "get_tourist_attractions" in names,
             f"Function name '{names}' should container either 'get_weather' or 'get_tourist_attractions'",
         )
+
+
+class TestApiRelatedToolCallParserQwen(CustomTestCase):
+    """Test --chat-template, indicating successful inference.
+
+    [Test Category] Functional
+    [Test Target] Api related on NPU
+    --tool-call-parser
+    """
+
+    SYSTEM_MESSAGE = (
+        "You are a helpful assistant with tool calling capabilities. "
+        "Only reply with a tool call if the function exists in the library provided by the user. "
+        "If it doesn't exist, just reply directly in natural language. "
+        "When you receive a tool call response, use the output to format an answer to the original user question. "
+        "You have access to the following functions. "
+        "To call a function, please respond with JSON for a function call. "
+        'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}. '
+        "Do not use variables.\n\n"
+    )
+
+    tool_call_parser = "qwen"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model = QWEN3_32B_WEIGHTS_PATH
+        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.api_key = "sk-123456"
+        other_args = [
+            "--trust-remote-code",
+            "--mem-fraction-static",
+            "0.8",
+            "--tp-size",
+            2,
+            "--attention-backend",
+            "ascend",
+            "--disable-cuda-graph",
+            "--tool-call-parser",
+            cls.tool_call_parser,
+        ]
+
+        # Start the local OpenAI Server. If necessary, you can add other parameters.
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+            other_args=other_args,
+        )
+        cls.base_url += "/v1"
+
+    @classmethod
+    def tearDownClass(cls):
+        kill_process_tree(cls.process.pid)
+
+    def test_function_calling_format(self):
+        """
+        Test: Whether the function call format returned by the AI is correct.
+        When returning a tool call, message.content should be None, and tool_calls should be a list.
+        """
+        client = openai.Client(api_key=self.api_key, base_url=self.base_url)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather at a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "Cities and provinces, for example: Xi'an, Shaanxi",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                                "description": "temperature unit",
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+
+        messages = [
+            {"role": "system", "content": self.SYSTEM_MESSAGE},
+            {
+                "role": "user",
+                "content": "Tell me the temperature in Xi'an, please use celsius",
+            },
+        ]
+        response = client.chat.completions.create(
+            model=self.model,
+            max_tokens=1024,
+            messages=messages,
+            temperature=0.8,
+            top_p=0.8,
+            stream=False,
+            tools=tools,
+        )
+
+        self.assertEqual(response.choices[0].finish_reason, "tool_calls")
+
+
+class TestApiRelatedToolCallParserQwen3Coder(TestApiRelatedToolCallParserQwen):
+    tool_call_parser = "qwen3_coder"
 
 
 class TestApiRelatedAdminApiKey(CustomTestCase):

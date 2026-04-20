@@ -9,7 +9,7 @@ from typing import Dict
 import requests
 
 from sglang.bench_serving import get_tokenizer
-from sglang.test.ascend.test_ascend_utils import QWEN3_32B_WEIGHTS_PATH, run_command
+from sglang.test.ascend.test_ascend_utils import QWEN3_8B_WEIGHTS_PATH
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.few_shot_gsm8k import run_eval
 from sglang.test.server_fixtures.disaggregation_fixture import (
@@ -20,7 +20,8 @@ from sglang.test.test_utils import (
     popen_launch_pd_server,
 )
 
-register_npu_ci(est_time=400, suite="nightly-4-npu-a3", nightly=True)
+register_npu_ci(est_time=400, suite="nightly-16-npu-a3", nightly=True)
+standard_accuracy = 0.9
 
 
 class DisaggregationHiCacheBase(PDDisaggregationServerBase):
@@ -34,7 +35,7 @@ class DisaggregationHiCacheBase(PDDisaggregationServerBase):
     def setUpClass(cls):
         super(DisaggregationHiCacheBase, cls).setUpClass()
 
-        cls.model = QWEN3_32B_WEIGHTS_PATH
+        cls.model = QWEN3_8B_WEIGHTS_PATH
 
         cls.tokenizer = get_tokenizer(cls.model)
         cls.temp_dir = tempfile.mkdtemp()
@@ -179,7 +180,14 @@ class TestDisaggregationDecodeDisableOffload(DisaggregationHiCacheBase):
             port=self.lb_port,
         )
         metrics = run_eval(args)
-        run_command(f"echo {metrics['accuracy']} > ./accuracy.txt")
+        self.disable_offload_accuracy = metrics["accuracy"]
+
+        # Contrast accuracy
+        self.assertGreaterEqual(
+            self.disable_offload_accuracy,
+            standard_accuracy,
+            f"The accuracy did not meet the standard.",
+        )
 
 
 class TestDisaggregationDecodeEnableOffload(DisaggregationHiCacheBase):
@@ -243,10 +251,9 @@ class TestDisaggregationDecodeEnableOffload(DisaggregationHiCacheBase):
         self.enable_offload_accuracy = metrics["accuracy"]
 
         # Contrast accuracy
-        disable_offload_accuracy = float(run_command(f"cat ./accuracy.txt"))
         self.assertGreaterEqual(
             self.enable_offload_accuracy,
-            disable_offload_accuracy,
+            standard_accuracy,
             f"The accuracy did not meet the standard.",
         )
 
