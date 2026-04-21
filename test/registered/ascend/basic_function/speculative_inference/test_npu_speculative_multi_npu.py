@@ -112,14 +112,16 @@ class TestNpuSpeculativeDraftParams(CustomTestCase):
         self.assertEqual(info_resp.status_code, 200)
         info = info_resp.json()
 
-        server_args = info.get("server_args", {})
+        load_format = info.get("speculative_draft_load_format")
+        revision = info.get("speculative_draft_model_revision")
+
         self.assertEqual(
-            server_args.get("speculative_draft_load_format"),
+            load_format,
             "dummy",
             "speculative_draft_load_format should be 'dummy'",
         )
         self.assertEqual(
-            server_args.get("speculative_draft_model_revision"),
+            revision,
             "main",
             "speculative_draft_model_revision should be 'main'",
         )

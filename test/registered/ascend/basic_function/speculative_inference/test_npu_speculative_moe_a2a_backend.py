@@ -29,6 +29,7 @@ class TestAscendDistTimeout(CustomTestCase):
         os.environ["HCCL_BUFFSIZE"] = "2048"
         os.environ["SGLANG_ENABLE_OVERLAP_PLAN_STREAM"] = "1"
         os.environ["SGLANG_ENABLE_SPEC_V2"] = "1"
+        os.environ["SGLANG_NPU_FUSED_MOE_MODE"] = "1"
         cls.env = os.environ.copy()
         cls.common_args = [
             "--trust-remote-code",

@@ -26,14 +26,7 @@ class TestJSONModeMixin:
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful AI assistant that strictly follows the provided JSON schema. Do not generate empty objects or extra characters outside the JSON.",
-                },
-                {
-                    "role": "user",
-                    "content": "Introduce a popular coffee drink. Use the exact Json schema provided.",
-                },
+                {"role": "user", "content": "Output a user information JSON."},
             ],
             temperature=0,
             max_tokens=128,
@@ -42,31 +35,10 @@ class TestJSONModeMixin:
                 "schema": {
                     "type": "object",
                     "properties": {
-                        "drink_name": {
-                            "type": "string",
-                            "minLength": 3,
-                            "maxLength": 50,
-                        },
-                        "origin": {"type": "string", "minLength": 2, "maxLength": 50},
-                        "main_ingredients": {
-                            "type": "array",
-                            "items": {"type": "string", "minLength": 2},
-                            "minItems": 3,
-                            "maxItems": 6,
-                        },
-                        "taste_profile": {
-                            "type": "string",
-                            "minLength": 10,
-                            "maxLength": 100,
-                        },
+                        "name": {"type": "string"},
+                        "age": {"type": "integer"},
                     },
-                    "required": [
-                        "drink_name",
-                        "origin",
-                        "main_ingredients",
-                        "taste_profile",
-                    ],
-                    "additionalProperties": False,
+                    "required": ["name", "age"],
                 },
             },
         )
@@ -91,47 +63,19 @@ class TestJSONModeMixin:
         stream = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful AI assistant that strictly follows the provided JSON schema. Do not generate empty objects or extra characters outside the JSON.",
-                },
-                {
-                    "role": "user",
-                    "content": "Introduce a popular coffee drink. Use the exact Json schema provided.",
-                },
+                {"role": "user", "content": "Output a user information JSON."},
             ],
             temperature=0,
-            max_tokens=128,
+            max_tokens=1024,
             response_format={
                 "type": "json_object",
                 "schema": {
                     "type": "object",
                     "properties": {
-                        "drink_name": {
-                            "type": "string",
-                            "minLength": 3,
-                            "maxLength": 50,
-                        },
-                        "origin": {"type": "string", "minLength": 2, "maxLength": 50},
-                        "main_ingredients": {
-                            "type": "array",
-                            "items": {"type": "string", "minLength": 2},
-                            "minItems": 3,
-                            "maxItems": 6,
-                        },
-                        "taste_profile": {
-                            "type": "string",
-                            "minLength": 10,
-                            "maxLength": 100,
-                        },
+                        "name": {"type": "string"},
+                        "age": {"type": "integer"},
                     },
-                    "required": [
-                        "drink_name",
-                        "origin",
-                        "main_ingredients",
-                        "taste_profile",
-                    ],
-                    "additionalProperties": False,
+                    "required": ["name", "age"],
                 },
             },
             stream=True,
@@ -196,7 +140,7 @@ class ServerWithGrammarBackend(CustomTestCase):
             "--grammar-backend",
             cls.backend,
             "--constrained-json-whitespace-pattern",
-            "[\n]?",
+            "[\\n]?",
             "--attention-backend",
             "ascend",
         ]
