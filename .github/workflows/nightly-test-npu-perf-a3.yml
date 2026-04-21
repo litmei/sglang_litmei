@@ -19,7 +19,7 @@ jobs:
     if: ${{ (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') }}
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         test_config:
 #          - name: test_ascend_deepseek_r1_w4a8_8p_in2k_out2k_50ms
