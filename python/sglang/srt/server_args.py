@@ -2797,6 +2797,9 @@ class ServerArgs:
             assert (
                 self.enable_dp_attention
             ), "Please enable dp attention when setting enable_dp_lm_head. "
+            assert (
+                envs.SGLANG_LM_HEAD_TP.get() == 1
+            ), "lm_head DP and lm_head TP cannot be enabled at the same time."
 
     def _handle_moe_kernel_config(self):
         if self.quantization == "mxfp8":

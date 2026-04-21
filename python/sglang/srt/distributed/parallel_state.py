@@ -1983,6 +1983,9 @@ def initialize_model_parallel(
         )
 
     lm_head_tp_size = envs.SGLANG_LM_HEAD_TP.get()
+    assert (
+        1 <= lm_head_tp_size <= world_size
+    ), f"lm_head_tp_size {lm_head_tp_size} must be between 1 and world_size {world_size}"
     if lm_head_tp_size > 1:
         assert (
             world_size % lm_head_tp_size == 0
