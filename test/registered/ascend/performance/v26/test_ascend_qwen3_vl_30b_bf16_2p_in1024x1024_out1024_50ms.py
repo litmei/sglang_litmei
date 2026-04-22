@@ -50,9 +50,9 @@ QWEN3_VL_30B_OTHER_ARGS = [
     -1,
     "--max-prefill-tokens",
     8192,
-    # "--enable-multimodal",
-    # "--mm-attention-backend",
-    # "ascend_attn",
+    "--enable-multimodal",
+    "--mm-attention-backend",
+    "ascend_attn",
     # "--sampling-backend",
     # "ascend",
     "--cuda-graph-bs",
@@ -77,7 +77,7 @@ class TestQwen3Vl30B(TestAscendPerformanceTestCaseBase):
     # aisbench_dataset_path = (
     #     "/root/.cache/modelscope/hub/datasets/sglang_test/1024x1024_0.jsonl"
     # )
-    model = QWEN3_30B_A3B_MODEL_PATH
+    model = QWEN3_VL_30B_MODEL_PATH
     other_args = QWEN3_VL_30B_OTHER_ARGS
     envs = QWEN3_VL_30B_ENVS
     backend = "sglang-oai-chat"
