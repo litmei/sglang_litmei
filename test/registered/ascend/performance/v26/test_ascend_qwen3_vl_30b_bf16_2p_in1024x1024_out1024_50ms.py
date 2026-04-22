@@ -49,12 +49,12 @@ QWEN3_VL_30B_OTHER_ARGS = [
     "--chunked-prefill-size",
     -1,
     "--max-prefill-tokens",
-    8192,
+    8192,  # 还是说是你？
     "--enable-multimodal",
     "--mm-attention-backend",
     "ascend_attn",
-    # "--sampling-backend",
-    # "ascend",
+    "--sampling-backend",  # 难道说真的是你？
+    "ascend",
     "--cuda-graph-bs",
     92,
     "--tokenizer-worker-num",
