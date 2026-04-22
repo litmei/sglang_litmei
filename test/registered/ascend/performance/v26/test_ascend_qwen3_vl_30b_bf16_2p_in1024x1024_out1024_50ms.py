@@ -4,6 +4,7 @@ from sglang.test.ascend.e2e.test_npu_performance_utils import (
     AISBENCHMARK,
     AISBENCHMARK_DATASET_MM_CUSTOM_GEN,
     QWEN3_VL_30B_MODEL_PATH,
+    QWEN3_30B_A3B_MODEL_PATH,
     TestAscendPerformanceTestCaseBase,
 )
 from sglang.test.ci.ci_register import register_npu_ci
@@ -28,7 +29,7 @@ QWEN3_VL_30B_ENVS = {
     "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "0",
     "SGLANG_ENABLE_SPEC_V2": "1",
     "SGLANG_VIT_ENABLE_CUDA_GRAPH": "1",
-    "ASCEND_LAUNCH_BLOCKING": "1",  # 临时定位问题
+    # "ASCEND_LAUNCH_BLOCKING": "1",  # 临时定位问题
 }
 
 QWEN3_VL_30B_OTHER_ARGS = [
@@ -48,12 +49,12 @@ QWEN3_VL_30B_OTHER_ARGS = [
     "--chunked-prefill-size",
     -1,
     "--max-prefill-tokens",
-    102400,
-    "--enable-multimodal",
-    "--mm-attention-backend",
-    "ascend_attn",
-    "--sampling-backend",
-    "ascend",
+    8192,
+    # "--enable-multimodal",
+    # "--mm-attention-backend",
+    # "ascend_attn",
+    # "--sampling-backend",
+    # "ascend",
     "--cuda-graph-bs",
     92,
     "--tokenizer-worker-num",
@@ -76,7 +77,7 @@ class TestQwen3Vl30B(TestAscendPerformanceTestCaseBase):
     # aisbench_dataset_path = (
     #     "/root/.cache/modelscope/hub/datasets/sglang_test/1024x1024_0.jsonl"
     # )
-    model = QWEN3_VL_30B_MODEL_PATH
+    model = QWEN3_30B_A3B_MODEL_PATH
     other_args = QWEN3_VL_30B_OTHER_ARGS
     envs = QWEN3_VL_30B_ENVS
     backend = "sglang-oai-chat"
