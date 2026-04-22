@@ -253,6 +253,7 @@ class LogitsProcessor(nn.Module):
         self.config = config
         self.vocab_size = config.vocab_size
         self.logit_scale = logit_scale
+        self.lm_head_tp_size = get_global_server_args().lm_head_tp_size
         self.use_attn_tp_group = get_global_server_args().enable_dp_lm_head
         self.use_fp32_lm_head = get_global_server_args().enable_fp32_lm_head
         if self.use_attn_tp_group:
@@ -862,7 +863,7 @@ class LogitsProcessor(nn.Module):
                 logits = self._gather_attn_tp_logits(logits)
             else:
                 if (
-                    envs.SGLANG_LM_HEAD_TP.get() > 1
+                    self.lm_head_tp_size > 1
                     and logits_metadata.orig_dp_padding_mode == DpPaddingMode.MAX_LEN
                 ):
                     logits = get_lm_head_tp_group().all_to_all(logits)
@@ -870,7 +871,7 @@ class LogitsProcessor(nn.Module):
                     logits = tensor_model_parallel_all_gather(logits)
 
         if not (
-            envs.SGLANG_LM_HEAD_TP.get() > 1
+            self.lm_head_tp_size > 1
             and logits_metadata.orig_dp_padding_mode == DpPaddingMode.MAX_LEN
         ):
             logits = self._scatter_dp_attn_logits(
@@ -938,7 +939,7 @@ class LogitsProcessor(nn.Module):
         self, hidden_states: torch.Tensor, logits_metadata: LogitsMetadata
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if (
-            envs.SGLANG_LM_HEAD_TP.get() > 1
+            self.lm_head_tp_size > 1
             and logits_metadata.orig_dp_padding_mode == DpPaddingMode.MAX_LEN
         ):
             gathered_hidden_states = torch.empty(

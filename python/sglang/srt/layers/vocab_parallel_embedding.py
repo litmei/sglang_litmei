@@ -19,7 +19,6 @@ from sglang.srt.distributed import (
 from sglang.srt.distributed.device_communicators.pynccl_allocator import (
     use_symmetric_memory,
 )
-from sglang.srt.environ import envs
 from sglang.srt.layers.amx_utils import PackWeightMethod
 from sglang.srt.layers.communicator import get_attn_tp_context
 from sglang.srt.layers.dp_attention import (
@@ -35,6 +34,7 @@ from sglang.srt.layers.quantization.base_config import (
     method_has_implemented_embedding,
 )
 from sglang.srt.layers.quantization.unquant import UnquantizedEmbeddingMethod
+from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     cpu_has_amx_support,
     get_compiler_backend,
@@ -218,13 +218,14 @@ class VocabParallelEmbedding(torch.nn.Module):
         self.quant_config = quant_config
 
         self.enable_tp = enable_tp
+        self.enable_lm_head_tp = get_global_server_args().lm_head_tp_size > 1
         self.use_attn_tp_group = use_attn_tp_group
         if self.enable_tp:
             if use_attn_tp_group:
                 tp_rank = get_attention_tp_rank()
                 self.tp_size = get_attention_tp_size()
             else:
-                if envs.SGLANG_LM_HEAD_TP.get() > 1:
+                if self.enable_lm_head_tp:
                     tp_rank = get_lm_head_tensor_parallel_rank()
                     self.tp_size = get_lm_head_tensor_parallel_world_size()
                 else:

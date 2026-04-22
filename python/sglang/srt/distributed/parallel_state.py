@@ -1735,6 +1735,7 @@ def initialize_model_parallel(
     attention_data_parallel_size: int = 1,
     attention_context_model_parallel_size: int = 1,
     moe_data_model_parallel_size: int = 1,
+    lm_head_tensor_model_parallel_size: int = 1,
     backend: Optional[str] = None,
     duplicate_tp_group: bool = False,
     enable_symm_mem: bool = False,
@@ -1754,6 +1755,8 @@ def initialize_model_parallel(
         attention_context_model_parallel_size: number of GPUs used for attention context
             parallelism.
         moe_data_model_parallel_size: number of GPUs used for moe data
+            parallelism.
+        lm_head_tensor_model_parallel_size: number of GPUs used for lm_head tensor model
             parallelism.
 
     Let's say we have a total of 8 GPUs denoted by g0 ... g7 and we
@@ -1982,7 +1985,7 @@ def initialize_model_parallel(
             group_name="moe_tp",
         )
 
-    lm_head_tp_size = envs.SGLANG_LM_HEAD_TP.get()
+    lm_head_tp_size = lm_head_tensor_model_parallel_size
     assert (
         1 <= lm_head_tp_size <= world_size
     ), f"lm_head_tp_size {lm_head_tp_size} must be between 1 and world_size {world_size}"
@@ -2091,7 +2094,7 @@ def ensure_model_parallel_initialized(
             tensor_model_parallel_size,
             expert_model_parallel_size,
             pipeline_model_parallel_size,
-            backend,
+            backend=backend,
         )
         return
 
@@ -2226,6 +2229,7 @@ def get_moe_tensor_parallel_rank():
     return get_moe_tp_group().rank_in_group
 
 
+# LM_HEAD_TP
 def get_lm_head_tensor_parallel_world_size():
     """Return world size for the lm head tensor parallel group."""
     return get_lm_head_tp_group().world_size
@@ -2272,6 +2276,11 @@ def destroy_model_parallel():
     if _MOE_DP:
         _MOE_DP.destroy()
     _MOE_DP = None
+
+    global _LM_HEAD_TP
+    if _LM_HEAD_TP:
+        _LM_HEAD_TP.destroy()
+    _LM_HEAD_TP = None
 
     global _PDMUX_PREFILL_TP_GROUP
     if _PDMUX_PREFILL_TP_GROUP:  # type: ignore[union-attr]
