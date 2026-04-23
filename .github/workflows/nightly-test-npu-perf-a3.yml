@@ -22,7 +22,7 @@ jobs:
       max-parallel: 1
       matrix:
         test_config:
-          - name: test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms_76
+          - name: test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms_77
             test_case: test/registered/ascend/performance/v26/test_ascend_qwen3_vl_30b_bf16_2p_in1024x1024_out1024_50ms.py
             runner: linux-aarch64-a3-4
     uses: ./.github/workflows/nightly-test-npu-perf-single-node.yml
