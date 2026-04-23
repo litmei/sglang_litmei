@@ -1,45 +1,34 @@
-import logging
 import unittest
 
 from sglang.test.ascend.e2e.test_npu_performance_utils import (
     AISBENCHMARK_DATASET_DEFAULT,
     BENCHMARK_TOOL_DEFAULT,
-    QWEN3_Coder_NEXT_W8A8_MODEL_PATH,
+    QWEN3_NEXT_80B_A3B_MODEL_PATH,
+    QWEN3_NEXT_80B_A3B_W8A8_MODEL_PATH,
     TestAscendPerformanceTestCaseBase,
 )
 from sglang.test.ci.ci_register import register_npu_ci
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
-)
-logger = logging.getLogger(__name__)
-
-MODEL_PATH = "/root/.cache/modelscope/hub/models/Qwen/Qwen3-Coder-Next_W8A8"
-
 register_npu_ci(
     est_time=1800,
-    suite="nightly-4-npu-a3",
+    suite="nightly-2-npu-a3",
     nightly=True,
     disabled="Currently it is executed by the npu performance workflow.",
 )
 
-ENVS = {
-    "SGLANG_SET_CPU_AFFINITY": "1",
+QWEN3_NEXT_80B_A3B_ENVS = {
+    "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
     "STREAMS_PER_DEVICE": "32",
     "HCCL_SOCKET_IFNAME": "lo",
     "GLOO_SOCKET_IFNAME": "lo",
     "DEEP_NORMAL_MODE_USE_INT8_QUANT": "1",
-    "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "330",
-    "DEEPEP_NORMAL_LONG_SEQ_ROUND": "5",
-    "DEEPEP_NORMAL_LONG_SEQ_PER_ROUND_TOKENS": "3000",
-    "DEEPEP_NORMAL_COMBINE_ENABLE_LONG_SEQ": "1",
+    "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "400",
+    "DEEPEP_NORMAL_LONG_SEQ_ROUND": "10",
+    "DEEPEP_NORMAL_LONG_SEQ_PER_ROUND_TOKENS": "2048",
     "HCCL_OP_EXPANSION_MODE": "AIV",
     "TASK_QUEUE_ENABLE": "1",
     "ASCEND_USE_FIA": "1",
     "SGLANG_NPU_USE_MULTI_STREAM": "0",
-    "ASCEND_LAUNCH_BLOCKING": "1",
     "SGLANG_WARMUP_TIMEOUT": "3600",
     "SGLANG_ENABLE_SPEC_V2": "1",
     "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
@@ -48,36 +37,33 @@ ENVS = {
     "ZBCCL_LOCAL_MEM_SIZE": "60416",
     "SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK": "0",
     "ZBCCL_BOOTSTRAP_URL": "tcp://127.0.0.1:24669",
-    "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
     "ZBCCL_NPU_ALLOC_CONF": "use_vmm_for_static_memory:True",
     "ZBCCL_ENABLE_GRAPH": "1",
 }
 
-OTHER_ARGS = [
-    "--page-size",
-    128,
-    "--tp-size",
-    4,
+QWEN3_NEXT_80B_A3B_OTHER_ARGS = [
     "--trust-remote-code",
     "--attention-backend",
     "ascend",
     "--device",
     "npu",
+    "--quantization",
+    "modelslim",
+    "--page-size",
+    128,
+    "--tp-size",
+    2,
     "--watchdog-timeout",
     9000,
     "--mem-fraction-static",
-    0.75,
+    0.85,
     "--disable-radix-cache",
     "--max-prefill-tokens",
-    14080,
+    28672,
     "--context-length",
     26384,
-    # "--max-total-tokens",
-    # 870000,
-    "--dp-size",
-    2,
-    "--enable-dp-attention",
-    "--enable-dp-lm-head",
+    "--max-total-tokens",
+    122304,
     "--speculative-algorithm",
     "NEXTN",
     "--speculative-num-steps",
@@ -91,48 +77,33 @@ OTHER_ARGS = [
     "--chunked-prefill-size",
     -1,
     "--max-running-requests",
-    312,
+    2,
     "--cuda-graph-bs",
     2,
-    4,
-    16,
-    32,
-    48,
-    64,
-    80,
-    96,
-    128,
-    140,
-    156,
     "--mamba-ssm-dtype",
     "bfloat16",
-    "--moe-a2a-backend",
-    "deepep",
-    "--deepep-mode",
-    "auto",
     "--speculative-draft-model-path",
-    QWEN3_Coder_NEXT_W8A8_MODEL_PATH,
-    "--quantization",
-    "modelslim",
+    QWEN3_NEXT_80B_A3B_MODEL_PATH,
 ]
 
 
-class TestQwen3CoderNext(TestAscendPerformanceTestCaseBase):
+class TestQwen3Next80BA3B(TestAscendPerformanceTestCaseBase):
     benchmark_tool = BENCHMARK_TOOL_DEFAULT
     aisbench_dataset_type = AISBENCHMARK_DATASET_DEFAULT
-    model = MODEL_PATH
-    other_args = OTHER_ARGS
-    envs = ENVS
+    max_attempts = 5
+    model = QWEN3_NEXT_80B_A3B_W8A8_MODEL_PATH
+    other_args = QWEN3_NEXT_80B_A3B_OTHER_ARGS
+    envs = QWEN3_NEXT_80B_A3B_ENVS
     dataset_name = "random"
-    max_concurrency = 16
-    num_prompts = 16
-    input_len = 16000
-    output_len = 1024
+    max_concurrency = 1
+    num_prompts = 1
+    input_len = 3500
+    output_len = 1500
     random_range_ratio = 1
     tpot = 20
-    output_token_throughput = 437
+    output_token_throughput = 230
 
-    def testQwen3CoderNext(self):
+    def test_qwen3_next_80b_a3b(self):
         self.run_throughput()
 
 

@@ -32,7 +32,7 @@ on:
         description: "The transformers version number for running sglang. Use default version in image if keep empty."
 
 concurrency:
-  group: ascend-nightly-performance-singlenode-${{ github.workflow_ref }}-${{ github.ref }}-${{ inputs.test_config_name }}
+  group: npu-nightly-performance-singlenode-${{ github.workflow_ref }}-${{ github.ref }}-${{ inputs.test_config_name }}
   cancel-in-progress: true
 
 jobs:

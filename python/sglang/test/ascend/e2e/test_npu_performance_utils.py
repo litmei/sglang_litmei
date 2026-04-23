@@ -37,9 +37,9 @@ logger = logging.getLogger(__name__)
 
 AISBENCHMARK = "aisbench"
 BENCHSERVING = "bench-serving"
-BENCHMARK_TOOL_DEFAULT = BENCHSERVING
+BENCHMARK_TOOL_DEFAULT = AISBENCHMARK
 AISBENCHMARK_DATASET_GSM8K = "gsm8k"
-AISBENCHMARK_DATASET_GSM8K_GEN = "gsm8k-gen"
+AISBENCHMARK_DATASET_CUSTOM_GEN = "custom-gen"
 AISBENCHMARK_DATASET_MM_CUSTOM_GEN = "mm-custom-gen"
 AISBENCHMARK_DATASET_DEFAULT = AISBENCHMARK_DATASET_GSM8K
 
@@ -115,7 +115,7 @@ QWEN3_NEXT_80B_A3B_MODEL_PATH = (
 QWEN3_NEXT_80B_A3B_W8A8_MODEL_PATH = (
     "/root/.cache/modelscope/hub/models/vllm-ascend/Qwen3-Next-80B-A3B-Instruct-W8A8"
 )
-QWEN3_Coder_NEXT_W8A8_MODEL_PATH = (
+QWEN3_CODER_NEXT_W8A8_MODEL_PATH = (
     "/root/.cache/modelscope/hub/models/Qwen/Qwen3-Coder-Next-W8A8"
 )
 GLM_4_6_W8A8_MODEL_PATH = "/root/.cache/modelscope/hub/models/GLM-4.6-w8a8_WITH_MTP"
@@ -429,7 +429,7 @@ def run_aisbench(
         dataset_path = dataset_file
         logger.info(f"Dataset generated: {dataset_path}")
 
-    if dataset_type == AISBENCHMARK_DATASET_GSM8K_GEN:
+    if dataset_type == AISBENCHMARK_DATASET_CUSTOM_GEN:
         dataset_file = f"/tmp/datasets/test.jsonl"
         if not os.path.exists(dataset_file):
             logger.info(
@@ -469,17 +469,18 @@ def run_aisbench(
     logger.info(f"The metrics result file: {result_path}")
 
     cmd = f"/bin/bash /root/sglang/python/sglang/test/ascend/e2e/run_aisbench.sh "
-    cmd += f"{host} "
-    cmd += f"{str(port)} "
-    cmd += f"{os.path.basename(model_path)} "
-    cmd += f"{model_path} "
-    cmd += f"{dataset_type} "
-    cmd += f"{dataset_path} "
-    cmd += f"{str(input_len)} "
-    cmd += f"{str(output_len)} "
-    cmd += f"{str(max_concurrency)} "
-    cmd += f"{str(num_prompts)} "
-    cmd += f"{result_path}"
+    cmd += f"--mode perf "
+    cmd += f"--ip {host} "
+    cmd += f"--port {str(port)} "
+    cmd += f"--model {os.path.basename(model_path)} "
+    cmd += f"--model-path {model_path} "
+    cmd += f"--dataset-type {dataset_type} "
+    cmd += f"--dataset-path {dataset_path} "
+    cmd += f"--input-len {str(input_len)} "
+    cmd += f"--output-len {str(output_len)} "
+    cmd += f"--batch-size {str(max_concurrency)} "
+    cmd += f"--num-prompts {str(num_prompts)} "
+    cmd += f"--output-path {result_path}"
 
     logger.info(f"Command: {cmd}")
 
@@ -700,7 +701,7 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
-    aisbench_dataset_type = "gsm8k-gen"  # gsm8k | gsm8k-gen | mm-custom-gen
+    aisbench_dataset_type = "gsm8k"  # gsm8k | mm-custom-gen
     aisbench_dataset_path = None  # auto generate dataset if none
     other_args = None
     timeout = DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH
@@ -800,7 +801,7 @@ class TestAscendPerfMultiNodePdMixTestCaseBase(CustomTestCase):
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
-    aisbench_dataset_type = "gsm8k-gen"  # gsm8k-gen | mm-custom-gen
+    aisbench_dataset_type = "gsm8k"  # gsm8k | mm-custom-gen
     aisbench_dataset_path = None  # auto generate dataset if none
     max_attempts = 2
     request_rate = None
@@ -911,7 +912,7 @@ class TestAscendPerfMultiNodePdSepTestCaseBase(CustomTestCase):
     backend = "sglang"
     dataset_name = "random"
     dataset_path = "/tmp/ShareGPT_V3_unfiltered_cleaned_split.json"
-    aisbench_dataset_type = "gsm8k-gen"  # gsm8k-gen | mm-custom-gen
+    aisbench_dataset_type = "gsm8k"  # gsm8k | mm-custom-gen
     aisbench_dataset_path = None  # auto generate dataset if none
     max_attempts = 2
     request_rate = None
