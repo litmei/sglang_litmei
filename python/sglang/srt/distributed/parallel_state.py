@@ -1268,7 +1268,9 @@ class GroupCoordinator:
         self,
         src: Optional[int] = None,
         all_gather_group: Optional["GroupCoordinator"] = None,
-        all_gather_group_resolver: Optional[Callable] = None,
+        all_gather_group_resolver: Optional[
+            Callable[[List[Tuple[str, Any]]], Optional["GroupCoordinator"]]
+        ] = None,
     ) -> Optional[Dict[str, Union[torch.Tensor, Any]]]:
         """Recv the input tensor dictionary.
         NOTE: `src` is the local rank of the source rank.
