@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from sglang.srt.disaggregation.base.conn import KVPoll
 from sglang.srt.disaggregation.utils import poll_and_all_reduce_attn_cp_tp_group
-from sglang.srt.distributed.parallel_state import P2PWork
+from sglang.srt.distributed.parallel_state import GroupCoordinator, P2PWork
 from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import (
     get_attention_dp_rank,
@@ -542,6 +542,9 @@ class SchedulerPPMixin:
         self._pp_tensor_dict_inbox: Dict[str, deque[Dict[str, torch.Tensor]]] = (
             defaultdict(deque)
         )
+        self.proxy_disable_tp_all_gather = (
+            envs.SGLANG_PP_PROXY_DISABLE_TP_ALL_GATHER.get()
+        )
 
     def profile_and_init_predictor(self: Scheduler):
         """
@@ -944,6 +947,15 @@ class SchedulerPPMixin:
             }
         return tensor_dict
 
+    def _pp_get_all_gather_group(
+        self: Scheduler, msg_type: str
+    ) -> Optional[GroupCoordinator]:
+        if not self.require_attn_tp_allgather:
+            return None
+        if msg_type == "proxy" and self.proxy_disable_tp_all_gather:
+            return None
+        return self.attn_tp_group
+
     def _pp_send_dict_to_next_stage(
         self: Scheduler,
         tensor_dict: Dict[str, torch.Tensor],
@@ -961,9 +973,7 @@ class SchedulerPPMixin:
         p2p_work.extend(
             self.pp_group.send_tensor_dict(
                 tensor_dict=tensor_dict,
-                all_gather_group=(
-                    self.attn_tp_group if self.require_attn_tp_allgather else None
-                ),
+                all_gather_group=self._pp_get_all_gather_group(msg_type),
                 async_send=async_send,
             )
         )
@@ -972,7 +982,6 @@ class SchedulerPPMixin:
     def _pp_recv_typed_dict(
         self: Scheduler,
         expected_kind: str = "default",
-        all_gather_group: Optional = None,
     ) -> Dict[str, torch.Tensor]:
         """Receive a typed tensor dict, demultiplexing by msg_type.
 
@@ -986,7 +995,7 @@ class SchedulerPPMixin:
 
         while True:
             tensor_dict = self.pp_group.recv_tensor_dict(
-                all_gather_group=all_gather_group
+                all_gather_group_resolver=self._pp_resolve_all_gather_group_from_metadata
             )
             received_kind = tensor_dict.get("__msg_type__", "default")
             if received_kind == expected_kind:
@@ -1002,15 +1011,22 @@ class SchedulerPPMixin:
                 )
                 self._pp_tensor_dict_inbox[received_kind].append(tensor_dict)
 
+    def _pp_resolve_all_gather_group_from_metadata(
+        self: Scheduler, recv_metadata_list: List[Tuple[str, object]]
+    ) -> Optional[GroupCoordinator]:
+        received_kind = "default"
+        for key, value in recv_metadata_list:
+            if key == "__msg_type__":
+                received_kind = value if isinstance(value, str) else "default"
+                break
+        return self._pp_get_all_gather_group(received_kind)
+
     def _pp_recv_proxy_tensors(self: Scheduler) -> Optional[PPProxyTensors]:
         pp_proxy_tensors = None
         if not self.pp_group.is_first_rank:
             pp_proxy_tensors = PPProxyTensors(
                 self._pp_recv_typed_dict(
                     expected_kind="proxy",
-                    all_gather_group=(
-                        self.attn_tp_group if self.require_attn_tp_allgather else None
-                    ),
                 )
             )
         return pp_proxy_tensors
@@ -1020,9 +1036,6 @@ class SchedulerPPMixin:
     ) -> Dict[str, torch.Tensor]:
         return self._pp_recv_typed_dict(
             expected_kind="output",
-            all_gather_group=(
-                self.attn_tp_group if self.require_attn_tp_allgather else None
-            ),
         )
 
     def _pp_prep_batch_result(
