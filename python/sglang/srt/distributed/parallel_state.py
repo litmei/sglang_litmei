@@ -51,6 +51,7 @@ from sglang.srt.model_executor.runner_backend_utils.tc_piecewise_cuda_graph impo
 )
 from sglang.srt.platforms.device_mixin import _DEVICE_TO_DISTRIBUTED_BACKEND
 from sglang.srt.utils import (
+    get_bool_env_var,
     get_current_device_stream_fast,
     get_int_env_var,
     is_cpu,
@@ -2082,7 +2083,7 @@ def initialize_model_parallel(
         recovered_rank=recovered_rank,
     )
 
-    if envs.SGLANG_ENABLE_LONGCAT_DOUBLE_STREAM.get():
+    if get_bool_env_var("SGLANG_ENABLE_LONGCAT_DOUBLE_STREAM", "false"):
         global _DOUBLE_STREAM_EP
         assert (
             _DOUBLE_STREAM_EP is None
