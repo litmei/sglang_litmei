@@ -2107,6 +2107,10 @@ class ServerArgs:
         bool,
         "Enable corner alignment for resize of embeddings grid to ensure more accurate(but slower) evaluation of interpolated embedding values.",
     ] = False
+    enable_longcat_double_stream: A[
+        bool,
+        "Enable double stream mode for longcat.",
+    ] = False
     enable_fused_moe_sum_all_reduce: A[
         bool,
         "Enable fused moe triton and sum all reduce.",
@@ -2667,6 +2671,7 @@ class ServerArgs:
         self._handle_a2a_moe()
         self._handle_eplb_and_dispatch()
         self._handle_expert_distribution_metrics()
+        self._handle_longcat_double_stream()
         self._handle_elastic_ep()
 
         # Handle pipeline parallelism.
@@ -5598,6 +5603,13 @@ class ServerArgs:
                 self.expert_distribution_recorder_buffer_size = x
             elif self.expert_distribution_recorder_mode is not None:
                 self.expert_distribution_recorder_buffer_size = 1000
+
+    def _handle_longcat_double_stream(self):
+        if self.enable_longcat_double_stream:
+            if self.disaggregation_mode == "prefill":
+                raise RuntimeError(
+                    "--enable-longcat-double-stream is not supported in prefill disaggregation mode, only available in decode and hybrid modes."
+                )
 
     def _handle_pipeline_parallelism(self):
         if self.pp_size > 1:
