@@ -111,8 +111,24 @@ class DeepEPLLDispatchOutput(NamedTuple):
         return DispatchOutputFormat.DEEPEP_LL
 
 
+class DeepEPAllToAllDispatchOutput(NamedTuple):
+    """DeepEP all_gather dispatch output."""
+
+    hidden_states: torch.Tensor
+    hidden_states_scale: Optional[torch.Tensor]
+    topk_ids: torch.Tensor
+    topk_weights: torch.Tensor
+    masked_m: torch.Tensor
+    expected_m: int
+
+    @property
+    def format(self) -> DispatchOutputFormat:
+        return DispatchOutputFormat.DEEPEP_ALLTOALL
+
+
 assert isinstance(DeepEPNormalDispatchOutput, DispatchOutput)
 assert isinstance(DeepEPLLDispatchOutput, DispatchOutput)
+assert isinstance(DeepEPAllToAllDispatchOutput, DispatchOutput)
 
 
 class DeepEPNormalCombineInput(NamedTuple):
@@ -146,6 +162,7 @@ assert isinstance(DeepEPLLCombineInput, CombineInput)
 class DeepEPDispatchMode(IntEnum):
     NORMAL = auto()
     LOW_LATENCY = auto()
+    ALL_GATHER = auto()
 
 
 class DeepEPBuffer:
@@ -265,11 +282,17 @@ class DeepEPBuffer:
         cls._dispatch_mode = DeepEPDispatchMode.LOW_LATENCY
 
     @classmethod
+    def set_dispatch_mode_as_alltoall(cls):
+        cls._dispatch_mode = DeepEPDispatchMode.ALL_GATHER
+
+    @classmethod
     def set_dispatch_mode(cls, mode: DeepEPMode):
         if mode.is_low_latency():
             cls.set_dispatch_mode_as_low_latency()
         elif mode.is_normal():
             cls.set_dispatch_mode_as_normal()
+        elif mode.is_alltoall():
+            cls.set_dispatch_mode_as_alltoall()
         else:
             raise Exception("unsupported mode")
 

@@ -201,7 +201,11 @@ class DeepEPMoE(FusedMoE):
         if self.deprecate_flag:
             return super().run_moe_core(dispatch_output)
 
-        from sglang.srt.layers.moe.token_dispatcher import DispatchOutputChecker
+        from sglang.srt.layers.moe.token_dispatcher import (
+            DispatchOutputChecker,
+            NpuDispatcherWithAllToAllOutput,
+            MoEAllToAllCombineInput,
+        )
 
         if _is_npu:
             assert DispatchOutputChecker.format_is_deepep(dispatch_output)
@@ -220,7 +224,13 @@ class DeepEPMoE(FusedMoE):
                 output = self.forward_cutlass_w4afp8_masked(dispatch_output)
             else:
                 assert False, "forward_deepgemm_masked is deprecated"
-
+        if isinstance(dispatch_output, NpuDispatcherWithAllToAllOutput):
+            return MoEAllToAllCombineInput(
+                hidden_states=output,
+                topk_weights=dispatch_output.combine_metadata.topk_weights,
+                expanded_row_idx=dispatch_output.combine_metadata.expanded_row_idx,
+                original_shape=dispatch_output.combine_metadata.original_shape,
+            )
         combine_input_wrapper = (
             DeepEPNormalCombineInput
             if DispatchOutputChecker.format_is_deepep_normal(dispatch_output)
@@ -279,7 +289,11 @@ class DeepEPMoE(FusedMoE):
         from sglang.srt.hardware_backend.npu.quantization.fused_moe_method_npu import (
             npu_fused_moe_without_routing_weights_bf16,
         )
-        from sglang.srt.layers.moe.token_dispatcher import DispatchOutputChecker
+        from sglang.srt.layers.moe.token_dispatcher import (
+            DispatchOutputChecker,
+            DeepEPNormalDispatchOutput,
+            NpuDispatcherWithAllToAllOutput,
+        )
 
         # NOTE: Ascend's Dispatch & Combine does not support FP16
         output_dtype = torch.bfloat16
@@ -338,6 +352,22 @@ class DeepEPMoE(FusedMoE):
                     group_list,
                     output_dtype,
                 )
+        elif DispatchOutputChecker.format_is_deepep_alltoall(dispatch_output):
+            if TYPE_CHECKING:
+                assert isinstance(dispatch_output, NpuDispatcherWithAllToAllOutput)
+            hidden_states = dispatch_output.hidden_states
+            hidden_states_scale = dispatch_output.dynamic_scale
+            group_list = dispatch_output.group_list
+            group_list_type = dispatch_output.group_list_type
+
+            hidden_states = self.quant_method.apply_without_routing_weights(
+                self,
+                hidden_states,
+                hidden_states_scale,
+                group_list_type,
+                group_list,
+                output_dtype,
+            )
         else:
             raise ValueError(f"Not Supported DeepEP format {dispatch_output.format}")
 
