@@ -31,7 +31,9 @@ from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     auto_config_device,
+    is_in_ci,
     popen_launch_server,
+    write_github_step_summary,
 )
 
 STDERR_FILENAME = "/tmp/stderr.txt"
