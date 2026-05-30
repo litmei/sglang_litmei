@@ -147,7 +147,6 @@ class TestEplbMinRebalancingUtilizationThreshold095(
                 "SGLANG_ENABLE_JIT_DEEPGEMM": "0",
                 "SGLANG_EXPERT_LOCATION_UPDATER_CANARY": "1",
                 "HCCL_BUFFSIZE": "1024",
-                "SGLANG_DEEPEP_BF16_DISPATCH": "1",
                 "SGLANG_NPU_DISABLE_ACL_FORMAT_WEIGHT": "1",
                 "TRANSFORMERS_VERBOSITY": "error",
                 **os.environ,
