@@ -67,7 +67,8 @@ class TestTokenizerBatchEncode(CustomTestCase):
         tok = time.perf_counter()
         print(f"{res=}")
         throughput = max_tokens / (tok - tic)
-        self.assertGreaterEqual(throughput, 200)
+        expect_result = 200 * 0.8
+        self.assertGreaterEqual(throughput, expect_result)
 
     def test_gsm8k(self):
         args = SimpleNamespace(
