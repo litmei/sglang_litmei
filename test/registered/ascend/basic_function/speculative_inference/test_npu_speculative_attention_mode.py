@@ -18,7 +18,7 @@ from sglang.test.test_utils import (
 
 register_npu_ci(
     est_time=400,
-    suite="nightly-8-npu-a3",
+    suite="nightly-4-npu-a3",
     nightly=True,
 )
 
@@ -72,7 +72,7 @@ class TestNpuSpeculativeAttentionMode(CustomTestCase):
             "--speculative-attention-mode",
             "decode",
             "--tp-size",
-            "8",
+            "4",
             "--mem-fraction-static",
             "0.7",
             "--disable-cuda-graph",
@@ -81,11 +81,13 @@ class TestNpuSpeculativeAttentionMode(CustomTestCase):
         ]
 
         env = os.environ.copy()
-        env.update({
-            "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
-            "SGLANG_ENABLE_SPEC_V2": "1",
-            "TRANSFORMERS_VERBOSITY": "error",
-        })
+        env.update(
+            {
+                "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
+                "SGLANG_ENABLE_SPEC_V2": "1",
+                "TRANSFORMERS_VERBOSITY": "error",
+            }
+        )
 
         process = popen_launch_server(
             QWEN3_32B_W8A8_MINDIE_WEIGHTS_PATH,
@@ -131,7 +133,7 @@ class TestNpuSpeculativeAttentionMode(CustomTestCase):
             "--speculative-attention-mode",
             "prefill",
             "--tp-size",
-            "8",
+            "4",
             "--mem-fraction-static",
             "0.7",
             "--disable-cuda-graph",
@@ -140,11 +142,13 @@ class TestNpuSpeculativeAttentionMode(CustomTestCase):
         ]
 
         env = os.environ.copy()
-        env.update({
-            "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
-            "SGLANG_ENABLE_SPEC_V2": "1",
-            "TRANSFORMERS_VERBOSITY": "error",
-        })
+        env.update(
+            {
+                "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
+                "SGLANG_ENABLE_SPEC_V2": "1",
+                "TRANSFORMERS_VERBOSITY": "error",
+            }
+        )
 
         process = popen_launch_server(
             QWEN3_32B_W8A8_MINDIE_WEIGHTS_PATH,
