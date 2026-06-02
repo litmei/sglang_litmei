@@ -30,7 +30,7 @@ on:
         required: false
         type: string
         default: ''
-  
+
   workflow_call:
     inputs:
       ref:
