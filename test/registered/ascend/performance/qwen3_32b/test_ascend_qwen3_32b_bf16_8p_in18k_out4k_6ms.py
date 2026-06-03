@@ -94,8 +94,8 @@ class TestQwen32B_mmlupro(TestAscendAccuracyTestCaseBase):
     accuracy = 65.54
     datasets = ["mmlu_pro"]
     few_shot_num = 5
+    eval_batch_size = 64
     generation_config = {"max_tokens": 65536, "temperature": 1.0}
-    max_concurrency = 16
 
     def test_accuracy(self):
         self.run_accuracy()

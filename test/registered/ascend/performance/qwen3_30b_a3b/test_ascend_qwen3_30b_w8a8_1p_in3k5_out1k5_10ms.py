@@ -94,13 +94,13 @@ class TestQwen30B(TestAscendPerformanceTestCaseBase):
     other_args = OTHER_ARGS
     envs = ENVS
     dataset_name = "random"
-    # dataset_path = "/data/l30081563/GSM8K-in3500-bs3000_qwen3-30b.jsonl"
     max_concurrency = 1
     num_prompts = 1
     input_len = 3500
     output_len = 1500
     random_range_ratio = 1
     tpot = 10
+    output_token_throughput = 177.49
 
     def test_qwen3_30b(self):
         self.run_throughput()

@@ -165,9 +165,9 @@ jobs:
             test_case: test/registered/ascend/performance/qwen3_30b_a3b/test_ascend_qwen3_30b_w8a8_1p_in3k5_out1k5_50ms.py
             test_type: 'perf'
           # qwen3-8b performance tests
-          - name: test_ascend_qwen3_8b_w8a8_19_in3k5_out1k5_50ms
+          - name: test_ascend_qwen3_8b_w8a8_1p_in3k5_out1k5_50ms
             runner: linux-aarch64-a3-2
-            test_case: test/registered/ascend/performance/qwen3-8b/test_ascend_qwen3_8b_w8a8_19_in3k5_out1k5_50ms.py
+            test_case: test/registered/ascend/performance/qwen3-8b/test_ascend_qwen3_8b_w8a8_1p_in3k5_out1k5_50ms.py
             test_type: 'perf'
           - name: test_ascend_qwen3_8b_w8a8_1p_in6k_out1k5_bs16
             runner: linux-aarch64-a3-2

@@ -104,6 +104,7 @@ class TestNPUKimiK2_6_W4A8_8P_AIME2025(TestAscendAccuracyMultiNodePdMixTestCaseB
     accuracy = 96.1
     datasets = ["aime25"]
     few_shot_num = 0
+    eval_batch_size = 64
     generation_config = {"max_tokens": 8192, "temperature": 1.0}
 
     @classmethod

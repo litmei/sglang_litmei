@@ -1,9 +1,12 @@
 import unittest
 
-from sglang.test.ascend.e2e.test_npu_accuracy_utils import TestAscendAccuracyTestCaseBase
+from sglang.test.ascend.e2e.test_npu_accuracy_utils import (
+    TestAscendAccuracyTestCaseBase,
+)
 from sglang.test.ascend.e2e.test_npu_performance_utils import (
     AISBENCHMARK_DATASET_DEFAULT,
     BENCHMARK_TOOL_DEFAULT,
+    DEFAULT_URL_FOR_TEST,
     QWEN3_32B_EAGLE_MODEL_PATH,
     QWEN3_32B_W8A8_MODEL_PATH,
     TestAscendPerformanceTestCaseBase,
@@ -85,8 +88,29 @@ QWEN3_32B_OTHER_ARGS = [
 ]
 
 
+class TestQwen32B_MMLUPro(TestAscendAccuracyTestCaseBase):
+    """Test NPU accuracy for Qwen3-32B-W8A8 on MMLU-Pro"""
+
+    model = QWEN3_32B_W8A8_MODEL_PATH
+    other_args = QWEN3_32B_OTHER_ARGS
+    envs = QWEN3_32B_ENVS
+    accuracy = 65.54
+    datasets = ["mmlu_pro"]
+    few_shot_num = 0
+    eval_batch_size = 64
+    generation_config = {"max_tokens": 8192, "temperature": 1.0}
+
+    @classmethod
+    def tearDownClass(cls):
+        pass
+
+    def test_qwen3_32b_mmlu_pro(self):
+        """Run NPU accuracy test for Qwen3-32B-W8A8 on MMLU-Pro"""
+        self.run_accuracy()
+
+
 class TestQwen32B(TestAscendPerformanceTestCaseBase):
-    benchmark_tool = BENCHMARK_TOOL_DEFAULT
+    base_url = DEFAULT_URL_FOR_TEST
     aisbench_dataset_type = AISBENCHMARK_DATASET_DEFAULT
     model = QWEN3_32B_W8A8_MODEL_PATH
     other_args = QWEN3_32B_OTHER_ARGS
@@ -100,21 +124,13 @@ class TestQwen32B(TestAscendPerformanceTestCaseBase):
     tpot = 50
     output_token_throughput = 1600
 
+    @classmethod
+    def setUpClass(cls):
+        pass
+
     def test_qwen3_32b(self):
         self.run_throughput()
 
-class TestQwen32B_mmlupro(TestAscendAccuracyTestCaseBase):
-    model = QWEN3_32B_W8A8_MODEL_PATH
-    envs = QWEN3_32B_ENVS
-    other_args = QWEN3_32B_OTHER_ARGS
-    accuracy = 65.54
-    datasets = ["mmlu_pro"]
-    few_shot_num = 5
-    eval_batch_size = 64
-    generation_config = {"max_tokens": 65536, "temperature": 1.0}
-
-    def test_accuracy(self):
-        self.run_accuracy()
 
 if __name__ == "__main__":
     unittest.main()
