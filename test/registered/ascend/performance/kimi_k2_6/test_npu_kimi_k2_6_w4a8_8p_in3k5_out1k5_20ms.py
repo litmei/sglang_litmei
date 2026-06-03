@@ -1,12 +1,10 @@
 import unittest
 
-from sglang.test.ascend.e2e.test_npu_accuracy_utils import (
-    TestAscendAccuracyMultiNodePdMixTestCaseBase,
-)
 from sglang.test.ascend.e2e.test_npu_multi_node_utils import NIC_NAME
 from sglang.test.ascend.e2e.test_npu_performance_utils import (
     AISBENCHMARK_DATASET_DEFAULT,
     BENCHMARK_TOOL_DEFAULT,
+    KIMI_K2_6_EAGLE3_MODEL_PATH,
     KIMI_K2_6_W4A8_MODEL_PATH,
     TestAscendPerformanceTestCaseBase,
 )
@@ -14,29 +12,29 @@ from sglang.test.ci.ci_register import register_npu_ci
 
 register_npu_ci(
     est_time=1800,
-    suite="nightly-8-npu-a3",
+    suite="full-16-npu-a3",
     nightly=True,
     disabled="Currently it is executed by the npu performance workflow.",
 )
 
-ENVS = {
-    "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
-    "STREAMS_PER_DEVICE": "32",
+KIMI_K2_6_ENVS = {
     "SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT": "600",
-    "DEEP_NORMAL_MODE_USE_INT8_QUANT": "1",
-    "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "96",
-    "HCCL_BUFFSIZE": "2400",
-    "SGLANG_ENABLE_SPEC_V2": "1",
-    "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
-    "SGLANG_SCHEDULER_DECREASE_PREFILL_IDLE": "1",
-    "SGLANG_PREFILL_DELAYER_MAX_DELAY_PASSES": "200",
-    "SGLANG_NPU_USE_MLAPO": "1",
+    "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
     "HCCL_SOCKET_IFNAME": NIC_NAME,
     "GLOO_SOCKET_IFNAME": NIC_NAME,
-    "SGLANG_SET_CPU_AFFINITY": "1",
+    "STREAMS_PER_DEVICE": "32",
+    "DEEP_NORMAL_MODE_USE_INT8_QUANT": "1",
+    "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "48",
+    "HCCL_BUFFSIZE": "1200",
+    "SGLANG_ENABLE_SPEC_V2": "1",
+    "SGLANG_ENABLE_OVERLAP_PLAN_STREAM": "1",
+    "SGLANG_NPU_USE_MLAPO": "1",
+    "SGLANG_NPU_USE_MULTI_STREAM": "1",
+    "SGLANG_SCHEDULER_DECREASE_PREFILL_IDLE": "1",
+    "SGLANG_PREFILL_DELAYER_MAX_DELAY_PASSES": "200",
 }
 
-OTHER_ARGS = [
+KIMI_K2_6_OTHER_ARGS = [
     "--trust-remote-code",
     "--attention-backend",
     "ascend",
@@ -47,15 +45,13 @@ OTHER_ARGS = [
     "--dtype",
     "bfloat16",
     "--tp-size",
-    32,
-    "--nnodes",
-    2,
+    16,
     "--mem-fraction-static",
-    0.62,
+    0.74,
     "--max-running-requests",
-    386,
+    112,
     "--chunked-prefill-size",
-    65536,
+    32768,
     "--context-length",
     8192,
     "--max-prefill-tokens",
@@ -67,7 +63,7 @@ OTHER_ARGS = [
     "ascend",
     "--enable-dp-attention",
     "--dp-size",
-    32,
+    16,
     "--moe-a2a-backend",
     "deepep",
     "--deepep-mode",
@@ -75,16 +71,15 @@ OTHER_ARGS = [
     "--cuda-graph-bs",
     1,
     2,
+    3,
     4,
-    6,
-    8,
-    10,
-    12,
     "--disable-radix-cache",
     "--model-loader-extra-config",
     '{"enable_multithread_load": true}',
     "--speculative-algorithm",
     "EAGLE3",
+    "--speculative-draft-model-path",
+    KIMI_K2_6_EAGLE3_MODEL_PATH,
     "--speculative-num-steps",
     4,
     "--speculative-eagle-topk",
@@ -96,46 +91,25 @@ OTHER_ARGS = [
 ]
 
 
-class TestNPUKimiK2_6_W4A8_8P_AIME2025(TestAscendAccuracyMultiNodePdMixTestCaseBase):
-
-    model = KIMI_K2_6_W4A8_MODEL_PATH
-    other_args = OTHER_ARGS
-    envs = ENVS
-    accuracy = 0.961
-    datasets = ["aime25"]
-    few_shot_num = 0
-    eval_batch_size = 64
-    generation_config = {"max_tokens": 8192, "temperature": 1.0}
-
-    @classmethod
-    def tearDownClass(cls):
-        pass
-
-    def test_aime2025(self):
-        self.run_accuracy()
-
-
-class TestNPUKimiK2_6_W4A8_8P_In64k_Out1k_50ms(TestAscendPerformanceTestCaseBase):
+class TestKimiK25W4A8(TestAscendPerformanceTestCaseBase):
     benchmark_tool = BENCHMARK_TOOL_DEFAULT
     aisbench_dataset_type = AISBENCHMARK_DATASET_DEFAULT
+    max_attempts = 5
     model = KIMI_K2_6_W4A8_MODEL_PATH
-    other_args = OTHER_ARGS
-    envs = ENVS
+    other_args = KIMI_K2_6_OTHER_ARGS
+    envs = KIMI_K2_6_ENVS
+    backend = "sglang"
     dataset_name = "random"
-    max_concurrency = 48
-    num_prompts = 48
-    request_rate = 1
-    input_len = 16384
-    output_len = 1024
+    max_concurrency = 112
+    num_prompts = 112
+    input_len = 3500
+    output_len = 1500
     random_range_ratio = 1
-    tpot = 100
-    output_token_throughput = 1000
+    warmup_requests = 0
+    tpot = 20
+    output_token_throughput = 1800
 
-    @classmethod
-    def setUpClass(cls):
-        pass
-
-    def test_npu_kimi_k2_6_w4a8_8p_in64k_out1k_50ms(self):
+    def test_kimi_k2_6_w4a8(self):
         self.run_throughput()
 
 

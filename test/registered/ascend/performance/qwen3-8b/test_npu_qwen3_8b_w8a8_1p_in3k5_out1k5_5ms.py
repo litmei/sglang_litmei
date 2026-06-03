@@ -1,10 +1,11 @@
 import unittest
 
-from sglang.test.ascend.e2e.test_npu_accuracy_utils import (
-    TestAscendAccuracyTestCaseBase,
-)
 from sglang.test.ascend.e2e.test_npu_performance_utils import (
-    QWEN3_VL_8B_THINKING_MODEL_PATH,
+    AISBENCHMARK_DATASET_DEFAULT,
+    BENCHMARK_TOOL_DEFAULT,
+    QWEN3_8B_EAGLE_MODEL_PATH,
+    QWEN3_8B_W8A8_MODEL_PATH,
+    TestAscendPerformanceTestCaseBase,
 )
 from sglang.test.ci.ci_register import register_npu_ci
 
@@ -15,7 +16,7 @@ register_npu_ci(
     disabled="performance testcase",
 )
 
-ENVS = {
+QWEN3_8B_ENVS = {
     "SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT": "600",
     "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
     "HCCL_SOCKET_IFNAME": "lo",
@@ -25,7 +26,7 @@ ENVS = {
     "SGLANG_ENABLE_SPEC_V2": "1",
 }
 
-OTHER_ARGS = [
+QWEN3_8B_OTHER_ARGS = [
     "--trust-remote-code",
     "--nnodes",
     "1",
@@ -38,7 +39,7 @@ OTHER_ARGS = [
     "--quantization",
     "modelslim",
     "--max-running-requests",
-    16,
+    1,
     "--max-prefill-tokens",
     16384,
     "--disable-radix-cache",
@@ -50,38 +51,41 @@ OTHER_ARGS = [
     0.894,
     "--cuda-graph-bs",
     1,
-    5,
-    15,
-    16,
     "--dtype",
     "bfloat16",
-    # "--speculative-draft-model-quantization",
-    # "unquant",
-    # "--speculative-algorithm",
-    # "EAGLE3",
-    # "--speculative-draft-model-path",
-    # QWEN3_8B_EAGLE_MODEL_PATH,
-    # "--speculative-num-steps",
-    # 4,
-    # "--speculative-eagle-topk",
-    # 1,
-    # "--speculative-num-draft-tokens",
-    # 5,
+    "--speculative-draft-model-quantization",
+    "unquant",
+    "--speculative-algorithm",
+    "EAGLE3",
+    "--speculative-draft-model-path",
+    QWEN3_8B_EAGLE_MODEL_PATH,
+    "--speculative-num-steps",
+    4,
+    "--speculative-eagle-topk",
+    1,
+    "--speculative-num-draft-tokens",
+    5,
 ]
 
 
-class TestQwen3(TestAscendAccuracyTestCaseBase):
-    model = QWEN3_VL_8B_THINKING_MODEL_PATH
-    envs = ENVS
-    other_args = OTHER_ARGS
-    accuracy = 0.741
-    datasets = ["mmmu"]
-    few_shot_num = 0
-    generation_config = {"max_tokens": 65536, "temperature": 1.0}
-    eval_batch_size = 16
+class TestQwen8B(TestAscendPerformanceTestCaseBase):
+    max_attempts = 5
+    benchmark_tool = BENCHMARK_TOOL_DEFAULT
+    aisbench_dataset_type = AISBENCHMARK_DATASET_DEFAULT
+    model = QWEN3_8B_W8A8_MODEL_PATH
+    other_args = QWEN3_8B_OTHER_ARGS
+    envs = QWEN3_8B_ENVS
+    dataset_name = "random"
+    max_concurrency = 1
+    num_prompts = 4
+    input_len = 3500
+    output_len = 1500
+    random_range_ratio = 1
+    tpot = 5
+    output_token_throughput = 225.98
 
-    def test_mmmu(self):
-        self.run_accuracy()
+    def test_qwen3_8b(self):
+        self.run_throughput()
 
 
 if __name__ == "__main__":

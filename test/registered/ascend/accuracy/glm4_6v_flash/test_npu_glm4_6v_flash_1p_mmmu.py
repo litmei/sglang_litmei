@@ -3,14 +3,14 @@ import unittest
 from sglang.test.ascend.e2e.test_npu_accuracy_utils import (
     TestAscendAccuracyTestCaseBase,
 )
-from sglang.test.ascend.e2e.test_npu_performance_utils import GLM_4_7_FLASH_MODEL_PATH
+from sglang.test.ascend.e2e.test_npu_performance_utils import GLM_4_6V_FLASH_MODEL_PATH
 from sglang.test.ci.ci_register import register_npu_ci
 
 register_npu_ci(
     est_time=3600,
     suite="",
     nightly=True,
-    disabled="accuracy testcase",
+    disabled="performance testcase",
 )
 
 ENVS = {
@@ -53,18 +53,17 @@ OTHER_ARGS = [
 ]
 
 
-class TestNPUDeepSeek_V3_2_8P_AIME2025(TestAscendAccuracyTestCaseBase):
-
-    model = GLM_4_7_FLASH_MODEL_PATH
+class TestQwen3(TestAscendAccuracyTestCaseBase):
+    model = GLM_4_6V_FLASH_MODEL_PATH
     envs = ENVS
     other_args = OTHER_ARGS
-    accuracy = 0.957
-    datasets = ["aime25"]
+    accuracy = 0.711
+    datasets = ["mmmu"]
     few_shot_num = 0
     generation_config = {"max_tokens": 65536, "temperature": 1.0}
     eval_batch_size = 64
 
-    def test_aime2025(self):
+    def test_mmmu(self):
         self.run_accuracy()
 
 
