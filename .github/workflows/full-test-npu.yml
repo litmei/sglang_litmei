@@ -698,6 +698,13 @@ jobs:
       max-parallel: 1
       matrix:
         test_config:
+          - name: test_npu_bucket_adjust_interval_secs_concurrency
+            test_case: test/registered/ascend/basic_function/parallel_strategy/test_npu_bucket_adjust_interval_secs_concurrency.py
+            test_type: 'func'
+            prefill_decode_deployment: 'separation'
+            prefill_size: 3
+            decode_size: 1
+            router_size: 1
           # ===== DeepSeek R1 W4A8 1p1d_16p PD separation =====
           - name: test_ascend_deepseek_r1_w4a8_1p1d_16p_in2k_out2k_50ms
             prefill_size: 1
