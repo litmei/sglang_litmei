@@ -82,6 +82,7 @@ MINIMAX_M2_5_4P_32K_OTHER_ARGS = [
     8,
 ]
 
+
 class TestNPUMiniMaxM2_5_W8A8_4P_In32k_Out1k_HighThroughput(
     TestAscendPerformanceTestCaseBase
 ):
@@ -108,4 +109,5 @@ class TestNPUMiniMaxM2_5_W8A8_4P_In32k_Out1k_HighThroughput(
 
 if __name__ == "__main__":
     unittest.main()
+
 
