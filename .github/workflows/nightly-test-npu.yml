@@ -213,10 +213,6 @@ jobs:
           - name: qwen3_vl_30b_a3b_thinking_1p_mmmu
             runner: linux-aarch64-a3-2
             test_case: test/registered/ascend/accuracy/qwen3_vl_30b_a3b_thinking/test_npu_qwen3_vl_30b_a3b_thinking_1p_mmmu.py
-#          # qwen3_omni_30b_a3b_thinking accuracy tests
-#          - name: qwen3_omni_30b_a3b_thinking_1p_mmmu
-#            runner: linux-aarch64-a3-2
-#            test_case: test/registered/ascend/accuracy/qwen3_omni_30b_a3b_thinking/test_npu_qwen3_omni_30b_a3b_thinking_1p_mmmu.py
     uses: ./.github/workflows/nightly-test-npu-e2e-single-node.yml
     with:
       runner: ${{ matrix.test_config.runner }}
