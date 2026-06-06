@@ -9,7 +9,7 @@ from sglang.test.ascend.e2e.test_npu_performance_utils import (
     BENCHMARK_TOOL_DEFAULT,
     KIMI_K2_6_EAGLE3_MODEL_PATH,
     KIMI_K2_6_W4A8_MODEL_PATH,
-    TestAscendPerformanceTestCaseBase,
+    TestAscendPerfMultiNodePdMixTestCaseBase,
 )
 from sglang.test.ci.ci_register import register_npu_ci
 
@@ -100,7 +100,7 @@ class TestNPUKimiK2_6_W4A8_16P_AIME2025(TestAscendAccuracyMultiNodePdMixTestCase
         self.run_accuracy()
 
 
-class TestNPUKimiK2_6_W4A8_16P_In64k_Out1k_100ms(TestAscendPerformanceTestCaseBase):
+class TestNPUKimiK2_6_W4A8_16P_In64k_Out1k_100ms(TestAscendPerfMultiNodePdMixTestCaseBase):
     benchmark_tool = BENCHMARK_TOOL_DEFAULT
     aisbench_dataset_type = AISBENCHMARK_DATASET_DEFAULT
     model = KIMI_K2_6_W4A8_MODEL_PATH
