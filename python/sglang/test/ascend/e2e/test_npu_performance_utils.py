@@ -876,6 +876,7 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
     seed = None
     temperature = None
     top_p = None
+    disable_ignore_eos = False
     ttft = None
     tpot = None
     mean_e2e_latency = None
@@ -959,6 +960,7 @@ class TestAscendPerformanceTestCaseBase(CustomTestCase):
                 "seed": self.seed,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
+                "disable_ignore_eos": self.disable_ignore_eos,
             }
             logger.info(f"Starting benchmark with parameters: {bench_params}")
             metrics = run_bench_serving(**bench_params)

@@ -114,6 +114,8 @@ class TestNPUQwen3_5_397B_64K(TestAscendPerformanceTestCaseBase):
     random_range_ratio = 1
     tpot = 50
     request_rate = float("inf")
+    temperature = 0.6
+    top_p = 0.95
     output_token_throughput = 247.9
 
     def test_npu_qwen3_5_397b_8p_in64k_out1k_50ms(self):
