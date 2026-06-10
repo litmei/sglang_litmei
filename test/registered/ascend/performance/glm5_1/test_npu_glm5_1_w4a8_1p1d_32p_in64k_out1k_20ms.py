@@ -53,7 +53,7 @@ GLM_5_1_PD_SEP_PREFILL_ARGS = [
     "--disaggregation-mode",
     "prefill",
     "--tp-size",
-    32,
+    4,
     "--nnodes",
     2,
     "--mem-fraction-static",

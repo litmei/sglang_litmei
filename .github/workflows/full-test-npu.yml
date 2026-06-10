@@ -19,6 +19,11 @@ on:
         required: false
         type: string
         default: 'all'
+      image_a2:
+        description: 'The a2 running docker image of the test task.'
+        required: false
+        type: string
+        default: ''
       image_a3:
         description: 'The a3 running docker image of the test task.'
         required: false
@@ -49,6 +54,7 @@ jobs:
     outputs:
       ref: ${{ steps.set-vars.outputs.ref }}
       job_filter: ${{ steps.set-vars.outputs.job_filter }}
+      image_a2: ${{ steps.set-vars.outputs.image_a2 }}
       image_a3: ${{ steps.set-vars.outputs.image_a3 }}
       skip_install_flag: ${{ steps.set-vars.outputs.skip_install_flag }}
       test_scope: ${{ steps.set-vars.outputs.test_scope }}
@@ -60,6 +66,7 @@ jobs:
           echo "========== INPUT PARAMETERS =========="
           echo "inputs.ref            = ${{ inputs.ref }}"
           echo "inputs.job_filter     = ${{ inputs.job_filter }}"
+          echo "inputs.image_a2        = ${{ inputs.image_a2 }}"
           echo "inputs.image_a3        = ${{ inputs.image_a3 }}"
           echo "inputs.skip_install_flag = ${{ inputs.skip_install_flag }}"
           echo "inputs.test_scope      = ${{ inputs.test_scope }}"
@@ -74,6 +81,12 @@ jobs:
             echo "job_filter=all" >> $GITHUB_OUTPUT
           else
             echo "job_filter=${{ inputs.job_filter }}" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -z "${{ inputs.image_a2 }}" ]; then
+            echo "image_a2=swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:cann9.0.0-910b-20260515" >> $GITHUB_OUTPUT
+          else
+            echo "image_a2=${{ inputs.image_a2 }}" >> $GITHUB_OUTPUT
           fi
 
           if [ -z "${{ inputs.image_a3 }}" ]; then
@@ -102,6 +115,7 @@ jobs:
     with:
       ref: ${{ needs.set-image-config.outputs.ref }}
       job_filter: ${{ needs.set-image-config.outputs.job_filter }}
+      image_a2: ${{ needs.set-image-config.outputs.image_a2 }}
       image_a3: ${{ needs.set-image-config.outputs.image_a3 }}
       skip_install_flag: ${{ needs.set-image-config.outputs.skip_install_flag }}
     secrets: inherit
