@@ -35,6 +35,7 @@ class TestLoraOverlapLoadingDisabled(CustomTestCase):
                 "--enable-lora",
                 "--lora-path",
                 f"lora_a={LLAMA_3_2_1B_INSTRUCT_TOOL_CALLING_LORA_WEIGHTS_PATH}",
+                "--enable-lora-overlap-loading",
                 "--attention-backend",
                 "ascend",
                 "--disable-cuda-graph",
