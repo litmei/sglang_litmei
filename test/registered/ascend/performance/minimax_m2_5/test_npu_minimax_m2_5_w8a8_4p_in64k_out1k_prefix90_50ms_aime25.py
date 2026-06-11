@@ -106,7 +106,7 @@ class TestNPUMiniMaxM2_5W8A8_4P_In64k_Out1k_Prefix90_50ms(
     random_range_ratio = 1
     repeat_rate = 0.9
     tpot = 50
-    output_token_throughput = 390.5839
+    output_token_throughput = 390.5859
     request_rate = float("inf")
 
     def test_npu_minimax_m2_5_w8a8_4p_in64k_out1k_prefix90_50ms(self):
