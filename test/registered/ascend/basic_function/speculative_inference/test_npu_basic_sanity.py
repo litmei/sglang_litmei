@@ -53,6 +53,8 @@ class TestBasicSanity(
                 "--mem-fraction-static",
                 "0.7",
                 "--enable-metrics",
+                "--attention-backend",
+                "ascend",
             ],
             env={"SGLANG_ENABLE_METRICS_DEVICE_TIMER": "1"},
         )
