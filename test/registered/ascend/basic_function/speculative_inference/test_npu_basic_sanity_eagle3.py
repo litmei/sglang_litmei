@@ -58,7 +58,6 @@ class TestBasicSanityEagle3(
                 "4",
                 "--mem-fraction-static",
                 "0.7",
-                "--enable-metrics",
                 "--disable-piecewise-cuda-graph",
             ],
         )
