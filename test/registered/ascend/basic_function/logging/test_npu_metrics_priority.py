@@ -58,7 +58,7 @@ class TestNPUMetricsPriority(TestNPULoggingBase):
         metrics = _parse_prometheus_metrics(metrics_response.text)
 
         for metric_name in ["sglang:num_running_reqs", "sglang:num_queue_reqs"]:
-            samples = _get_samples_by_name(metrics, metric_name)
+            samples = metrics.get(metric_name, [])
             self.assertGreater(len(samples), 0, f"No samples found for {metric_name}")
 
             # Prometheus emits two kinds of samples for this gauge:
@@ -99,7 +99,7 @@ class TestNPUMetricsPriority(TestNPULoggingBase):
         ]
         for metric_name in histogram_metrics:
             count_name = f"{metric_name}_count"
-            samples = _get_samples_by_name(metrics, count_name)
+            samples = metrics.get(count_name, [])
             self.assertGreater(len(samples), 0, f"No samples found for {count_name}")
 
             priority_values = {s.labels.get("priority", "") for s in samples}
@@ -141,8 +141,8 @@ class TestNPUMetricsPriority(TestNPULoggingBase):
         self.assertEqual(metrics_response.status_code, 200)
         metrics = _parse_prometheus_metrics(metrics_response.text)
 
-        e2e_count = _get_samples_by_name(
-            metrics, "sglang:e2e_request_latency_seconds_count"
+        e2e_count = metrics.get(
+            "sglang:e2e_request_latency_seconds_count", []
         )
         priority_values = {s.labels.get("priority", "") for s in e2e_count}
         self.assertIn(
@@ -160,10 +160,6 @@ def _parse_prometheus_metrics(metrics_text: str) -> Dict[str, List[Sample]]:
                 result[sample.name] = []
             result[sample.name].append(sample)
     return result
-
-
-def _get_samples_by_name(metrics: Dict[str, List[Sample]], name: str) -> List[Sample]:
-    return metrics.get(name, [])
 
 
 if __name__ == "__main__":
