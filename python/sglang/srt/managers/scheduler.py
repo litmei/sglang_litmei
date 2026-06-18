@@ -1223,6 +1223,11 @@ class Scheduler(
         else:
             attn_backends = (self.tp_worker.model_runner.attn_backend,)
         needs_cpu_seq_lens = decide_needs_cpu_seq_lens(self.server_args, attn_backends)
+        logger.warning(
+            "init_overlap: needs_cpu_seq_lens=%s, attn_backends=%s",
+            needs_cpu_seq_lens,
+            [type(b).__name__ for b in attn_backends if b is not None],
+        )
         self.future_map = self.spec_algorithm.create_future_map(
             self.device,
             self.req_to_token_pool,

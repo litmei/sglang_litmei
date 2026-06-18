@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Sequence, Union
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 from sglang.srt.environ import envs
 from sglang.srt.model_executor.cuda_graph_config import Backend
@@ -29,20 +32,33 @@ def decide_needs_cpu_seq_lens(
     (they read the CPU mirror outside the backend layer).
     """
     if server_args.enable_two_batch_overlap:
-        # FIXME: support TBO without seq lens cpu value
+        logger.warning(
+            "decide_needs_cpu_seq_lens: enable_two_batch_overlap=True -> True"
+        )
         return True
     cuda_graph_config = server_args.cuda_graph_config
     if (
         cuda_graph_config is not None
         and cuda_graph_config.prefill.backend == Backend.TC_PIECEWISE
     ):
-        # FIXME: support PCG without seq lens cpu value
+        logger.warning(
+            "decide_needs_cpu_seq_lens: TC_PIECEWISE prefill backend -> True"
+        )
         return True
-    # Skip unset slots (e.g. draft_extend_attn_backend on some spec configs);
-    # missing flag -> True so undeclared backends stay on the legacy path.
-    return any(
+    result = any(
         getattr(b, "needs_cpu_seq_lens", True) for b in attn_backends if b is not None
     )
+    backends_info = [
+        (type(b).__name__, getattr(b, "needs_cpu_seq_lens", "MISSING"))
+        for b in attn_backends
+        if b is not None
+    ]
+    logger.warning(
+        "decide_needs_cpu_seq_lens: backends=%s, result=%s",
+        backends_info,
+        result,
+    )
+    return result
 
 
 _is_cuda = is_cuda()
@@ -257,6 +273,12 @@ class FutureMap:
         # mirror for host planning; use a private D2H stream for those copies.
         draft_input = batch.spec_info
         if draft_input is None:
+            logger.warning(
+                "resolve_seq_lens_cpu: draft_input is None, needs_cpu_seq_lens=%s, "
+                "seq_lens_cpu=%s",
+                self.needs_cpu_seq_lens,
+                batch.seq_lens_cpu,
+            )
             return
         if self.spec_algo.is_dflash() and getattr(
             draft_input, "direct_carry_valid", False
@@ -266,6 +288,12 @@ class FutureMap:
 
         fi = draft_input.future_indices
         if fi is None:
+            logger.warning(
+                "resolve_seq_lens_cpu: future_indices is None, needs_cpu_seq_lens=%s, "
+                "seq_lens_cpu=%s",
+                self.needs_cpu_seq_lens,
+                batch.seq_lens_cpu,
+            )
             return
         if self.publish_ready is not None:
             if _is_hip:
@@ -283,9 +311,18 @@ class FutureMap:
         if not self.needs_cpu_seq_lens:
             # GPU gather above is kept (SB.seq_lens must advance each verify);
             # skip the .cpu() D2H. Downstream takes the GPU-only path.
+            logger.warning(
+                "resolve_seq_lens_cpu: setting seq_lens_cpu=None, needs_cpu_seq_lens=False"
+            )
             batch.seq_lens_cpu = None
             batch.seq_lens_sum = None
             return
+
+        logger.warning(
+            "resolve_seq_lens_cpu: falling through to D2H, needs_cpu_seq_lens=True, "
+            "seq_lens_cpu=%s",
+            batch.seq_lens_cpu,
+        )
 
         if self.fwd_prepare_d2h_stream is None or self.publish_ready is None:
             batch.seq_lens_cpu = batch.seq_lens.cpu()  # bootstrap / non-CUDA

@@ -655,6 +655,11 @@ class AscendAttnBackend(AttentionBackend):
             self.swa_out_cache_loc_buf[:n].copy_(
                 self.token_to_kv_pool.translate_loc_from_full_to_swa(out_cache_loc)
             )
+        logger.warning(
+            "_apply_cuda_graph_metadata: seq_lens_cpu is %s, bs=%s",
+            "NOT None" if seq_lens_cpu is not None else "None",
+            bs,
+        )
         max_len = (
             seq_lens_cpu[:bs].max().item()
             if seq_lens_cpu is not None

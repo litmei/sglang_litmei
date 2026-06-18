@@ -42,9 +42,14 @@ class MultiLayerEagleDraftExtendNpuGraphRunner(
         super().__init__(eagle_worker, step)
 
     def _replay_graph(self, shape_key, forward_batch):
-        seq_lens = self.buffers.seq_lens_cpu[: self.raw_bs].tolist() + [0] * (
-            self.bs - self.raw_bs
-        )
+        if forward_batch.seq_lens_cpu is not None:
+            seq_lens = self.buffers.seq_lens_cpu[: self.raw_bs].tolist() + [0] * (
+                self.bs - self.raw_bs
+            )
+        else:
+            seq_lens = forward_batch.seq_lens[: self.raw_bs].cpu().tolist() + [0] * (
+                self.bs - self.raw_bs
+            )
         return self.backend.replay_with_input_update(
             shape_key,
             seq_lens=seq_lens,

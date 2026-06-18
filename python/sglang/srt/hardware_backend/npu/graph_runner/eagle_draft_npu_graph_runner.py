@@ -55,10 +55,20 @@ class EAGLEDraftNpuGraphRunner(EAGLEDraftCudaGraphRunner):
         if not is_deepseek_dsa(self.model_runner.model_config.hf_config):
             seq_lens_for_each_draft_step = []
             for speculative_step_id in range(self.speculative_num_steps - 1):
-                seq_lens_cpu = (
-                    forward_batch.seq_lens_cpu[: self.raw_bs] + speculative_step_id + 1
-                )
-                seq_lens = seq_lens_cpu.tolist() + [0] * (self.bs - self.raw_bs)
+                if forward_batch.seq_lens_cpu is not None:
+                    seq_lens_cpu = (
+                        forward_batch.seq_lens_cpu[: self.raw_bs]
+                        + speculative_step_id
+                        + 1
+                    )
+                    seq_lens = seq_lens_cpu.tolist() + [0] * (self.bs - self.raw_bs)
+                else:
+                    seq_lens_gpu = (
+                        forward_batch.seq_lens[: self.raw_bs] + speculative_step_id + 1
+                    )
+                    seq_lens = seq_lens_gpu.cpu().tolist() + [0] * (
+                        self.bs - self.raw_bs
+                    )
                 seq_lens_for_each_draft_step.append(seq_lens)
             attr_name = self._get_update_attr_name()
             cpu_update_input = [{attr_name: sl} for sl in seq_lens_for_each_draft_step]

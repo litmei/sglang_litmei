@@ -208,6 +208,8 @@ class AscendMamba2AttnBackend(AscendMambaAttnBackendBase):
 
 
 class AscendHybridLinearAttnBackend(HybridLinearAttnBackend):
+    needs_cpu_seq_lens: bool = False
+
     def __init__(
         self,
         full_attn_backend: AttentionBackend,
