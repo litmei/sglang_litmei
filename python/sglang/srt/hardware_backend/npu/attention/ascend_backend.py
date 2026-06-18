@@ -380,11 +380,6 @@ class AscendAttnBackend(AttentionBackend):
         v = layer.v_head_dim
         return (d == v and d in (128, 192)) or (d == 192 and v == 128)
 
-    def _max_seq_len(self, forward_batch: ForwardBatch) -> int:
-        if forward_batch.seq_lens_cpu is not None:
-            return forward_batch.seq_lens_cpu.max().item()
-        return int(forward_batch.seq_lens.max())
-
     def get_verify_buffers_to_fill_after_draft(self):
         """
         Return buffers for verify attention kernels that needs to be filled after draft.

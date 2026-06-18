@@ -245,3 +245,8 @@ class AttentionBackend(ABC):
     ) -> Optional[BaseIndexerMetadata]:
         """Get the indexer metadata. None means don't support indexer."""
         return None
+
+    def _max_seq_len(self, forward_batch: ForwardBatch) -> int:
+        if forward_batch.seq_lens_cpu is not None:
+            return forward_batch.seq_lens_cpu.max().item()
+        return int(forward_batch.seq_lens.max())
