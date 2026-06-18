@@ -276,6 +276,8 @@ def _cp_allgather_and_save_kv_npu(
 
 class AscendAttnBackend(AttentionBackend):
 
+    needs_cpu_seq_lens: bool = False
+
     def __init__(self, model_runner: ModelRunner, speculative_step_id: int = 0):
         super().__init__()
         self.forward_metadata = None
@@ -378,6 +380,11 @@ class AscendAttnBackend(AttentionBackend):
         v = layer.v_head_dim
         return (d == v and d in (128, 192)) or (d == 192 and v == 128)
 
+    def _max_seq_len(self, forward_batch: ForwardBatch) -> int:
+        if forward_batch.seq_lens_cpu is not None:
+            return forward_batch.seq_lens_cpu.max().item()
+        return int(forward_batch.seq_lens.max())
+
     def get_verify_buffers_to_fill_after_draft(self):
         """
         Return buffers for verify attention kernels that needs to be filled after draft.
@@ -460,7 +467,11 @@ class AscendAttnBackend(AttentionBackend):
                 self.device
             ).int()
 
-        self.forward_metadata.seq_lens_cpu_int = forward_batch.seq_lens_cpu.int()
+        self.forward_metadata.seq_lens_cpu_int = (
+            forward_batch.seq_lens_cpu.int()
+            if forward_batch.seq_lens_cpu is not None
+            else forward_batch.seq_lens.cpu().int()
+        )
         if (
             not forward_batch.forward_mode.is_draft_extend_v2()
             and not forward_batch.forward_mode.is_target_verify()
@@ -644,7 +655,11 @@ class AscendAttnBackend(AttentionBackend):
             self.swa_out_cache_loc_buf[:n].copy_(
                 self.token_to_kv_pool.translate_loc_from_full_to_swa(out_cache_loc)
             )
-        max_len = seq_lens_cpu[:bs].max().item()
+        max_len = (
+            seq_lens_cpu[:bs].max().item()
+            if seq_lens_cpu is not None
+            else int(seq_lens[:bs].max())
+        )
         if forward_mode.is_target_verify():
             max_len += self.speculative_num_draft_tokens
         elif forward_mode.is_decode_or_idle() and spec_info is not None:
@@ -662,7 +677,11 @@ class AscendAttnBackend(AttentionBackend):
             metadata.block_tables_swa[bs:, :].fill_(0)
 
             # Update SWA mask: True = masked out (don't attend), False = attend
-            seq_lens_int = seq_lens_cpu[:bs].int()
+            seq_lens_int = (
+                seq_lens_cpu[:bs].int()
+                if seq_lens_cpu is not None
+                else seq_lens[:bs].cpu().int()
+            )
             starts = torch.clamp(seq_lens_int - self.sliding_window_size, min=0)
             indices = self.graph_metadata["swa_indices"]
             start_exp = starts.unsqueeze(1).to(self.device)
@@ -2722,6 +2741,8 @@ class AscendAttnMultiStepDraftBackend:
     Wrap multiple Ascend attention backends as one for multiple consecutive
     draft decoding steps
     """
+
+    needs_cpu_seq_lens: bool = False
 
     def __init__(
         self,
