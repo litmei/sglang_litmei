@@ -7,7 +7,8 @@ import requests
 
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.e2e.test_npu_multi_node_utils import (
-    TestAscendMultiNodePdSepTestCaseBase, check_role,
+    TestAscendMultiNodePdSepTestCaseBase,
+    check_role,
 )
 from sglang.test.ascend.e2e.test_npu_performance_utils import (
     DEEPSEEK_R1_W8A8_MODEL_PATH,
@@ -181,11 +182,27 @@ class TestBucketAdjustIntervalSecsValidation(TestAscendMultiNodePdSepTestCaseBas
 
     test_cases = [
         {"value": "1", "should_succeed": True, "description": "合法值: 最小正整数"},
-        {"value": "4294967295", "should_succeed": True, "description": "合法值: 最大无符号32位整数"},
-        {"value": "0", "should_succeed": False, "description": "非法值: 0（小于最小值）"},
-        {"value": "4294967296", "should_succeed": False, "description": "非法值: 超过最大无符号32位整数"},
+        {
+            "value": "4294967295",
+            "should_succeed": True,
+            "description": "合法值: 最大无符号32位整数"
+        },
+        {
+            "value": "0",
+            "should_succeed": False,
+            "description": "非法值: 0（小于最小值）"
+        },
+        {
+            "value": "4294967296",
+            "should_succeed": False,
+            "description": "非法值: 超过最大无符号32位整数"
+        },
         {"value": "5.1", "should_succeed": False, "description": "非法值: 浮点数"},
-        {"value": "abc", "should_succeed": False, "description": "非法值: 纯字母字符串"},
+        {
+            "value": "abc",
+            "should_succeed": False,
+            "description": "非法值: 纯字母字符串"
+        },
         {"value": "@#$", "should_succeed": False, "description": "非法值: 特殊字符"},
     ]
 
@@ -267,18 +284,8 @@ class TestBucketAdjustIntervalSecsValidation(TestAscendMultiNodePdSepTestCaseBas
     def test_bucket_adjust_interval_secs_validation(self):
         """测试 --bucket-adjust-interval-secs 参数的合法性验证"""
         print("=== 开始测试 --bucket-adjust-interval-secs 参数验证 ===\n")
-
-        # self.print_test_case_info(self.test_cases[0])
-        # self.assert_result(self.test_cases[0]["value"], self.is_router_server_running(), self.test_cases[0]["should_succeed"])
-        # self.kill_process_if_alive()
-        # time.sleep(5)  # 等待完全停止
-
         for test_case in self.test_cases:
             self.validate_bucket_adjust_interval_secs(test_case)
-
-        print("\n" + "=" * 60)
-        print("所有测试完成!")
-        print("=" * 60)
 
 
     def assert_result(self, value, success, should_succeed):
@@ -287,9 +294,7 @@ class TestBucketAdjustIntervalSecsValidation(TestAscendMultiNodePdSepTestCaseBas
             self.assertTrue(success, msg=f"参数 '{value}' 应该启动成功，但实际失败")
             print(f"✓ 验证通过: 服务启动成功")
         else:
-            self.assertFalse(
-                success, msg=f"参数 '{value}' 应该启动失败，但实际成功"
-            )
+            self.assertFalse(success, msg=f"参数 '{value}' 应该启动失败，但实际成功")
             print(f"✓ 验证通过: 服务启动失败（预期行为）")
 
 

@@ -222,7 +222,6 @@ class TestQwen235bFusionOperator(TestAscendMultiNodePdSepTestCaseBase):
     def tearDownClass(cls):
         super().tearDownClass()
 
-
     benchmark_tool = BENCHMARK_TOOL_DEFAULT
     aisbench_dataset_type = AISBENCHMARK_DATASET_DEFAULT
     max_attempts = 3
