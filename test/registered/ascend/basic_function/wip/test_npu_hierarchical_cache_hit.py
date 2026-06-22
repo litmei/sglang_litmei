@@ -7,7 +7,6 @@ from sglang.srt.utils import kill_process_tree
 from sglang.test.ascend.e2e.test_npu_multi_node_utils import (
     NIC_NAME,
     check_role,
-
 )
 from sglang.test.ascend.e2e.test_npu_performance_utils import (
     BENCHMARK_TOOL_DEFAULT,
@@ -225,7 +224,9 @@ class TestDeepSeekV32HierarchicalCacheHit(TestAscendPerfMultiNodePdSepTestCaseBa
             )
 
             self.assertLess(
-                metrics2['TTFT'], metrics1['TTFT'], msg="TTFT should be reduced after cache hit"
+                metrics2['TTFT'],
+                metrics1['TTFT'],
+                msg="TTFT should be reduced after cache hit",
             )
         finally:
             if self.process:

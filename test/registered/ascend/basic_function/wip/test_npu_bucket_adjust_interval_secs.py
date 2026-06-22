@@ -185,23 +185,23 @@ class TestBucketAdjustIntervalSecsValidation(TestAscendMultiNodePdSepTestCaseBas
         {
             "value": "4294967295",
             "should_succeed": True,
-            "description": "合法值: 最大无符号32位整数"
+            "description": "合法值: 最大无符号32位整数",
         },
         {
             "value": "0",
             "should_succeed": False,
-            "description": "非法值: 0（小于最小值）"
+            "description": "非法值: 0（小于最小值）",
         },
         {
             "value": "4294967296",
             "should_succeed": False,
-            "description": "非法值: 超过最大无符号32位整数"
+            "description": "非法值: 超过最大无符号32位整数",
         },
         {"value": "5.1", "should_succeed": False, "description": "非法值: 浮点数"},
         {
             "value": "abc",
             "should_succeed": False,
-            "description": "非法值: 纯字母字符串"
+            "description": "非法值: 纯字母字符串",
         },
         {"value": "@#$", "should_succeed": False, "description": "非法值: 特殊字符"},
     ]
@@ -280,13 +280,11 @@ class TestBucketAdjustIntervalSecsValidation(TestAscendMultiNodePdSepTestCaseBas
             self.stop_sglang_thread()
             time.sleep(5)
 
-
     def test_bucket_adjust_interval_secs_validation(self):
         """测试 --bucket-adjust-interval-secs 参数的合法性验证"""
         print("=== 开始测试 --bucket-adjust-interval-secs 参数验证 ===\n")
         for test_case in self.test_cases:
             self.validate_bucket_adjust_interval_secs(test_case)
-
 
     def assert_result(self, value, success, should_succeed):
         """断言测试结果"""
