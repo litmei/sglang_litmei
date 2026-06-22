@@ -14,6 +14,14 @@ from sglang.test.ascend.e2e.test_npu_performance_utils import (
     DEEPSEEK_R1_W8A8_MODEL_PATH,
     ROUND_ROBIN,
 )
+from sglang.test.ci.ci_register import register_npu_ci
+
+register_npu_ci(
+    est_time=3600,
+    suite="",
+    nightly=True,
+    disabled="multi nodes testcase",
+)
 
 # ConfigMap相关配置
 CONFIGMAP_NAME = os.environ.get("KUBE_CONFIG_MAP")

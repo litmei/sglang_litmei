@@ -15,7 +15,15 @@ from sglang.test.ascend.e2e.test_npu_performance_utils import (
     SHAREGPT_DATASET_TEST_FILE,
     run_aisbench,
 )
+from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH
+
+register_npu_ci(
+    est_time=3600,
+    suite="",
+    nightly=True,
+    disabled="multi nodes testcase",
+)
 
 # ====================== Base Configuration ======================
 BASE_PREFILL_ENVS = {
