@@ -270,7 +270,9 @@ class TestBucketAdjustIntervalSecsValidation(TestAscendMultiNodePdSepTestCaseBas
     def _find_router_pid_by_port(self):
         result = subprocess.run(
             ["ss", "-tlnp"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         for line in result.stdout.split("\n"):
             if f":{SERVICE_PORT}" in line:
