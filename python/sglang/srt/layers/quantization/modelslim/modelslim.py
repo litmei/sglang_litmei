@@ -19,6 +19,7 @@ from sglang.srt.layers.quantization.modelslim.schemes import (
     ModelSlimW4A4Int4MoE,
     ModelSlimW4A8Int8MoE,
     ModelSlimW8A8Int8,
+    ModelSlimW8A8MxFp8MoE,
     ModelSlimW8A8Int8MoE,
 )
 from sglang.srt.layers.quantization.unquant import UnquantizedLinearMethod
@@ -220,6 +221,7 @@ class ModelSlimConfig(QuantizationConfig):
             ("W4A4_DYNAMIC", ModelSlimW4A4Int4MoE),
             ("W4A8_DYNAMIC", ModelSlimW4A8Int8MoE),
             ("W8A8_DYNAMIC", ModelSlimW8A8Int8MoE),
+            ("W8A8_MXFP8", ModelSlimW8A8MxFp8MoE),
         ]
 
         moe_weight_suffixes = [".0.gate_proj.weight", ".0.w2.weight"]
