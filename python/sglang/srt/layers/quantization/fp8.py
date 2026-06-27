@@ -17,6 +17,11 @@ from sglang.srt.distributed.device_communicators.pynccl_allocator import (
     use_symmetric_memory,
 )
 from sglang.srt.environ import envs
+from sglang.srt.hardware_backend.npu.quantization.fused_moe_method_npu import (
+    fp8_gmm_npu,
+    maybe_apply_deepep_npu,
+    npu_fused_experts_fp8,
+)
 from sglang.srt.layers.amx_utils import (
     CPUQuantMethod,
     _amx_process_weight_after_loading,
@@ -90,6 +95,7 @@ from sglang.srt.utils import (
     is_hip,
     is_musa,
     is_npu,
+    is_npu_before_atlas_a5,
     is_sm90_supported,
     is_sm100_supported,
     is_sm120_supported,
@@ -110,6 +116,7 @@ _is_hip = is_hip()
 _is_cuda = is_cuda()
 _is_musa = is_musa()
 _is_npu = is_npu()
+_is_npu_before_atlas_a5 = is_npu_before_atlas_a5()
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _is_fp8_fnuz = is_fp8_fnuz()
@@ -534,6 +541,17 @@ class Fp8LinearMethod(LinearMethodBase):
             layer.weight_scale_inv.requires_grad_(False)
             layer.weight_scale_inv.format_ue8m0 = True
             self._process_mxfp8_linear_weight_scale(layer)
+            return
+        elif _is_npu:
+            if _is_npu_before_atlas_a5:
+                layer.weight.data = (
+                    layer.weight.data.view(torch.uint8).transpose(-1, -2).contiguous()
+                )
+            else:
+                layer.weight.data = layer.weight.data.transpose(-1, -2).contiguous()
+            layer.weight_scale_inv.data = (
+                layer.weight_scale_inv.data.transpose(-1, -2).contiguous()
+            )
             return
         else:
             # Requantize block scales to UE8M0 when DeepGEMM is the active runner.
@@ -1309,6 +1327,30 @@ class Fp8MoEMethod(FusedMoEMethodBase):
                 _is_cpu_amx_available
             ), "Fp8MoEMethod on CPU requires that CPU has AMX support"
             _amx_process_weight_after_loading(layer, ["w13_weight", "w2_weight"])
+        elif _is_npu and not self.use_mxfp8:
+            if _is_npu_before_atlas_a5:
+                layer.w13_weight.data = (
+                    layer.w13_weight.data.view(torch.uint8)
+                    .transpose(1, 2)
+                    .contiguous()
+                )
+                layer.w2_weight.data = (
+                    layer.w2_weight.data.view(torch.uint8).transpose(1, 2).contiguous()
+                )
+            else:
+                layer.w13_weight.data = layer.w13_weight.data.transpose(
+                    1, 2
+                ).contiguous()
+                layer.w2_weight.data = layer.w2_weight.data.transpose(
+                    1, 2
+                ).contiguous()
+            layer.w13_weight_scale_inv.data = (
+                layer.w13_weight_scale_inv.data.transpose(1, 2).contiguous()
+            )
+            layer.w2_weight_scale_inv.data = (
+                layer.w2_weight_scale_inv.data.transpose(1, 2).contiguous()
+            )
+            return
         elif self.use_mxfp8:
             self._process_mxfp8_moe_weights(
                 layer, quantize=not self.quant_config.is_checkpoint_fp8_serialized
@@ -1822,6 +1864,26 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         x = dispatch_output.hidden_states
         moe_runner_config = self.moe_runner_config
 
+        if _is_npu and self.block_quant and not self.use_mxfp8:
+            combine_input = maybe_apply_deepep_npu(self, layer, dispatch_output)
+            if combine_input is not None:
+                return combine_input
+
+            topk_weights, topk_ids, _ = dispatch_output.topk_output
+            topk_ids = topk_ids.to(torch.int32)
+            topk_weights = topk_weights.to(x.dtype)
+            output = npu_fused_experts_fp8(
+                hidden_states=x,
+                w13=layer.w13_weight,
+                w13_weight_scale_inv=layer.w13_weight_scale_inv,
+                w2=layer.w2_weight,
+                w2_weight_scale_inv=layer.w2_weight_scale_inv,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                top_k=topk_ids.shape[1],
+            )
+            return StandardCombineInput(hidden_states=output)
+
         if use_intel_amx_backend(layer):
             from sglang.srt.layers.moe.topk import apply_topk_weights_cpu
 
@@ -2047,6 +2109,42 @@ class Fp8MoEMethod(FusedMoEMethodBase):
             )
 
         return self.runner.run(dispatch_output, quant_info)
+
+    def apply_without_routing_weights(
+        self,
+        layer: torch.nn.Module,
+        hidden_states: torch.Tensor,
+        hidden_states_scale: Optional[torch.Tensor],
+        group_list_type: int,
+        group_list: torch.Tensor,
+        output_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if not (_is_npu and self.block_quant and not self.use_mxfp8):
+            raise NotImplementedError(
+                "Fp8MoEMethod.apply_without_routing_weights is only implemented "
+                "for NPU block-FP8."
+            )
+
+        hidden_states = fp8_gmm_npu(
+            input=hidden_states,
+            input_scale=hidden_states_scale,
+            weight=layer.w13_weight,
+            weight_scale=layer.w13_weight_scale_inv,
+            group_list_type=group_list_type,
+            group_list=group_list,
+            output_dtype=output_dtype,
+        )
+        hidden_states = torch.ops.npu.npu_swiglu(hidden_states)
+        hidden_states = fp8_gmm_npu(
+            input=hidden_states,
+            input_scale=None,
+            weight=layer.w2_weight,
+            weight_scale=layer.w2_weight_scale_inv,
+            group_list_type=group_list_type,
+            group_list=group_list,
+            output_dtype=output_dtype,
+        )
+        return hidden_states
 
     def _ensure_cutlass_buffers_initialized(self, layer: Module) -> None:
         if getattr(self, "_cutlass_buffers_ready", False):
