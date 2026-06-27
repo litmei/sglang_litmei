@@ -27,6 +27,10 @@ def _get_float8_e8m0fnu_dtype():
     return getattr(torch, "float8_e8m0fnu", None)
 
 
+def _get_float4_e2m1fn_x2_dtype():
+    return getattr(torch, "float4_e2m1fn_x2", None)
+
+
 def fp8_matmul_npu(
     input: torch.Tensor,
     weight: torch.Tensor,
@@ -321,6 +325,58 @@ class NPUMXFP8LinearMethod(_NPULinearMethodBase):
         # Restore original shape (replace last dim with output features)
         output_shape = list(input_shape[:-1]) + [output.shape[-1]]
         return output.reshape(output_shape)
+
+
+class NPUW4A4MxFp4LinearMethod(_NPULinearMethodBase):
+
+    def process_weights_after_loading(self, layer: torch.nn.Module):
+        layer.weight.data = npu_format_cast(layer.weight.data.transpose(0, 1).contiguous())
+
+        weight_scale = layer.weight_scale.data
+        layer.weight_scale.data = (
+            weight_scale.reshape(weight_scale.shape[0], weight_scale.shape[1] // 2, 2)
+            .transpose(0, 1)
+            .contiguous()
+        )
+
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        fp4_dtype = _get_float4_e2m1fn_x2_dtype()
+        e8m0_dtype = _get_float8_e8m0fnu_dtype()
+        if fp4_dtype is None or e8m0_dtype is None:
+            raise RuntimeError("NPU MXFP4 linear requires float4/float8 E8M0 dtypes.")
+
+        original_shape = x.shape
+        x_2d = x.reshape(-1, original_shape[-1]).contiguous()
+
+        x_fp4, x_scale = torch.ops.npu.npu_dynamic_mx_quant(
+            x_2d,
+            axis=1,
+            round_mode="rint",
+            dst_type=fp4_dtype,
+            block_size=32,
+            scale_alg=None,
+        )
+
+        out = torch.ops.npu.npu_quant_matmul(
+            x_fp4,
+            layer.weight,
+            scale=layer.weight_scale,
+            pertoken_scale=x_scale,
+            bias=bias,
+            output_dtype=x.dtype,
+            group_sizes=(1, 1, 32),
+            scale_dtype=e8m0_dtype,
+            pertoken_scale_dtype=e8m0_dtype,
+            x1_dtype=fp4_dtype,
+            x2_dtype=fp4_dtype,
+        )
+
+        return out.reshape(*original_shape[:-1], out.shape[-1])
 
 
 class NPU_W4A4DynamicLinearMethod(_NPULinearMethodBase):
