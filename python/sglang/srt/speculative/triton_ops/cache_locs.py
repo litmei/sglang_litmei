@@ -4,11 +4,19 @@ import torch
 import triton
 import triton.language as tl
 
-from sglang.srt.utils import is_cuda, is_hip, is_musa, is_npu, next_power_of_2
+from sglang.srt.utils import (
+    is_cuda,
+    is_hip,
+    is_musa,
+    is_npu,
+    is_npu_before_atlas_a5,
+    next_power_of_2,
+)
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
 _is_npu = is_npu()
+_is_npu_before_atlas_a5 = is_npu_before_atlas_a5()
 _is_musa = is_musa()
 
 
@@ -367,12 +375,23 @@ def assign_extend_cache_locs_func(
             dtype=torch.int32,
             device=device,
         )
-        torch.ops.npu.cache_loc_update(
-            req_pool_indices,
-            req_to_token,
-            start_offset,
-            end_offset,
-            out_cache_loc,
-        )
+        if _is_npu_before_atlas_a5:
+            torch.ops.npu.cache_loc_update(
+                req_pool_indices,
+                req_to_token,
+                start_offset,
+                end_offset,
+                out_cache_loc,
+            )
+        else:
+            from sglang.srt.hardware_backend.npu.kernels import cache_loc_update
+
+            cache_loc_update(
+                req_pool_indices,
+                req_to_token,
+                start_offset,
+                end_offset,
+                out_cache_loc,
+            )
 
         return out_cache_loc

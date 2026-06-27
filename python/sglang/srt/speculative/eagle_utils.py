@@ -12,7 +12,7 @@ from sglang.srt.mem_cache.common import (
     get_alloc_reserve_per_decode,
     get_last_loc,
 )
-from sglang.srt.utils import is_cuda, is_hip, is_musa, is_npu
+from sglang.srt.utils import is_cuda, is_hip, is_musa, is_npu, is_npu_before_atlas_a5
 from sglang.srt.utils.async_probe import maybe_detect_oob
 
 if TYPE_CHECKING:
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 _is_cuda = is_cuda()
 _is_hip = is_hip()
 _is_npu = is_npu()
+_is_npu_before_atlas_a5 = is_npu_before_atlas_a5()
 _is_musa = is_musa()
 
 if _is_cuda or _is_hip or _is_musa:
@@ -185,20 +186,40 @@ def build_tree_kernel_efficient(
         )
 
     if _is_npu:
-        torch.ops.npu.build_tree_kernel_efficient(
-            parent_list.to(dtype=torch.int64),
-            top_scores_index,
-            seq_lens,
-            tree_mask,
-            positions,
-            retrieve_index,
-            retrieve_next_token,
-            retrieve_next_sibling,
-            topk,
-            spec_steps,
-            num_verify_tokens,
-            tree_mask_mode,
-        )
+        if _is_npu_before_atlas_a5:
+            torch.ops.npu.build_tree_kernel_efficient(
+                parent_list.to(dtype=torch.int64),
+                top_scores_index,
+                seq_lens,
+                tree_mask,
+                positions,
+                retrieve_index,
+                retrieve_next_token,
+                retrieve_next_sibling,
+                topk,
+                spec_steps,
+                num_verify_tokens,
+                tree_mask_mode,
+            )
+        else:
+            from sglang.srt.hardware_backend.npu.kernels import (
+                build_tree_kernel_efficient_triton,
+            )
+
+            build_tree_kernel_efficient_triton(
+                parent_list.to(dtype=torch.int64),
+                top_scores_index,
+                seq_lens,
+                tree_mask,
+                positions,
+                retrieve_index,
+                retrieve_next_token,
+                retrieve_next_sibling,
+                topk,
+                spec_steps,
+                num_verify_tokens,
+                tree_mask_mode,
+            )
     else:
         sgl_build_tree_kernel_efficient(
             parent_list,
@@ -251,19 +272,35 @@ def verify_tree_greedy_func(
         )
 
     elif _is_npu:
-        from sgl_kernel_npu.sample.verify_tree_greedy import verify_tree_greedy
+        if _is_npu_before_atlas_a5:
+            from sgl_kernel_npu.sample.verify_tree_greedy import verify_tree_greedy
 
-        verify_tree_greedy(
-            predicts=predicts,
-            accept_index=accept_index,
-            accept_token_num=accept_token_num,
-            candidates=candidates,
-            # kwarg LHS retained as `retrive_*` to match sgl_kernel op schema.
-            retrive_index=retrieve_index,
-            retrive_next_token=retrieve_next_token,
-            retrive_next_sibling=retrieve_next_sibling,
-            target_predict=target_predict,
-        )
+            verify_tree_greedy(
+                predicts=predicts,
+                accept_index=accept_index,
+                accept_token_num=accept_token_num,
+                candidates=candidates,
+                # kwarg LHS retained as `retrive_*` to match sgl_kernel op schema.
+                retrive_index=retrieve_index,
+                retrive_next_token=retrieve_next_token,
+                retrive_next_sibling=retrieve_next_sibling,
+                target_predict=target_predict,
+            )
+        else:
+            from sglang.srt.hardware_backend.npu.kernels import (
+                verify_tree_greedy_triton,
+            )
+
+            verify_tree_greedy_triton(
+                predicts=predicts,
+                accept_index=accept_index,
+                accept_token_num=accept_token_num,
+                candidates=candidates,
+                retrieve_index=retrieve_index,
+                retrieve_next_token=retrieve_next_token,
+                retrieve_next_sibling=retrieve_next_sibling,
+                target_predict=target_predict,
+            )
     return predicts, accept_index, accept_token_num
 
 
