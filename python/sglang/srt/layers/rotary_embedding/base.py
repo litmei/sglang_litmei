@@ -231,12 +231,6 @@ class RotaryEmbedding(MultiPlatformOp):
         cos, sin = cos_sin.chunk(2, dim=-1)
         return cos, sin
 
-    def get_cos_cached_total(self):
-        return self.cos_cached_total
-
-    def get_sin_cached_total(self):
-        return self.sin_cached_total
-
     def forward_native(
         self,
         positions: torch.Tensor,

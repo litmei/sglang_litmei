@@ -86,12 +86,7 @@ def _deepep_precompile_tp_barrier() -> None:
     # so if different ranks compile at different speeds, it may quickly trigger a timeout.
     # To avoid this, we use torch.distributed's barrier during the compile stage.
     # We apply this barrier only in the compile stage to prevent extra all-reduce overhead at runtime.
-    if not envs.SGLANG_IN_DEEPGEMM_PRECOMPILE_STAGE.get():
-        return
-
-    if get_global_server_args().enable_longcat_double_stream:
-        get_double_stream_ep_group().barrier()
-    else:
+    if envs.SGLANG_IN_DEEPGEMM_PRECOMPILE_STAGE.get():
         get_tp_group().barrier()
 
 

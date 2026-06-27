@@ -104,7 +104,6 @@ from sglang.srt.utils import (
     bind_or_assign,
     cpu_has_amx_support,
     get_bool_env_var,
-    get_bool_env_var,
     get_device_sm,
     is_cpu,
     is_cuda,
