@@ -140,6 +140,8 @@ def _is_nz_aligned(tensor: torch.Tensor) -> bool:
 def npu_format_cast(
     tensor: torch.Tensor,
     acl_format: NPUACLFormat = NPUACLFormat.ACL_FORMAT_FRACTAL_NZ,
+    customize_dtype: torch.dtype | None = None,
+    input_dtype: torch.dtype | None = None,
 ) -> torch.Tensor:
     """
     Cast a tensor to a specific NPU ACL format.
@@ -166,7 +168,14 @@ def npu_format_cast(
         )
         return tensor
 
-    if acl_format == NPUACLFormat.ACL_FORMAT_FRACTAL_NZ and not _is_nz_aligned(tensor):
+    acl_format_value = (
+        acl_format.value if isinstance(acl_format, NPUACLFormat) else acl_format
+    )
+
+    if (
+        acl_format_value == NPUACLFormat.ACL_FORMAT_FRACTAL_NZ.value
+        and not _is_nz_aligned(tensor)
+    ):
         k, n = tensor.shape[-2], tensor.shape[-1]
         logger.warning_once(
             "Skipping FRACTAL_NZ format cast: tensor shape (%d, %d) dtype %s "
@@ -182,7 +191,13 @@ def npu_format_cast(
     if tensor.device.type == "meta":
         return tensor
 
-    return torch.ops.npu.npu_format_cast(tensor, acl_format.value)
+    extra_kwargs = {}
+    if customize_dtype is not None:
+        extra_kwargs["customize_dtype"] = customize_dtype
+    if input_dtype is not None:
+        extra_kwargs["input_dtype"] = input_dtype
+
+    return torch.ops.npu.npu_format_cast(tensor, acl_format_value, **extra_kwargs)
 
 
 def get_indexer_weight_stream():
