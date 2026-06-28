@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 class EAGLEDraftNpuGraphRunner(EAGLEDraftCudaGraphRunner):
     def __init__(self, eagle_worker: EagleDraftWorker):
         self.use_fia_v2 = (
-            eagle_worker.model_runner.model_config.attention_arch == AttentionArch.MLA
+            eagle_worker.draft_runner.model_config.attention_arch == AttentionArch.MLA
             and get_global_server_args().kv_cache_dtype == "fp8_e4m3"
         )
         self._init_arch_map()
