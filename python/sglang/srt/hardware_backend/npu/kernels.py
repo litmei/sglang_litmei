@@ -267,7 +267,7 @@ def _cache_location_assigns_kernel(
         elem = tl.arange(0, MAX_STEP_CONST)
         mask = elem < step
 
-        if ASSIGN_MODE == RETRIEVE_FROM_POOL:
+        if ASSIGN_MODE == 1:
             data = tl.load(token_ptr + elem, mask=mask, other=0)
             tl.store(cache_ptr + elem, data, mask=mask)
 
