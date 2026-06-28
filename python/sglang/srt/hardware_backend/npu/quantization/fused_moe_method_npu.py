@@ -255,19 +255,6 @@ def npu_fused_experts_mxfp8(
     top_k: int,
     **kwargs,
 ):
-    if torch.npu.is_current_stream_capturing():
-        return npu_fused_experts_mxfp8_decode(
-            hidden_states=hidden_states,
-            w13=w13,
-            w13_weight_scale=w13_weight_scale,
-            w2=w2,
-            w2_weight_scale=w2_weight_scale,
-            topk_weights=topk_weights,
-            topk_ids=topk_ids,
-            top_k=top_k,
-            **kwargs,
-        )
-
     original_shape = hidden_states.shape
     original_dtype = hidden_states.dtype
     if len(original_shape) == 3:
