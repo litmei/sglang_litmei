@@ -5,7 +5,7 @@ import torch
 
 from sglang.srt.hardware_backend.npu.utils import npu_format_cast
 from sglang.srt.layers.quantization.base_config import FusedMoEMethodBase
-from sglang.srt.utils import is_npu_before_atlas_a5
+from sglang.srt.utils import is_npu, is_npu_before_atlas_a5
 
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.token_dispatcher import (
@@ -17,15 +17,11 @@ if TYPE_CHECKING:
     from sglang.srt.layers.quantization.base_config import QuantizationConfig
 
 
+_is_npu = is_npu()
 _is_npu_before_atlas_a5 = is_npu_before_atlas_a5()
 
-
-def _get_float8_e8m0fnu_dtype():
-    return getattr(torch, "float8_e8m0fnu", None)
-
-
-def _get_float4_e2m1fn_x2_dtype():
-    return getattr(torch, "float4_e2m1fn_x2", None)
+if _is_npu:
+    import torch_npu
 
 
 def fp8_gmm_npu(
@@ -228,7 +224,6 @@ def mxfp8_gmm_npu(
             scale_alg=None,
         )
 
-    e8m0_dtype = _get_float8_e8m0fnu_dtype()
     return torch.ops.npu.npu_grouped_matmul(
         [input],
         [weight],
@@ -239,8 +234,8 @@ def mxfp8_gmm_npu(
         group_list=group_list,
         group_list_type=group_list_type,
         output_dtype=output_dtype,
-        scale_dtype=e8m0_dtype,
-        per_token_scale_dtype=e8m0_dtype,
+        scale_dtype=torch_npu.float8_e8m0fnu,
+        per_token_scale_dtype=torch_npu.float8_e8m0fnu,
     )[0]
 
 
@@ -391,18 +386,13 @@ def mxfp4_gmm_npu(
     group_list: torch.Tensor,
     output_dtype: torch.dtype = torch.bfloat16,
 ) -> torch.Tensor:
-    fp4_dtype = _get_float4_e2m1fn_x2_dtype()
-    e8m0_dtype = _get_float8_e8m0fnu_dtype()
-    if fp4_dtype is None or e8m0_dtype is None:
-        raise RuntimeError("NPU MXFP4 MoE requires float4/float8 E8M0 dtypes.")
-
     group_list = group_list.to(torch.int64)
     if input_scale is None:
         input, input_scale = torch.ops.npu.npu_dynamic_mx_quant(
             input,
             axis=1,
             round_mode="rint",
-            dst_type=fp4_dtype,
+            dst_type=torch_npu.float4_e2m1fn_x2,
             block_size=32,
             scale_alg=None,
         )
@@ -417,10 +407,10 @@ def mxfp4_gmm_npu(
         group_list=group_list,
         group_list_type=group_list_type,
         output_dtype=output_dtype,
-        scale_dtype=e8m0_dtype,
-        per_token_scale_dtype=e8m0_dtype,
-        x_dtype=fp4_dtype,
-        weight_dtype=fp4_dtype,
+        scale_dtype=torch_npu.float8_e8m0fnu,
+        per_token_scale_dtype=torch_npu.float8_e8m0fnu,
+        x_dtype=torch_npu.float4_e2m1fn_x2,
+        weight_dtype=torch_npu.float4_e2m1fn_x2,
     )[0]
 
 
@@ -554,7 +544,7 @@ def npu_fused_experts_mxfp4_decode(
 
     final_hidden_states = torch.ops.npu.npu_moe_token_unpermute(
         permuted_tokens=hidden_states,
-        sorted_indices=torch.abs(expanded_row_idx),
+        sorted_indices=expanded_row_idx,
         probs=topk_weights,
     )
     if len(original_shape) == 3:
@@ -571,11 +561,6 @@ def w4a8_mxfp_gmm_npu(
     group_list: torch.Tensor,
     output_dtype: torch.dtype = torch.bfloat16,
 ) -> torch.Tensor:
-    fp4_dtype = _get_float4_e2m1fn_x2_dtype()
-    e8m0_dtype = _get_float8_e8m0fnu_dtype()
-    if fp4_dtype is None or e8m0_dtype is None:
-        raise RuntimeError("NPU W4A8_MXFP MoE requires float4/float8 E8M0 dtypes.")
-
     group_list = group_list.to(torch.int64)
     if input_scale is None:
         input, input_scale = torch.ops.npu.npu_dynamic_mx_quant(
@@ -600,8 +585,8 @@ def w4a8_mxfp_gmm_npu(
         group_list_type=group_list_type,
         output_dtype=output_dtype,
         x_dtype=torch.float8_e4m3fn,
-        weight_dtype=fp4_dtype,
-        per_token_scale_dtype=e8m0_dtype,
+        weight_dtype=torch_npu.float4_e2m1fn_x2,
+        per_token_scale_dtype=torch_npu.float8_e8m0fnu,
     )[0]
 
 
@@ -1679,19 +1664,15 @@ class NPUW4A4MxFp4DynamicMoEMethod(_NPUFusedMoEMethodBase):
 class NPUW4A8MxFpDynamicMoEMethod(_NPUFusedMoEMethodBase):
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        fp4_dtype = _get_float4_e2m1fn_x2_dtype()
-        if fp4_dtype is None:
-            raise RuntimeError("NPU W4A8_MXFP MoE requires torch float4 support.")
-
         layer.w13_weight.data = npu_format_cast(
             layer.w13_weight.data.transpose(1, 2).contiguous(),
             customize_dtype=torch.float8_e4m3fn,
-            input_dtype=fp4_dtype,
+            input_dtype=torch_npu.float4_e2m1fn_x2,
         )
         layer.w2_weight.data = npu_format_cast(
             layer.w2_weight.data.transpose(1, 2).contiguous(),
             customize_dtype=torch.float8_e4m3fn,
-            input_dtype=fp4_dtype,
+            input_dtype=torch_npu.float4_e2m1fn_x2,
         )
 
         w13_weight_scale = layer.w13_weight_scale.data.transpose(1, 2).contiguous()
