@@ -1099,6 +1099,8 @@ class AscendAttnBackend(AttentionBackend):
         topk_indices: Optional[torch.Tensor] = None,
         sinks: Optional[torch.Tensor] = None,
         slopes: Optional[torch.Tensor] = None,
+        dequant_scale_q_nope: Optional[torch.Tensor] = None,
+        fp8_kv_scale: Optional[torch.Tensor] = None,
     ):
         if is_mla_preprocess_enabled() and self.use_mla:
             # MLAPO and MLAPROLOG do save kv_cache
@@ -1140,6 +1142,8 @@ class AscendAttnBackend(AttentionBackend):
                 q_rope=q_rope,
                 k_rope=k_rope,
                 sinks=sinks,
+                dequant_scale_q_nope=dequant_scale_q_nope,
+                fp8_kv_scale=fp8_kv_scale,
             )
 
         if not self.use_mla:
