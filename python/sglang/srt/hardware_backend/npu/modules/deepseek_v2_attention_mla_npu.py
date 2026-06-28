@@ -34,6 +34,28 @@ def _use_explicit_npu_interleaved_rope(m: "DeepseekV2AttentionMLA") -> bool:
     )
 
 
+def _get_fp8_kv_runtime_scale(
+    m: "DeepseekV2AttentionMLA", attr_name: str, device: torch.device
+) -> torch.Tensor | None:
+    if m.kv_cache_dtype != "fp8_e4m3":
+        return None
+
+    scale = getattr(m, attr_name, None)
+    if scale is None:
+        fallback_attr = f"_{attr_name}_fallback"
+        scale = getattr(m, fallback_attr, None)
+        if scale is None:
+            fallback = torch.ones(
+                (1, getattr(m, "num_local_kv_heads", 1)),
+                dtype=torch.float32,
+                device=device,
+            )
+            m.register_buffer(fallback_attr, fallback, persistent=False)
+            scale = getattr(m, fallback_attr)
+
+    return scale.to(device=device, dtype=torch.float32)
+
+
 # region MHA
 def forward_mha_prepare_npu(
     m: "DeepseekV2AttentionMLA",
@@ -107,15 +129,9 @@ def forward_mha_prepare_npu(
         q_pe = q_pe.reshape(B, -1, m.qk_rope_head_dim)
 
         ckv_cache, k_rope_cache = get_token_to_kv_pool().get_kv_buffer(m.layer_id)
-        c_kv_scale = getattr(m, "fak_descale_reciprocal", None)
-        if m.kv_cache_dtype == "fp8_e4m3":
-            if c_kv_scale is None:
-                raise RuntimeError(
-                    "Missing fak_descale_reciprocal for fp8 kv cache MLA path."
-                )
-            c_kv_scale = c_kv_scale.to(device=q.device, dtype=torch.float32)
-        else:
-            c_kv_scale = None
+        c_kv_scale = _get_fp8_kv_runtime_scale(
+            m, "fak_descale_reciprocal", q.device
+        )
         _, _, k_pe, kv_a = torch_npu.npu_kv_rmsnorm_rope_cache(
             latent_cache.view(-1, 1, 1, m.kv_lora_rank + m.qk_rope_head_dim),  # bnsd
             m.kv_a_layernorm.weight,
@@ -195,7 +211,15 @@ def forward_mla_prepare_npu(
                 m.qk_rope_head_dim,
                 m.v_head_dim,
                 m.quant_config,
-                getattr(m, "fak_descale_reciprocal", None),
+                _get_fp8_kv_runtime_scale(
+                    m, "fak_descale_reciprocal", hidden_states.device
+                ),
+            )
+        else:
+            m.mla_preprocess.runtime_refs["fak_descale_reciprocal"] = (
+                _get_fp8_kv_runtime_scale(
+                    m, "fak_descale_reciprocal", hidden_states.device
+                )
             )
         preprocess_result = m.mla_preprocess.forward(
             positions, hidden_states, forward_batch, zero_allocator
@@ -279,27 +303,18 @@ def forward_mla_prepare_npu(
                 torch.float32
             )
 
-            fp8_kv_scale = getattr(m, "fak_descale_float", None)
-            if fp8_kv_scale is None:
-                raise RuntimeError(
-                    "Missing fak_descale_float for fp8 kv cache MLA path."
-                )
-            q_pe = (
-                q_pe
-                / dequant_scale_q_nope.unsqueeze(-1)
-                / fp8_kv_scale.to(device=q_pe.device, dtype=torch.float32)
-            ).to(torch.bfloat16)
+            fp8_kv_scale = _get_fp8_kv_runtime_scale(
+                m, "fak_descale_float", q_pe.device
+            )
+            q_pe = (q_pe / dequant_scale_q_nope.unsqueeze(-1) / fp8_kv_scale).to(
+                torch.bfloat16
+            )
 
             ckv_cache, k_rope_cache = get_token_to_kv_pool().get_kv_buffer(
                 m.layer_id
             )
-            c_kv_scale = getattr(m, "fak_descale_reciprocal", None)
-            if c_kv_scale is None:
-                raise RuntimeError(
-                    "Missing fak_descale_reciprocal for fp8 kv cache MLA path."
-                )
-            c_kv_scale = c_kv_scale.to(
-                device=q_nope_out.device, dtype=torch.float32
+            c_kv_scale = _get_fp8_kv_runtime_scale(
+                m, "fak_descale_reciprocal", q_nope_out.device
             )
 
             _, _, k_pe, k_nope = torch_npu.npu_kv_rmsnorm_rope_cache(
@@ -367,7 +382,9 @@ def forward_mla_core_npu(
         extra_kwargs["topk_indices"] = topk_indices
     if dequant_scale_q_nope is not None:
         extra_kwargs["dequant_scale_q_nope"] = dequant_scale_q_nope
-        extra_kwargs["fp8_kv_scale"] = getattr(m, "fak_descale_float", None)
+        extra_kwargs["fp8_kv_scale"] = _get_fp8_kv_runtime_scale(
+            m, "fak_descale_float", q_pe.device
+        )
         if (
             m.kv_cache_dtype == "fp8_e4m3"
             and forward_batch.forward_mode.is_decode_or_idle()
