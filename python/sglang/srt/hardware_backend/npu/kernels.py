@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import torch
 import triton
 import triton.language as tl
 
 
-@lru_cache(maxsize=1)
 def _get_num_vectorcore() -> int:
     try:
         import triton.backends.ascend.runtime  # noqa: F401
@@ -30,7 +27,6 @@ def _get_num_vectorcore() -> int:
         return num_vectorcore
 
 
-@lru_cache(maxsize=1)
 def _get_npu_aicore_num() -> int:
     try:
         import triton.backends.ascend.runtime  # noqa: F401
@@ -44,7 +40,7 @@ def _get_npu_aicore_num() -> int:
         raise RuntimeError(f"Failed to query num_aicore from device properties: {props}")
     return aicore_num
 
-
+NUM_VECTOR_CORES = _get_num_vectorcore()
 NUM_CUBE_CORES = _get_npu_aicore_num()
 
 
@@ -207,7 +203,7 @@ def build_tree_kernel_efficient_triton(
 ) -> None:
     batch_size = int(verified_seq_len.numel())
     parent_stride = topk * (depth - 1) + 1
-    num_cores = _get_num_vectorcore()
+    num_cores = NUM_VECTOR_CORES
     block_draft = triton.next_power_of_2(draft_token_num)
 
     _build_tree_efficient_kernel[(num_cores,)](
@@ -369,7 +365,7 @@ def _cache_location_assigns_impl(
     if batch_size == 0:
         return token_pool if assign_mode == ASSIGN_TO_POOL else out_cache_loc
     if num_cores is None:
-        num_cores = _get_num_vectorcore()
+        num_cores = NUM_VECTOR_CORES
     num_cores = int(max(1, num_cores))
     bs_upper = int(triton.next_power_of_2(batch_size))
     _cache_location_assigns_kernel[(num_cores,)](
