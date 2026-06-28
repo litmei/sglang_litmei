@@ -425,7 +425,18 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             cache_mode=cache_mode,
         )
 
-        return (q_pe, k_rope, q_nope, k_nope, forward_batch, zero_allocator, positions, None)
+        return (
+            q_pe,
+            k_rope,
+            q_nope,
+            k_nope,
+            None,
+            forward_batch,
+            zero_allocator,
+            positions,
+            None,
+            None,
+        )
 
     def forward_mlapo(self, positions, hidden_states, forward_batch, zero_allocator):
         input_dtype = hidden_states.dtype
@@ -508,9 +519,11 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             v_cache,
             q_nope_out,
             k_cache,
+            None,
             forward_batch,
             zero_allocator,
             positions,
+            None,
             None,
         )
 
@@ -565,7 +578,9 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 k_cache,
                 qr,
                 forward_batch,
+                None,
                 positions,
+                None,
                 dequant_scale_q_nope,
             )
 
@@ -600,8 +615,10 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             k_cache,
             qr,
             forward_batch,
+            None,
             positions,
             dequant_q_norm,
+            None,
         )
 
     def forward(self, positions, hidden_states, forward_batch, zero_allocator):

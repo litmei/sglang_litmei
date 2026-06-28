@@ -200,29 +200,18 @@ def forward_mla_prepare_npu(
         preprocess_result = m.mla_preprocess.forward(
             positions, hidden_states, forward_batch, zero_allocator
         )
-        if m.kv_cache_dtype == "fp8_e4m3":
-            (
-                q_pe,
-                k_pe,
-                q_nope_out,
-                k_nope,
-                forward_batch,
-                zero_allocator,
-                positions,
-                dequant_scale_q_nope,
-            ) = preprocess_result
-        else:
-            (
-                q_pe,
-                k_pe,
-                q_nope_out,
-                k_nope,
-                forward_batch,
-                zero_allocator,
-                positions,
-                _,
-            ) = preprocess_result
-            dequant_scale_q_nope = None
+        (
+            q_pe,
+            k_pe,
+            q_nope_out,
+            k_nope,
+            _,
+            forward_batch,
+            zero_allocator,
+            positions,
+            _,
+            dequant_scale_q_nope,
+        ) = preprocess_result
         topk_indices = None
     else:
         q_lora = None
@@ -646,8 +635,10 @@ def npu_mla_preprocess(
             k_nope,
             q_lora,
             forward_batch,
+            zero_allocator,
             positions,
             dynamic_scale,
+            _,
         ) = m.mla_preprocess.forward(
             positions, hidden_states, forward_batch, zero_allocator
         )
@@ -663,9 +654,11 @@ def npu_mla_preprocess(
                     k_pe,
                     q_nope_out,
                     k_nope,
+                    _,
                     forward_batch,
                     zero_allocator,
                     positions,
+                    _,
                     _,
                 ) = m.mla_preprocess.forward(
                     positions, hidden_states, forward_batch, zero_allocator
@@ -683,9 +676,11 @@ def npu_mla_preprocess(
                 k_pe,
                 q_nope_out,
                 k_nope,
+                _,
                 forward_batch,
                 zero_allocator,
                 positions,
+                _,
                 _,
             ) = m.mla_preprocess.forward(
                 positions, hidden_states, forward_batch, zero_allocator
