@@ -283,56 +283,54 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         )
 
     def mlaprolog_preprocess_weight(self):
-        q_b_proj_weight = getattr(self.q_b_proj, "weight_original", self.q_b_proj.weight)
-        self.q_b_proj_weight = npu_format_cast(
-            q_b_proj_weight.data.transpose(0, 1).clone()
-        )
         if hasattr(self.q_b_proj, "weight_scale"):
-            q_b_proj_scale = getattr(
-                self.q_b_proj, "weight_scale_original", self.q_b_proj.weight_scale
-            ).clone()
-            if q_b_proj_scale.dtype == torch.uint8:
-                q_b_proj_scale = q_b_proj_scale.view(torch.float8_e8m0fnu)
-            elif q_b_proj_scale.dtype == torch.int8:
-                q_b_proj_scale = q_b_proj_scale.view(torch.uint8).view(
-                    torch.float8_e8m0fnu
-                )
-            self.q_b_proj_scale = q_b_proj_scale
-
-        qkv_a_proj_weight = getattr(self.qkv_a_proj, "weight_original", self.qkv_a_proj.weight)
-        qkv_a_proj_weight = qkv_a_proj_weight.data.transpose(0, 1)
-        qkv_a_proj_weight_q = qkv_a_proj_weight[:, : self.q_lora_rank].clone()
-        qkv_a_proj_weight_kv = qkv_a_proj_weight[
-            :, self.q_lora_rank :
-        ].clone()
-        self.q_a_proj_weight = npu_format_cast(qkv_a_proj_weight_q)
-        self.kv_a_proj_weight = npu_format_cast(qkv_a_proj_weight_kv)
-        if hasattr(self.qkv_a_proj, "weight_scale"):
-            qkv_a_proj_scale = getattr(
-                self.qkv_a_proj,
-                "weight_scale_original",
-                self.qkv_a_proj.weight_scale,
+            self.q_b_proj_weight = npu_format_cast(
+                self.q_b_proj.weight_original.transpose(0, 1).clone()
             )
-            self.qkv_a_proj_scale_q = qkv_a_proj_scale[
-                : self.q_lora_rank, :
+            self.q_b_proj_scale = (
+                self.q_b_proj.weight_scale_original.clone().view(torch.float8_e8m0fnu)
+            )
+        else:
+            self.q_b_proj_weight = npu_format_cast(
+                self.q_b_proj.weight.data.transpose(0, 1).clone()
+            )
+
+        if hasattr(self.qkv_a_proj, "weight_scale"):
+            self.qkv_a_proj.weight_original = self.qkv_a_proj.weight_original.transpose(
+                0, 1
+            )
+            qkv_a_proj_weight_q = self.qkv_a_proj.weight_original[
+                :, : self.q_lora_rank
             ].clone()
-            self.qkv_a_proj_scale_kv = qkv_a_proj_scale[
-                self.q_lora_rank :, :
+            qkv_a_proj_weight_kv = self.qkv_a_proj.weight_original[
+                :, self.q_lora_rank :
             ].clone()
-            if self.qkv_a_proj_scale_q.dtype == torch.uint8:
-                self.qkv_a_proj_scale_q = self.qkv_a_proj_scale_q.view(
-                    torch.float8_e8m0fnu
-                )
-                self.qkv_a_proj_scale_kv = self.qkv_a_proj_scale_kv.view(
-                    torch.float8_e8m0fnu
-                )
-            elif self.qkv_a_proj_scale_q.dtype == torch.int8:
-                self.qkv_a_proj_scale_q = self.qkv_a_proj_scale_q.view(
-                    torch.uint8
-                ).view(torch.float8_e8m0fnu)
-                self.qkv_a_proj_scale_kv = self.qkv_a_proj_scale_kv.view(
-                    torch.uint8
-                ).view(torch.float8_e8m0fnu)
+            self.q_a_proj_weight = npu_format_cast(qkv_a_proj_weight_q)
+            self.kv_a_proj_weight = npu_format_cast(qkv_a_proj_weight_kv)
+            self.qkv_a_proj_scale_q = (
+                self.qkv_a_proj.weight_scale_original[: self.q_lora_rank, :]
+                .clone()
+                .view(torch.float8_e8m0fnu)
+            )
+
+            self.qkv_a_proj_scale_kv = (
+                self.qkv_a_proj.weight_scale_original[self.q_lora_rank :, :]
+                .clone()
+                .view(torch.float8_e8m0fnu)
+            )
+        else:
+            self.qkv_a_proj.weight.data = self.qkv_a_proj.weight.data.transpose(0, 1)
+            qkv_a_proj_weight_q = self.qkv_a_proj.weight.data[
+                :, : self.q_lora_rank
+            ].clone()
+            qkv_a_proj_weight_kv = self.qkv_a_proj.weight.data[
+                :, self.q_lora_rank :
+            ].clone()
+            self.q_a_proj_weight = npu_format_cast(qkv_a_proj_weight_q)
+            self.kv_a_proj_weight = npu_format_cast(qkv_a_proj_weight_kv)
+
+        if not hasattr(self.qkv_a_proj, "weight_scale"):
+            self.qkv_a_proj.weight.data = self.qkv_a_proj.weight.data.transpose(0, 1)
 
     def get_sin_cos(self, positions):
         cos_sin = self.rotary_emb.cos_sin_cache[positions]
@@ -637,7 +635,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             return self.forward_mlapo(
                 positions, hidden_states, forward_batch, zero_allocator
             )
-        elif _is_mlaprolog:
+        elif _is_mlaprolog or _is_npu_before_atlas_a5:
             return self.forward_mlaprolog(positions, hidden_states, forward_batch)
         else:
             return self.forward_absorb_prepare_npu_rms_norm_cache(
