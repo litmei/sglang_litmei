@@ -228,6 +228,7 @@ def build_tree_kernel_efficient_triton(
     )
 
 
+ASSIGN_TO_POOL = 0
 RETRIEVE_FROM_POOL = 1
 MAX_STEP = 6
 
@@ -267,9 +268,63 @@ def _cache_location_assigns_kernel(
         elem = tl.arange(0, MAX_STEP_CONST)
         mask = elem < step
 
-        if ASSIGN_MODE == 1:
+        if ASSIGN_MODE == 0:
+            data = tl.load(cache_ptr + elem, mask=mask, other=0)
+            tl.store(token_ptr + elem, data, mask=mask)
+        else:
             data = tl.load(token_ptr + elem, mask=mask, other=0)
             tl.store(cache_ptr + elem, data, mask=mask)
+
+
+def _cache_location_assigns_impl(
+    req_pool_indices: torch.Tensor,
+    token_pool: torch.Tensor,
+    start_offset: torch.Tensor,
+    end_offset: torch.Tensor,
+    out_cache_loc: torch.Tensor,
+    assign_mode: int = ASSIGN_TO_POOL,
+    num_cores: int | None = None,
+) -> torch.Tensor:
+    if assign_mode not in (ASSIGN_TO_POOL, RETRIEVE_FROM_POOL):
+        raise ValueError("assign_mode must be 0 or 1.")
+    batch_size = int(req_pool_indices.shape[0])
+    if batch_size == 0:
+        return token_pool if assign_mode == ASSIGN_TO_POOL else out_cache_loc
+    if num_cores is None:
+        num_cores = _get_num_vectorcore()
+    num_cores = int(max(1, num_cores))
+    bs_upper = int(triton.next_power_of_2(batch_size))
+    _cache_location_assigns_kernel[(num_cores,)](
+        req_pool_indices,
+        token_pool,
+        start_offset,
+        end_offset,
+        out_cache_loc,
+        batch_size,
+        int(token_pool.shape[1]),
+        ASSIGN_MODE=assign_mode,
+        NUM_CORES=num_cores,
+        BS_UPPER=bs_upper,
+        MAX_STEP_CONST=MAX_STEP,
+    )
+    return token_pool if assign_mode == ASSIGN_TO_POOL else out_cache_loc
+
+
+def cache_loc_assign(
+    req_pool_indices: torch.Tensor,
+    token_pool: torch.Tensor,
+    start_offset: torch.Tensor,
+    end_offset: torch.Tensor,
+    out_cache_loc: torch.Tensor,
+) -> torch.Tensor:
+    return _cache_location_assigns_impl(
+        req_pool_indices,
+        token_pool,
+        start_offset,
+        end_offset,
+        out_cache_loc,
+        ASSIGN_TO_POOL,
+    )
 
 
 def cache_loc_update(
@@ -279,25 +334,14 @@ def cache_loc_update(
     end_offset: torch.Tensor,
     out_cache_loc_copy: torch.Tensor,
 ) -> torch.Tensor:
-    batch_size = int(req_pool_indices.shape[0])
-    if batch_size == 0:
-        return out_cache_loc_copy
-    num_cores = _get_num_vectorcore()
-    bs_upper = int(triton.next_power_of_2(batch_size))
-    _cache_location_assigns_kernel[(num_cores,)](
+    return _cache_location_assigns_impl(
         req_pool_indices,
         req_to_token,
         start_offset,
         end_offset,
         out_cache_loc_copy,
-        batch_size,
-        int(req_to_token.shape[1]),
-        ASSIGN_MODE=RETRIEVE_FROM_POOL,
-        NUM_CORES=int(max(1, num_cores)),
-        BS_UPPER=bs_upper,
-        MAX_STEP_CONST=MAX_STEP,
+        RETRIEVE_FROM_POOL,
     )
-    return out_cache_loc_copy
 
 
 @triton.jit
