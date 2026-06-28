@@ -81,19 +81,6 @@ def npu_fused_experts_fp8(
     top_k: int,
     **kwargs,
 ):
-    if torch.npu.is_current_stream_capturing():
-        return npu_fused_experts_fp8_decode(
-            hidden_states=hidden_states,
-            w13=w13,
-            w13_weight_scale_inv=w13_weight_scale_inv,
-            w2=w2,
-            w2_weight_scale_inv=w2_weight_scale_inv,
-            topk_weights=topk_weights,
-            topk_ids=topk_ids,
-            top_k=top_k,
-            **kwargs,
-        )
-
     original_shape = hidden_states.shape
     original_dtype = hidden_states.dtype
     if len(original_shape) == 3:
@@ -461,19 +448,6 @@ def npu_fused_experts_mxfp4(
     top_k: int,
     **kwargs,
 ):
-    if torch.npu.is_current_stream_capturing():
-        return npu_fused_experts_mxfp4_decode(
-            hidden_states=hidden_states,
-            w13=w13,
-            w13_weight_scale=w13_weight_scale,
-            w2=w2,
-            w2_weight_scale=w2_weight_scale,
-            topk_weights=topk_weights,
-            topk_ids=topk_ids,
-            top_k=top_k,
-            **kwargs,
-        )
-
     original_shape = hidden_states.shape
     original_dtype = hidden_states.dtype
     if len(original_shape) == 3:
@@ -655,19 +629,6 @@ def npu_fused_experts_w4a8_mxfp(
     top_k: int,
     **kwargs,
 ):
-    if torch.npu.is_current_stream_capturing():
-        return npu_fused_experts_w4a8_mxfp_decode(
-            hidden_states=hidden_states,
-            w13=w13,
-            w13_weight_scale=w13_weight_scale,
-            w2=w2,
-            w2_weight_scale=w2_weight_scale,
-            topk_weights=topk_weights,
-            topk_ids=topk_ids,
-            top_k=top_k,
-            **kwargs,
-        )
-
     original_shape = hidden_states.shape
     original_dtype = hidden_states.dtype
     if len(original_shape) == 3:
@@ -1570,16 +1531,28 @@ class NPUW8A8MxFp8DynamicMoEMethod(_NPUFusedMoEMethodBase):
         topk_ids = topk_ids.to(torch.int32)
         topk_weights = topk_weights.to(hidden_states.dtype)
 
-        output = npu_fused_experts_mxfp8(
-            hidden_states=hidden_states,
-            w13=layer.w13_weight,
-            w13_weight_scale=layer.w13_weight_scale,
-            w2=layer.w2_weight,
-            w2_weight_scale=layer.w2_weight_scale,
-            topk_weights=topk_weights,
-            topk_ids=topk_ids,
-            top_k=topk_ids.shape[1],
-        )
+        if not torch.npu.is_current_stream_capturing():
+            output = npu_fused_experts_mxfp8(
+                hidden_states=hidden_states,
+                w13=layer.w13_weight,
+                w13_weight_scale=layer.w13_weight_scale,
+                w2=layer.w2_weight,
+                w2_weight_scale=layer.w2_weight_scale,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                top_k=topk_ids.shape[1],
+            )
+        else:
+            output = npu_fused_experts_mxfp8_decode(
+                hidden_states=hidden_states,
+                w13=layer.w13_weight,
+                w13_weight_scale=layer.w13_weight_scale,
+                w2=layer.w2_weight,
+                w2_weight_scale=layer.w2_weight_scale,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                top_k=topk_ids.shape[1],
+            )
         return StandardCombineInput(hidden_states=output)
 
     def apply_without_routing_weights(
@@ -1661,16 +1634,28 @@ class NPUW4A4MxFp4DynamicMoEMethod(_NPUFusedMoEMethodBase):
         topk_ids = topk_ids.to(torch.int32)
         topk_weights = topk_weights.to(hidden_states.dtype)
 
-        output = npu_fused_experts_mxfp4(
-            hidden_states=hidden_states,
-            w13=layer.w13_weight,
-            w13_weight_scale=layer.w13_weight_scale,
-            w2=layer.w2_weight,
-            w2_weight_scale=layer.w2_weight_scale,
-            topk_weights=topk_weights,
-            topk_ids=topk_ids,
-            top_k=topk_ids.shape[1],
-        )
+        if not torch.npu.is_current_stream_capturing():
+            output = npu_fused_experts_mxfp4(
+                hidden_states=hidden_states,
+                w13=layer.w13_weight,
+                w13_weight_scale=layer.w13_weight_scale,
+                w2=layer.w2_weight,
+                w2_weight_scale=layer.w2_weight_scale,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                top_k=topk_ids.shape[1],
+            )
+        else:
+            output = npu_fused_experts_mxfp4_decode(
+                hidden_states=hidden_states,
+                w13=layer.w13_weight,
+                w13_weight_scale=layer.w13_weight_scale,
+                w2=layer.w2_weight,
+                w2_weight_scale=layer.w2_weight_scale,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                top_k=topk_ids.shape[1],
+            )
         return StandardCombineInput(hidden_states=output)
 
     def apply_without_routing_weights(
@@ -1760,16 +1745,28 @@ class NPUW4A8MxFpDynamicMoEMethod(_NPUFusedMoEMethodBase):
         topk_ids = topk_ids.to(torch.int32)
         topk_weights = topk_weights.to(hidden_states.dtype)
 
-        output = npu_fused_experts_w4a8_mxfp(
-            hidden_states=hidden_states,
-            w13=layer.w13_weight,
-            w13_weight_scale=layer.w13_weight_scale,
-            w2=layer.w2_weight,
-            w2_weight_scale=layer.w2_weight_scale,
-            topk_weights=topk_weights,
-            topk_ids=topk_ids,
-            top_k=topk_ids.shape[1],
-        )
+        if not torch.npu.is_current_stream_capturing():
+            output = npu_fused_experts_w4a8_mxfp(
+                hidden_states=hidden_states,
+                w13=layer.w13_weight,
+                w13_weight_scale=layer.w13_weight_scale,
+                w2=layer.w2_weight,
+                w2_weight_scale=layer.w2_weight_scale,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                top_k=topk_ids.shape[1],
+            )
+        else:
+            output = npu_fused_experts_w4a8_mxfp_decode(
+                hidden_states=hidden_states,
+                w13=layer.w13_weight,
+                w13_weight_scale=layer.w13_weight_scale,
+                w2=layer.w2_weight,
+                w2_weight_scale=layer.w2_weight_scale,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                top_k=topk_ids.shape[1],
+            )
         return StandardCombineInput(hidden_states=output)
 
     def apply_without_routing_weights(

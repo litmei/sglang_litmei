@@ -1872,16 +1872,28 @@ class Fp8MoEMethod(FusedMoEMethodBase):
             topk_weights, topk_ids, _ = dispatch_output.topk_output
             topk_ids = topk_ids.to(torch.int32)
             topk_weights = topk_weights.to(x.dtype)
-            output = npu_fused_experts_fp8(
-                hidden_states=x,
-                w13=layer.w13_weight,
-                w13_weight_scale_inv=layer.w13_weight_scale_inv,
-                w2=layer.w2_weight,
-                w2_weight_scale_inv=layer.w2_weight_scale_inv,
-                topk_weights=topk_weights,
-                topk_ids=topk_ids,
-                top_k=topk_ids.shape[1],
-            )
+            if not torch.npu.is_current_stream_capturing():
+                output = npu_fused_experts_fp8(
+                    hidden_states=x,
+                    w13=layer.w13_weight,
+                    w13_weight_scale_inv=layer.w13_weight_scale_inv,
+                    w2=layer.w2_weight,
+                    w2_weight_scale_inv=layer.w2_weight_scale_inv,
+                    topk_weights=topk_weights,
+                    topk_ids=topk_ids,
+                    top_k=topk_ids.shape[1],
+                )
+            else:
+                output = npu_fused_experts_fp8_decode(
+                    hidden_states=x,
+                    w13=layer.w13_weight,
+                    w13_weight_scale_inv=layer.w13_weight_scale_inv,
+                    w2=layer.w2_weight,
+                    w2_weight_scale_inv=layer.w2_weight_scale_inv,
+                    topk_weights=topk_weights,
+                    topk_ids=topk_ids,
+                    top_k=topk_ids.shape[1],
+                )
             return StandardCombineInput(hidden_states=output)
 
         if use_intel_amx_backend(layer):
