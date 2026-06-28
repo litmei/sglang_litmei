@@ -283,7 +283,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         )
 
     def mlaprolog_preprocess_weight(self):
-        if hasattr(self.q_b_proj, "weight_scale"):
+        if hasattr(self.q_b_proj, "weight_scale_original"):
             self.q_b_proj_weight = npu_format_cast(
                 self.q_b_proj.weight_original.transpose(0, 1).clone()
             )
@@ -295,7 +295,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 self.q_b_proj.weight.data.transpose(0, 1).clone()
             )
 
-        if hasattr(self.qkv_a_proj, "weight_scale"):
+        if hasattr(self.qkv_a_proj, "weight_scale_original"):
             self.qkv_a_proj.weight_original = self.qkv_a_proj.weight_original.transpose(
                 0, 1
             )
@@ -329,7 +329,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             self.q_a_proj_weight = npu_format_cast(qkv_a_proj_weight_q)
             self.kv_a_proj_weight = npu_format_cast(qkv_a_proj_weight_kv)
 
-        if not hasattr(self.qkv_a_proj, "weight_scale"):
+        if not hasattr(self.qkv_a_proj, "weight_scale_original"):
             self.qkv_a_proj.weight.data = self.qkv_a_proj.weight.data.transpose(0, 1)
 
     def get_sin_cos(self, positions):
