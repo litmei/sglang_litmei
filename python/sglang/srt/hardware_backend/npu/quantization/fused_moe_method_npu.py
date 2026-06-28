@@ -1466,23 +1466,27 @@ class NPUW8A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
 class NPUW8A8MxFp8DynamicMoEMethod(_NPUFusedMoEMethodBase):
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        layer.w13_weight.data = layer.w13_weight.data.transpose(1, 2).contiguous()
-        layer.w2_weight.data = layer.w2_weight.data.transpose(1, 2).contiguous()
-
-        w13_weight_scale = layer.w13_weight_scale.data.transpose(1, 2).contiguous()
-        w2_weight_scale = layer.w2_weight_scale.data.transpose(1, 2).contiguous()
-
-        e, k32, n = w13_weight_scale.shape
-        layer.w13_weight_scale.data = (
-            w13_weight_scale.view(e, k32 // 2, 2, n)
-            .permute(0, 1, 3, 2)
-            .contiguous()
+        layer.w13_weight.data = (
+            layer.w13_weight.data.transpose(1, 2).contiguous()
         )
+        layer.w2_weight.data = (
+            layer.w2_weight.data.transpose(1, 2).contiguous()
+        )
+        w13_weight_scale = (
+            layer.w13_weight_scale.data.transpose(1, 2).contiguous()
+        )
+        w2_weight_scale = (
+            layer.w2_weight_scale.data.transpose(1, 2).contiguous()
+        )
+        # pack: [E, K32, N] -> [E, K64, N, 2]
+        e, k32, n = w13_weight_scale.shape
+        w13_weight_scale = w13_weight_scale.view(e, k32 // 2, 2, n).permute(0, 1, 3, 2).contiguous()
 
         e, k32, n = w2_weight_scale.shape
-        layer.w2_weight_scale.data = (
-            w2_weight_scale.view(e, k32 // 2, 2, n).permute(0, 1, 3, 2).contiguous()
-        )
+        w2_weight_scale = w2_weight_scale.view(e, k32 // 2, 2, n).permute(0, 1, 3, 2).contiguous()
+
+        layer.w13_weight_scale.data = w13_weight_scale
+        layer.w2_weight_scale.data  = w2_weight_scale
 
         if hasattr(layer, "dispatcher"):
             layer.dispatcher.set_quant_config({"dispatcher_output_dtype": "bf16"})
@@ -1561,31 +1565,17 @@ class NPUW8A8MxFp8DynamicMoEMethod(_NPUFusedMoEMethodBase):
 class NPUW4A4MxFp4DynamicMoEMethod(_NPUFusedMoEMethodBase):
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        layer.w13_weight.data = npu_format_cast(
-            layer.w13_weight.data.transpose(1, 2).contiguous()
-        )
-        layer.w2_weight.data = npu_format_cast(
-            layer.w2_weight.data.transpose(1, 2).contiguous()
-        )
+        layer.w13_weight.data = torch_npu.npu_format_cast(layer.w13_weight.data, 29).transpose(-1, -2)
+        layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data, 29).transpose(-1, -2)
 
-        w13_weight_scale = layer.w13_weight_scale.data.transpose(1, 2).contiguous()
-        w2_weight_scale = layer.w2_weight_scale.data.transpose(1, 2).contiguous()
+        w13_weight_scale = layer.w13_weight_scale.data.transpose(1, 2)
+        w2_weight_scale = layer.w2_weight_scale.data.transpose(1, 2)
 
-        e, k32, n = w13_weight_scale.shape
-        layer.w13_weight_scale.data = (
-            w13_weight_scale.transpose(-1, -2)
-            .reshape(e, n, k32 // 2, 2)
-            .transpose(1, 2)
-            .contiguous()
-        )
+        w13_weight_scale = w13_weight_scale.transpose(-1, -2).reshape(w13_weight_scale.shape[0], w13_weight_scale.shape[2], w13_weight_scale.shape[1] // 2, 2).transpose(1, 2)
+        w2_weight_scale = w2_weight_scale.transpose(-1, -2).reshape(w2_weight_scale.shape[0], w2_weight_scale.shape[2], w2_weight_scale.shape[1] // 2, 2).transpose(1, 2)
 
-        e, k32, n = w2_weight_scale.shape
-        layer.w2_weight_scale.data = (
-            w2_weight_scale.transpose(-1, -2)
-            .reshape(e, n, k32 // 2, 2)
-            .transpose(1, 2)
-            .contiguous()
-        )
+        layer.w13_weight_scale.data = w13_weight_scale
+        layer.w2_weight_scale.data  = w2_weight_scale
 
         if hasattr(layer, "dispatcher"):
             layer.dispatcher.set_quant_config({"dispatcher_output_dtype": "bf16"})
@@ -1664,35 +1654,17 @@ class NPUW4A4MxFp4DynamicMoEMethod(_NPUFusedMoEMethodBase):
 class NPUW4A8MxFpDynamicMoEMethod(_NPUFusedMoEMethodBase):
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        layer.w13_weight.data = npu_format_cast(
-            layer.w13_weight.data.transpose(1, 2).contiguous(),
-            customize_dtype=torch.float8_e4m3fn,
-            input_dtype=torch_npu.float4_e2m1fn_x2,
-        )
-        layer.w2_weight.data = npu_format_cast(
-            layer.w2_weight.data.transpose(1, 2).contiguous(),
-            customize_dtype=torch.float8_e4m3fn,
-            input_dtype=torch_npu.float4_e2m1fn_x2,
-        )
+        layer.w13_weight.data = torch_npu.npu_format_cast(layer.w13_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2).transpose(1, 2)
+        layer.w2_weight.data = torch_npu.npu_format_cast(layer.w2_weight.data, 29, customize_dtype=torch.float8_e4m3fn, input_dtype=torch_npu.float4_e2m1fn_x2).transpose(1, 2)
 
-        w13_weight_scale = layer.w13_weight_scale.data.transpose(1, 2).contiguous()
-        w2_weight_scale = layer.w2_weight_scale.data.transpose(1, 2).contiguous()
+        w13_weight_scale = layer.w13_weight_scale.data.transpose(1, 2)
+        w2_weight_scale = layer.w2_weight_scale.data.transpose(1, 2)
 
-        e, k32, n = w13_weight_scale.shape
-        layer.w13_weight_scale.data = (
-            w13_weight_scale.transpose(-1, -2)
-            .reshape(e, n, k32 // 2, 2)
-            .transpose(1, 2)
-            .contiguous()
-        )
+        w13_weight_scale = w13_weight_scale.transpose(-1, -2).reshape(w13_weight_scale.shape[0], w13_weight_scale.shape[2], w13_weight_scale.shape[1] // 2, 2).transpose(1, 2)
+        w2_weight_scale = w2_weight_scale.transpose(-1, -2).reshape(w2_weight_scale.shape[0], w2_weight_scale.shape[2], w2_weight_scale.shape[1] // 2, 2).transpose(1, 2)
 
-        e, k32, n = w2_weight_scale.shape
-        layer.w2_weight_scale.data = (
-            w2_weight_scale.transpose(-1, -2)
-            .reshape(e, n, k32 // 2, 2)
-            .transpose(1, 2)
-            .contiguous()
-        )
+        layer.w13_weight_scale.data = w13_weight_scale
+        layer.w2_weight_scale.data  = w2_weight_scale
 
         if hasattr(layer, "dispatcher"):
             layer.dispatcher.set_quant_config({"dispatcher_output_dtype": "bf16"})
