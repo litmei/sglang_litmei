@@ -635,7 +635,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             return self.forward_mlapo(
                 positions, hidden_states, forward_batch, zero_allocator
             )
-        elif _is_mlaprolog or _is_npu_before_atlas_a5:
+        elif _is_mlaprolog or not _is_npu_before_atlas_a5:
             return self.forward_mlaprolog(positions, hidden_states, forward_batch)
         else:
             return self.forward_absorb_prepare_npu_rms_norm_cache(
