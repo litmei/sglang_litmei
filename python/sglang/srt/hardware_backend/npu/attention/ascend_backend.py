@@ -28,7 +28,11 @@ from sglang.srt.mem_cache.memory_pool import KVWriteLoc
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.speculative.spec_info import SpecInput
-from sglang.srt.utils import get_bool_env_var, get_current_device_stream_fast
+from sglang.srt.utils import (
+    get_bool_env_var,
+    get_current_device_stream_fast,
+    is_npu_before_atlas_a5,
+)
 
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
@@ -40,6 +44,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 FULL_ATTENTION_WINDOW = 2147483647
+_is_npu_before_atlas_a5 = is_npu_before_atlas_a5()
 
 
 def _reshape_kv_for_fia_nz(
@@ -79,6 +84,9 @@ class ForwardMetadata:
     # prefix cache
     prefix_lens: Optional[torch.Tensor] = None
     flatten_prefix_block_tables: Optional[torch.Tensor] = None
+    prefix_block_tables: Optional[torch.Tensor] = None
+    prefix_seq_lens_npu: Optional[torch.Tensor] = None
+    prefix_seq_starts: Optional[torch.Tensor] = None
 
 
 class AscendAttnMaskBuilder:
@@ -376,6 +384,150 @@ class AscendAttnBackend(AttentionBackend):
             return self.fp8_kv_scale.to(device=device, dtype=torch.float32)
         return fp8_kv_scale.reshape(-1).to(device=device, dtype=torch.float32)
 
+    def _load_prefix_kv_cache_A5(
+        self,
+        forward_batch: ForwardBatch,
+        layer: RadixAttention,
+        fp8_kv_scale: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        ckv_cache, k_rope_cache = forward_batch.token_to_kv_pool.get_kv_buffer(
+            layer.layer_id
+        )
+        total_prefix_tokens = int(self.forward_metadata.prefix_lens.sum().item())
+        kv_cached = torch.empty(
+            (
+                total_prefix_tokens,
+                ckv_cache.shape[-2],
+                ckv_cache.shape[-1],
+            ),
+            dtype=ckv_cache.dtype,
+            device=ckv_cache.device,
+        )
+        k_rope_cached = torch.empty(
+            (
+                total_prefix_tokens,
+                k_rope_cache.shape[-2],
+                k_rope_cache.shape[-1],
+            ),
+            dtype=k_rope_cache.dtype,
+            device=k_rope_cache.device,
+        )
+        torch_npu.npu_gather_pa_kv_cache(
+            ckv_cache,
+            k_rope_cache,
+            self.forward_metadata.prefix_block_tables,
+            self.forward_metadata.prefix_seq_lens_npu.contiguous(),
+            seq_offset=self.forward_metadata.prefix_seq_starts,
+            key=kv_cached,
+            value=k_rope_cached,
+        )
+        if self.kv_cache_dtype == "fp8_e4m3":
+            kv_scale = self._resolve_fp8_kv_scale(fp8_kv_scale, kv_cached.device)
+            kv_cached = torch.mul(kv_cached.to(kv_scale.dtype), kv_scale).to(
+                torch.bfloat16
+            )
+        return kv_cached, k_rope_cached
+
+    def forward_extend_prefix_A5(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        forward_batch: ForwardBatch,
+        layer: RadixAttention,
+        fp8_kv_scale: Optional[torch.Tensor] = None,
+    ):
+        num_token_padding = q.shape[0]
+        q, k, v = [
+            data[: forward_batch.num_token_non_padded_cpu] for data in [q, k, v]
+        ]
+        q_nope, q_rope = q.split([layer.v_head_dim, self.qk_rope_head_dim], dim=-1)
+        k_nope, k_rope = k.split([layer.v_head_dim, self.qk_rope_head_dim], dim=-1)
+        num_tokens = q_nope.size(0)
+        attn_output = torch.empty(
+            num_tokens,
+            layer.tp_q_head_num,
+            layer.v_head_dim,
+            dtype=q_nope.dtype,
+            device=q_nope.device,
+        )
+        attn_lse = torch.empty(
+            layer.tp_q_head_num,
+            num_tokens,
+            dtype=torch.float32,
+            device=q_nope.device,
+        )
+
+        actual_seq_lengths = np.array(forward_batch.extend_seq_lens_cpu).cumsum().tolist()
+
+        common_kwargs = {
+            "query_rope": q_rope,
+            "key_rope": k_rope,
+            "num_heads": layer.tp_q_head_num,
+            "num_key_value_heads": layer.tp_k_head_num,
+            "input_layout": "TND",
+            "atten_mask": self.fia_mask,
+            "sparse_mode": 3,
+            "scale": layer.scaling,
+            "antiquant_mode": 0,
+            "antiquant_scale": None,
+            "block_table": None,
+            "block_size": 0,
+            "softmax_lse_flag": True,
+            "actual_seq_lengths": actual_seq_lengths,
+            "actual_seq_lengths_kv": actual_seq_lengths,
+        }
+        attn_output, attn_lse = torch_npu.npu_fused_infer_attention_score(
+            q_nope, k_nope, v, **common_kwargs
+        )
+        attn_lse = attn_lse.to(torch.float32)
+        out_list = [
+            attn_output.reshape(num_tokens * layer.tp_q_head_num, layer.v_head_dim)
+        ]
+        lse_list = [attn_lse.reshape(num_tokens * layer.tp_q_head_num)]
+
+        kv_cached, k_rope_cached = self._load_prefix_kv_cache_A5(
+            forward_batch, layer, fp8_kv_scale=fp8_kv_scale
+        )
+
+        assert layer.kv_b_proj is not None
+        kv = layer.kv_b_proj(kv_cached)[0].view(
+            -1, layer.tp_k_head_num, self.qk_nope_head_dim + layer.v_head_dim
+        )
+        k_nope, v = kv.split([self.qk_nope_head_dim, layer.v_head_dim], dim=-1)
+
+        k_rope = k_rope_cached.expand(-1, layer.tp_k_head_num, -1)
+
+        actual_seq_lengths_kv = np.array(self.forward_metadata.prefix_lens).cumsum().tolist()
+        common_kwargs["actual_seq_lengths_kv"] = actual_seq_lengths_kv
+        common_kwargs["key_rope"] = k_rope
+        prefix_attn_output, prefix_attn_lse = torch_npu.npu_fused_infer_attention_score(
+            q_nope, k_nope, v, **common_kwargs
+        )
+        prefix_attn_lse = prefix_attn_lse.to(torch.float32)
+
+        out_list.append(
+            prefix_attn_output.reshape(
+                num_tokens * layer.tp_q_head_num, layer.v_head_dim
+            )
+        )
+        lse_list.append(prefix_attn_lse.reshape(num_tokens * layer.tp_q_head_num))
+        output, _ = torch_npu.npu_attention_update(tuple(lse_list), tuple(out_list), 0)
+        output = output.reshape(-1, layer.tp_q_head_num, layer.v_head_dim)
+
+        if num_token_padding != forward_batch.num_token_non_padded_cpu:
+            output = torch.cat(
+                [
+                    output,
+                    output.new_zeros(
+                        num_token_padding - output.shape[0],
+                        *output.shape[1:],
+                    ),
+                ],
+                dim=0,
+            )
+        return output
+
     def _is_swa_layer(self, layer: RadixAttention) -> bool:
         return (
             self.is_hybrid_swa
@@ -499,6 +651,9 @@ class AscendAttnBackend(AttentionBackend):
                 "cpu"
             )
             seq_prefix_lens = self.forward_metadata.prefix_lens.tolist()
+            prefix_block_tables = []
+            prefix_seq_starts = []
+            prefix_token_offset = 0
             self.forward_metadata.flatten_prefix_block_tables = torch.empty(
                 0, dtype=torch.int32
             ).to(self.device)
@@ -509,12 +664,34 @@ class AscendAttnBackend(AttentionBackend):
                 req_prefix_block_tables = (
                     req_indices[:seq_len][:: self.page_size] // self.page_size
                 )
+                prefix_block_tables.append(req_prefix_block_tables.to(torch.int32))
+                prefix_seq_starts.append(prefix_token_offset)
+                prefix_token_offset += seq_len
                 self.forward_metadata.flatten_prefix_block_tables = torch.cat(
                     (
                         self.forward_metadata.flatten_prefix_block_tables,
                         torch.flatten(req_prefix_block_tables),
                     )
                 )
+            max_prefix_pages = max(
+                (table.numel() for table in prefix_block_tables), default=0
+            )
+            self.forward_metadata.prefix_block_tables = torch.zeros(
+                (len(prefix_block_tables), max_prefix_pages),
+                dtype=torch.int32,
+                device=self.device,
+            )
+            for i, table in enumerate(prefix_block_tables):
+                if table.numel() > 0:
+                    self.forward_metadata.prefix_block_tables[i, : table.numel()] = (
+                        table.to(device=self.device, dtype=torch.int32)
+                    )
+            self.forward_metadata.prefix_seq_lens_npu = (
+                self.forward_metadata.prefix_lens.to(device=self.device).int()
+            )
+            self.forward_metadata.prefix_seq_starts = torch.tensor(
+                prefix_seq_starts, dtype=torch.int64, device=self.device
+            )
 
         if self.use_sliding_window_kv_pool and forward_batch.out_cache_loc is not None:
             self.forward_metadata.swa_out_cache_loc = (
@@ -1616,6 +1793,25 @@ class AscendAttnBackend(AttentionBackend):
                     -1, layer.tp_q_head_num * layer.v_head_dim
                 )
             else:
+                if not _is_npu_before_atlas_a5:
+                    # This path handles chunked prefill on A5 ascend NPU (950PR/DT).
+                    # We do not reuse the older ATB-based path here because ATB operators are
+                    # deprecated on A5 and should not be the backend for this prefix-cache flow.
+                    # Therefore we keep the historical two-pass structure here:
+                    # 1. run attention for the current chunk;
+                    # 2. load prefix KV from paged cache and manually dequantize FP8 KV with the
+                    #    runtime kv scale before kv_b_proj.
+                    # The manual dequantization is required because the prefix KV must be materialized
+                    # as dense BF16 tensors for kv_b_proj and the follow-up V1 attention path. and by the current 
+                    # aclnnFusedInferAttentionScoreV5 document, MLA prefill does not support quantized modes.
+                    return self.forward_extend_prefix_A5(
+                        q,
+                        k,
+                        v,
+                        forward_batch,
+                        layer,
+                        fp8_kv_scale=fp8_kv_scale,
+                    )
                 num_token_padding = q.shape[0]
                 q, k, v = [
                     data[: forward_batch.num_token_non_padded_cpu] for data in [q, k, v]
