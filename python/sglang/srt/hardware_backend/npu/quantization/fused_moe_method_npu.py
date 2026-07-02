@@ -774,7 +774,7 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
             # int8 weight stores 2 int4 per byte → weight N = N_logical // 2.
             # Reshape scale to (E, weight_N, 2) and average each pair to match.
             scale_bf16 = scale.to(torch.bfloat16)           # (E, 1, N_logical)
-            scale_bf16 = scale_bf16.reshape(E, -1, 2).mean(dim=-1)  # (E, weight_N)
+            scale_bf16 = scale_bf16.reshape(scale_bf16.shape[0], -1, 2).mean(dim=-1)  # (E, weight_N)
             scale_np = scale.cpu().numpy()
             scale_np.dtype = np.uint32
             scale_uint64_tensor = torch.from_numpy(scale_np.astype(np.int64)).npu()
