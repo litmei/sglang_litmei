@@ -10,6 +10,7 @@ from sglang.srt.utils import (
     is_musa,
     is_npu,
     is_npu_before_atlas_a5,
+    is_xpu,
     next_power_of_2,
 )
 
@@ -18,6 +19,7 @@ _is_hip = is_hip()
 _is_npu = is_npu()
 _is_npu_before_atlas_a5 = is_npu_before_atlas_a5()
 _is_musa = is_musa()
+_is_xpu = is_xpu()
 
 
 @triton.jit
@@ -351,7 +353,7 @@ def assign_extend_cache_locs_func(
     draft_token_num: int,
     device,
 ) -> torch.Tensor:
-    if _is_cuda or _is_hip or _is_musa:
+    if _is_cuda or _is_hip or _is_musa or _is_xpu:
         out_cache_loc = torch.empty(
             (batch_size * draft_token_num,),
             dtype=torch.int64,
