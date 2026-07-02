@@ -770,11 +770,8 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
 
         if is_per_channel_weight:
             # Save bf16 copy for A5 before bit-reinterpreting to int64.
-            # scale shape: (E, 1, N_logical) where N_logical = 2 * intermediate_size.
-            # int8 weight stores 2 int4 per byte → weight N = N_logical // 2.
-            # Reshape scale to (E, weight_N, 2) and average each pair to match.
-            scale_bf16 = scale.to(torch.bfloat16)           # (E, 1, N_logical)
-            scale_bf16 = scale_bf16.reshape(scale_bf16.shape[0], -1, 2).mean(dim=-1)  # (E, weight_N)
+            # Unpacked int8 weight has full N_logical dim → use squeeze(1) only.
+            scale_bf16 = scale.squeeze(1).to(torch.bfloat16)  # (E, N_logical)
             scale_np = scale.cpu().numpy()
             scale_np.dtype = np.uint32
             scale_uint64_tensor = torch.from_numpy(scale_np.astype(np.int64)).npu()
@@ -821,6 +818,26 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
         ), "the last dim of weight needs to be divided by 4"
         return weight.view(torch.int32).contiguous()
 
+    @staticmethod
+    def _unpack_int4_to_int8(weight: torch.Tensor) -> torch.Tensor:
+        """Unpack int4 pairs from int8 storage to true int8 values.
+        Each int8 byte stores 2 signed int4 values (low nibble, high nibble).
+        Returns tensor with last dim doubled, sign-extended to int8.
+        """
+        w_np = weight.cpu().numpy().astype(np.uint8)
+        low = w_np & 0x0F
+        high = (w_np >> 4) & 0x0F
+        # Sign-extend int4 → int8: values >= 8 are negative (subtract 16)
+        low = np.where(low >= 8, low.astype(np.int16) - 16, low).astype(np.int8)
+        high = np.where(high >= 8, high.astype(np.int16) - 16, high).astype(np.int8)
+        # Interleave low/high pairs along last dim
+        shape = list(w_np.shape)
+        shape[-1] *= 2
+        result = np.empty(shape, dtype=np.int8)
+        result[..., 0::2] = low
+        result[..., 1::2] = high
+        return torch.from_numpy(result).npu()
+
     def process_weights_after_loading(
         self, layer: torch.nn.Module, is_per_channel_weight, activation_use_clip
     ) -> None:
@@ -836,13 +853,14 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
             layer.w2_weight.data.transpose(1, 2).contiguous(), requires_grad=False
         )
 
-        # A5: save int8 weight BEFORE npu_format_cast (internal format rejects clone).
+        # A5: unpack int4→int8 BEFORE npu_format_cast (internal format rejects clone).
+        # Unpacking doubles the last dim so int8×int8 matmul produces correct output dim.
         if self._is_a5():
             layer.w13_weight_int8 = torch.nn.Parameter(
-                layer.w13_weight.data.clone(), requires_grad=False
+                self._unpack_int4_to_int8(layer.w13_weight.data), requires_grad=False
             )
             layer.w2_weight_int8 = torch.nn.Parameter(
-                layer.w2_weight.data.clone(), requires_grad=False
+                self._unpack_int4_to_int8(layer.w2_weight.data), requires_grad=False
             )
 
         layer.w13_weight.data = npu_format_cast(layer.w13_weight.data)
@@ -907,12 +925,12 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
         )
         layer.w2_weight_scale = torch.nn.Parameter(w2_weight_scale, requires_grad=False)
         if self._is_a5():
-            w13_bf16 = w13_weight_scale.squeeze(1).to(torch.bfloat16)  # (E, N_logical)
-            w13_bf16 = w13_bf16.reshape(w13_bf16.shape[0], -1, 2).mean(dim=-1)
-            layer.w13_weight_scale_bf16 = torch.nn.Parameter(w13_bf16, requires_grad=False)
-            w2_bf16 = w2_weight_scale.squeeze(1).to(torch.bfloat16)
-            w2_bf16 = w2_bf16.reshape(w2_bf16.shape[0], -1, 2).mean(dim=-1)
-            layer.w2_weight_scale_bf16 = torch.nn.Parameter(w2_bf16, requires_grad=False)
+            layer.w13_weight_scale_bf16 = torch.nn.Parameter(
+                w13_weight_scale.squeeze(1).to(torch.bfloat16), requires_grad=False
+            )
+            layer.w2_weight_scale_bf16 = torch.nn.Parameter(
+                w2_weight_scale.squeeze(1).to(torch.bfloat16), requires_grad=False
+            )
         layer.w13_scale_bias = layer.w13_bias
         layer.w2_scale_bias = layer.w2_bias
 
@@ -960,15 +978,13 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
         bias1_raw = layer.w13_scale_bias
         bias2_raw = layer.w2_scale_bias
         if self._is_a5():
-            # A5: npu_grouped_matmul does not support int8×int4 (int32-packed weight).
-            # Use int8 weight + bf16 2D scale instead.
-            # Also compress bias N 4096→2048 (gate+up pairs) to match weight N.
+            # A5: use unpacked int8 weight + bf16 2D scale (full N_logical, not compressed).
             w1_weight = [layer.w13_weight_int8]
             w2_weight = [layer.w2_weight_int8]
             w1_scale = [layer.w13_weight_scale_bf16]
             w2_scale = [layer.w2_weight_scale_bf16]
-            bias1 = [bias1_raw.reshape(bias1_raw.shape[0], -1, 2).mean(dim=-1)]
-            bias2 = [bias2_raw.reshape(bias2_raw.shape[0], -1, 2).mean(dim=-1)]
+            bias1 = [bias1_raw]
+            bias2 = [bias2_raw]
         else:
             w1_weight = [layer.w13_weight]
             w2_weight = [layer.w2_weight]
