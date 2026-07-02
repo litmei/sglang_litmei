@@ -957,17 +957,25 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
 
         expert_tokens = expert_tokens.to(torch.int64)
 
-        bias1 = [layer.w13_scale_bias]
-        bias2 = [layer.w2_scale_bias]
+        bias1_raw = layer.w13_scale_bias
+        bias2_raw = layer.w2_scale_bias
         if self._is_a5():
             # A5: npu_grouped_matmul does not support int8×int4 (int32-packed weight).
             # Use int8 weight + bf16 2D scale instead.
+            # Also compress bias N 4096→2048 (gate+up pairs) to match weight N.
             w1_weight = [layer.w13_weight_int8]
             w2_weight = [layer.w2_weight_int8]
             w1_scale = [layer.w13_weight_scale_bf16]
             w2_scale = [layer.w2_weight_scale_bf16]
+            bias1 = [bias1_raw.reshape(bias1_raw.shape[0], -1, 2).mean(dim=-1)]
+            bias2 = [bias2_raw.reshape(bias2_raw.shape[0], -1, 2).mean(dim=-1)]
         else:
             w1_weight = [layer.w13_weight]
+            w2_weight = [layer.w2_weight]
+            w1_scale = [layer.w13_weight_scale]
+            w2_scale = [layer.w2_weight_scale]
+            bias1 = [bias1_raw]
+            bias2 = [bias2_raw]
             w2_weight = [layer.w2_weight]
             w1_scale = [layer.w13_weight_scale]
             w2_scale = [layer.w2_weight_scale]
