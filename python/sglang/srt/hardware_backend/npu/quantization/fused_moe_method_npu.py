@@ -923,6 +923,22 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
         w2_scale = [layer.w2_weight_scale]
         _output_dtype = torch.bfloat16
 
+        # ====== DEBUG: w4a8 npu_grouped_matmul actual dtypes & shapes ======
+        import os
+        if os.environ.get("SGLANG_DEBUG_W4A8_GMM", "0") == "1":
+            _tag = "[W4A8-GMM1]"
+            print(f"{_tag} x:          dtype={sorted_hidden_states.dtype} shape={list(sorted_hidden_states.shape)}")
+            print(f"{_tag} weight:     dtype={layer.w13_weight.dtype} shape={list(layer.w13_weight.shape)}")
+            print(f"{_tag} scale:      dtype={w1_scale[0].dtype} shape={list(w1_scale[0].shape)}")
+            print(f"{_tag} bias:       dtype={bias1[0].dtype} shape={list(bias1[0].shape)}")
+            print(f"{_tag} pertoken_s: dtype={pertoken_scale.dtype} shape={list(pertoken_scale.shape)}")
+            print(f"{_tag} group_list: {expert_tokens.tolist()} (len={len(expert_tokens)})")
+            print(f"{_tag} glt={group_list_type} gt=0 si=2 out={_output_dtype}")
+            print(f"{_tag} w13_weight_scale values sample: {w1_scale[0].flatten()[:4].tolist()}")
+            print(f"{_tag} w13_scale_bias values sample: {bias1[0].flatten()[:4].tolist()}")
+            print(f"{_tag} pertoken_scale values sample: {pertoken_scale.flatten()[:4].tolist()}")
+        # ====== END DEBUG ======
+
         hidden_states = torch.ops.npu.npu_grouped_matmul(
             x=[sorted_hidden_states],
             weight=[layer.w13_weight],
@@ -939,6 +955,19 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
         # act_fn: swiglu
         hidden_states = torch.ops.npu.npu_swiglu(hidden_states)
         hidden_states, swiglu_out_scale = torch.ops.npu.npu_dynamic_quant(hidden_states)
+
+        # ====== DEBUG: w4a8 npu_grouped_matmul #2 ======
+        import os
+        if os.environ.get("SGLANG_DEBUG_W4A8_GMM", "0") == "1":
+            _tag = "[W4A8-GMM2]"
+            print(f"{_tag} x:          dtype={hidden_states.dtype} shape={list(hidden_states.shape)}")
+            print(f"{_tag} weight:     dtype={layer.w2_weight.dtype} shape={list(layer.w2_weight.shape)}")
+            print(f"{_tag} scale:      dtype={w2_scale[0].dtype} shape={list(w2_scale[0].shape)}")
+            print(f"{_tag} bias:       dtype={bias2[0].dtype} shape={list(bias2[0].shape)}")
+            print(f"{_tag} pertoken_s: dtype={swiglu_out_scale.dtype} shape={list(swiglu_out_scale.shape)}")
+            print(f"{_tag} group_list: {expert_tokens.tolist()} (len={len(expert_tokens)})")
+            print(f"{_tag} glt={group_list_type} gt=0 si=2 out={_output_dtype}")
+        # ====== END DEBUG ======
 
         output = torch.ops.npu.npu_grouped_matmul(
             x=[hidden_states],
