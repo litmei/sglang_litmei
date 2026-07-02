@@ -99,6 +99,40 @@ def case_int8w_bf16scale_nobias_pts_glt1(verbose):
     out=torch.ops.npu.npu_grouped_matmul(x=x,weight=w,**kw)
     return True,f"int8×int8, bf16 2D scale, no bias, +pts, glt=1"
 
+# ============ 方案 B extended: int8 weight + bf16 2D scale + f32 bias (matching actual code) ============
+def case_int8w_bf16scale_f32bias_pts_glt0(verbose):
+    """int8×int8, bf16 2D scale, f32 bias, +pts, glt=0."""
+    x=[torch.randint(-128,127,(M,K),device='npu',dtype=torch.int8)]
+    w=[torch.randint(-128,127,(E,K,N_INT8),device='npu',dtype=torch.int8)]
+    kw=dict(scale=[torch.randn(E,N_INT8,device='npu',dtype=torch.bfloat16).abs()+0.01],
+            bias=[torch.randn(E,N_INT8,device='npu',dtype=torch.float32)],
+            per_token_scale=[torch.ones(M,device='npu',dtype=torch.float32)],
+            group_list=GL,split_item=2,group_type=0,group_list_type=0,output_dtype=torch.bfloat16)
+    out=torch.ops.npu.npu_grouped_matmul(x=x,weight=w,**kw)
+    return True,f"int8×int8, bf16 2D scale, f32 bias, +pts, glt=0"
+
+def case_int8w_bf16scale_f32bias_pts_glt1(verbose):
+    """int8×int8, bf16 2D scale, f32 bias, +pts, glt=1 — KEY for A5 adaptation."""
+    x=[torch.randint(-128,127,(M,K),device='npu',dtype=torch.int8)]
+    w=[torch.randint(-128,127,(E,K,N_INT8),device='npu',dtype=torch.int8)]
+    kw=dict(scale=[torch.randn(E,N_INT8,device='npu',dtype=torch.bfloat16).abs()+0.01],
+            bias=[torch.randn(E,N_INT8,device='npu',dtype=torch.float32)],
+            per_token_scale=[torch.ones(M,device='npu',dtype=torch.float32)],
+            group_list=GL,split_item=2,group_type=0,group_list_type=1,output_dtype=torch.bfloat16)
+    out=torch.ops.npu.npu_grouped_matmul(x=x,weight=w,**kw)
+    return True,f"int8×int8, bf16 2D scale, f32 bias, +pts, glt=1"
+
+def case_int8w_bf16scale_bf16bias_pts_glt1(verbose):
+    """int8×int8, bf16 2D scale, bf16 bias, +pts, glt=1."""
+    x=[torch.randint(-128,127,(M,K),device='npu',dtype=torch.int8)]
+    w=[torch.randint(-128,127,(E,K,N_INT8),device='npu',dtype=torch.int8)]
+    kw=dict(scale=[torch.randn(E,N_INT8,device='npu',dtype=torch.bfloat16).abs()+0.01],
+            bias=[torch.zeros(E,N_INT8,device='npu',dtype=torch.bfloat16)],
+            per_token_scale=[torch.ones(M,device='npu',dtype=torch.float32)],
+            group_list=GL,split_item=2,group_type=0,group_list_type=1,output_dtype=torch.bfloat16)
+    out=torch.ops.npu.npu_grouped_matmul(x=x,weight=w,**kw)
+    return True,f"int8×int8, bf16 2D scale, bf16 bias, +pts, glt=1"
+
 # ============ A3 exact repro (int32 w + i64 3D scale) — works on A3, fails on A5 ============
 def case_int32w_i64_3dscale_f32bias_pts_glt1(verbose):
     """A3 debug repro: int32 w, i64 3D scale, f32 bias, +pts, glt=1."""
@@ -130,6 +164,11 @@ def main():
         ("I2 int8w bf16 2D +i32bias +pts glt=1", case_int8w_bf16scale_i32bias_pts_glt1),
         ("I3 int8w bf16 2D nobias +pts glt=0", case_int8w_bf16scale_nobias_pts_glt0),
         ("I4 int8w bf16 2D nobias +pts glt=1", case_int8w_bf16scale_nobias_pts_glt1),
+        # f32 bias — matching actual sglang code
+        ("I5 int8w bf16 2D +f32bias +pts glt=0", case_int8w_bf16scale_f32bias_pts_glt0),
+        ("I6 int8w bf16 2D +f32bias +pts glt=1", case_int8w_bf16scale_f32bias_pts_glt1),
+        # bf16 bias — alternative
+        ("I7 int8w bf16 2D +bf16bias +pts glt=1", case_int8w_bf16scale_bf16bias_pts_glt1),
         ("P1 A3 REPRO int32w i64 3D glt=1", case_int32w_i64_3dscale_f32bias_pts_glt1),
     ]
     results={}
@@ -138,7 +177,7 @@ def main():
     passed=sum(1 for v in results.values() if v)
     for n,o in results.items(): print(f"  [{green('PASS') if o else red('FAIL')}] {n}")
     print(f"\n  {passed}/{len(results)} passed")
-    print("\n  For A5: I1-I4 should pass (int8 w + bf16 2D scale)")
+    print("\n  Key for A5 adaptation: I6 (f32 bias + glt=1) matches actual sglang code params")
     print("  P1 should pass on A3, fail on A5 (int32 w not supported)")
     return 0 if passed==len(results) else 1
 
