@@ -832,11 +832,7 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
             layer.w2_weight.data.transpose(1, 2).contiguous(), requires_grad=False
         )
 
-        layer.w13_weight.data = npu_format_cast(layer.w13_weight.data)
-        layer.w2_weight.data = npu_format_cast(layer.w2_weight.data)
-
-        # A5: npu_grouped_matmul does not support int8×int4 (int32-packed weight).
-        # Save int8 weight + bf16 scale for A5 path.
+        # A5: save int8 weight BEFORE npu_format_cast (internal format rejects clone).
         if self._is_a5():
             layer.w13_weight_int8 = torch.nn.Parameter(
                 layer.w13_weight.data.clone(), requires_grad=False
@@ -844,7 +840,9 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
             layer.w2_weight_int8 = torch.nn.Parameter(
                 layer.w2_weight.data.clone(), requires_grad=False
             )
-            # bf16 scale was saved in _process_weights_without_clip / _process_weights_with_clip
+
+        layer.w13_weight.data = npu_format_cast(layer.w13_weight.data)
+        layer.w2_weight.data = npu_format_cast(layer.w2_weight.data)
 
         layer.w13_weight.data = self._pack_to_int32(layer.w13_weight.data)
         layer.w2_weight.data = self._pack_to_int32(layer.w2_weight.data)
