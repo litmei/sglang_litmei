@@ -769,8 +769,9 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
         scale = scale.transpose(1, 2).contiguous()
 
         if is_per_channel_weight:
-            # Save bf16 copy for A5 before bit-reinterpreting to int64
-            scale_bf16 = scale.to(torch.bfloat16)
+            # Save bf16 copy for A5 before bit-reinterpreting to int64.
+            # Squeeze to 2D: (E, 1, N) → (E, N) — int8 weight requires 2D scale.
+            scale_bf16 = scale.squeeze(1).to(torch.bfloat16)
             scale_np = scale.cpu().numpy()
             scale_np.dtype = np.uint32
             scale_uint64_tensor = torch.from_numpy(scale_np.astype(np.int64)).npu()
@@ -904,10 +905,10 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
         layer.w2_weight_scale = torch.nn.Parameter(w2_weight_scale, requires_grad=False)
         if self._is_a5():
             layer.w13_weight_scale_bf16 = torch.nn.Parameter(
-                w13_weight_scale.to(torch.bfloat16), requires_grad=False
+                w13_weight_scale.squeeze(1).to(torch.bfloat16), requires_grad=False
             )
             layer.w2_weight_scale_bf16 = torch.nn.Parameter(
-                w2_weight_scale.to(torch.bfloat16), requires_grad=False
+                w2_weight_scale.squeeze(1).to(torch.bfloat16), requires_grad=False
             )
         layer.w13_scale_bias = layer.w13_bias
         layer.w2_scale_bias = layer.w2_bias
