@@ -770,8 +770,11 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
 
         if is_per_channel_weight:
             # Save bf16 copy for A5 before bit-reinterpreting to int64.
-            # Squeeze to 2D: (E, 1, N) → (E, N) — int8 weight requires 2D scale.
-            scale_bf16 = scale.squeeze(1).to(torch.bfloat16)
+            # scale shape: (E, 1, N_logical) where N_logical = 2 * intermediate_size.
+            # int8 weight stores 2 int4 per byte → weight N = N_logical // 2.
+            # Reshape scale to (E, weight_N, 2) and average each pair to match.
+            scale_bf16 = scale.to(torch.bfloat16)           # (E, 1, N_logical)
+            scale_bf16 = scale_bf16.reshape(E, -1, 2).mean(dim=-1)  # (E, weight_N)
             scale_np = scale.cpu().numpy()
             scale_np.dtype = np.uint32
             scale_uint64_tensor = torch.from_numpy(scale_np.astype(np.int64)).npu()
@@ -904,12 +907,12 @@ class NPUW4A8Int8DynamicMoEMethod(_NPUFusedMoEMethodBase):
         )
         layer.w2_weight_scale = torch.nn.Parameter(w2_weight_scale, requires_grad=False)
         if self._is_a5():
-            layer.w13_weight_scale_bf16 = torch.nn.Parameter(
-                w13_weight_scale.squeeze(1).to(torch.bfloat16), requires_grad=False
-            )
-            layer.w2_weight_scale_bf16 = torch.nn.Parameter(
-                w2_weight_scale.squeeze(1).to(torch.bfloat16), requires_grad=False
-            )
+            w13_bf16 = w13_weight_scale.squeeze(1).to(torch.bfloat16)  # (E, N_logical)
+            w13_bf16 = w13_bf16.reshape(w13_bf16.shape[0], -1, 2).mean(dim=-1)
+            layer.w13_weight_scale_bf16 = torch.nn.Parameter(w13_bf16, requires_grad=False)
+            w2_bf16 = w2_weight_scale.squeeze(1).to(torch.bfloat16)
+            w2_bf16 = w2_bf16.reshape(w2_bf16.shape[0], -1, 2).mean(dim=-1)
+            layer.w2_weight_scale_bf16 = torch.nn.Parameter(w2_bf16, requires_grad=False)
         layer.w13_scale_bias = layer.w13_bias
         layer.w2_scale_bias = layer.w2_bias
 
