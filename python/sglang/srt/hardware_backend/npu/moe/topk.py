@@ -64,6 +64,26 @@ def fused_topk_npu(
             topk_weights = topk_weights * topk_config.routed_scaling_factor
         topk_weights = topk_weights.to(torch.float32)
 
+    # LongCat-style ungrouped top-k with correction bias.
+    # Keep routed scaling on the model output path to avoid double scaling.
+    elif (
+        not use_grouped_topk
+        and correction_bias is not None
+        and topk_config.scoring_func == "softmax"
+        and topk_config.custom_routing_function is None
+        and num_token_non_padded is None
+    ):
+        topk_weights, topk_ids, _ = torch.ops.npu.npu_moe_gating_top_k(
+            router_logits.to(torch.float32),
+            k=topk_config.top_k,
+            bias=correction_bias.to(torch.float32),
+            renorm=0,
+            norm_type=0,
+            routed_scaling_factor=1,
+            eps=float(1e-20),
+        )
+        topk_weights = topk_weights.to(torch.float32)
+
     # Support grouped top-k or correction bias or sigmoid or routed_scaling_factor
     elif (
         correction_bias is not None
