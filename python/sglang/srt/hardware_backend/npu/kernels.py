@@ -44,6 +44,143 @@ NUM_VECTOR_CORES = _get_num_vectorcore()
 NUM_CUBE_CORES = _get_npu_aicore_num()
 
 
+@triton.jit(
+    do_not_specialize=[
+        "raw_bs",
+        "bs",
+        "topk",
+        "raw_num_token",
+        "num_tokens",
+        "speculative_num_steps",
+    ]
+)
+def _draft_replay_pack_fused_kernel(
+    dst_seq_lens_ptr,
+    src_seq_lens_ptr,
+    dst_topk_p_ptr,
+    src_topk_p_ptr,
+    dst_topk_index_ptr,
+    src_topk_index_ptr,
+    dst_req_pool_indices_ptr,
+    src_req_pool_indices_ptr,
+    dst_out_cache_loc_ptr,
+    src_out_cache_loc_ptr,
+    dst_positions_ptr,
+    src_positions_ptr,
+    raw_bs,
+    bs,
+    topk,
+    seq_len_fill_value,
+    raw_num_token,
+    num_tokens,
+    speculative_num_steps,
+    BLOCK_TOPK: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    num_programs = tl.num_programs(0)
+    topk_offsets = tl.arange(0, BLOCK_TOPK)
+    offsets = tl.arange(0, BLOCK_SIZE)
+
+    # Phase 1: seq-domain pack and padding
+    for row in tl.range(pid, bs, num_programs):
+        row_i64 = row.to(tl.int64)
+        if row < raw_bs:
+            seq_len = tl.load(src_seq_lens_ptr + row_i64)
+            tl.store(dst_seq_lens_ptr + row_i64, seq_len)
+
+            req_idx = tl.load(src_req_pool_indices_ptr + row_i64)
+            tl.store(dst_req_pool_indices_ptr + row_i64, req_idx)
+
+            topk_base = row_i64 * topk
+            num_loops = tl.cdiv(topk, BLOCK_TOPK)
+            for i in range(num_loops):
+                cur = topk_offsets + i * BLOCK_TOPK
+                mask = cur < topk
+                src_topk_p = tl.load(
+                    src_topk_p_ptr + topk_base + cur, mask=mask, other=0.0
+                )
+                src_topk_index = tl.load(
+                    src_topk_index_ptr + topk_base + cur, mask=mask, other=0
+                )
+                tl.store(dst_topk_p_ptr + topk_base + cur, src_topk_p, mask=mask)
+                tl.store(
+                    dst_topk_index_ptr + topk_base + cur, src_topk_index, mask=mask
+                )
+        else:
+            tl.store(dst_seq_lens_ptr + row_i64, seq_len_fill_value)
+
+    # Phase 2: token-domain pack and tail zero padding
+    for block_idx in tl.range(pid, tl.cdiv(num_tokens, BLOCK_SIZE), num_programs):
+        token_offset = block_idx * BLOCK_SIZE + offsets
+        token_mask = token_offset < num_tokens
+        copy_mask = token_offset < raw_num_token
+        src_pos = tl.load(src_positions_ptr + token_offset, mask=copy_mask, other=0)
+        tl.store(dst_positions_ptr + token_offset, src_pos, mask=token_mask)
+
+    raw_out_len = raw_num_token * speculative_num_steps
+    out_len = num_tokens * speculative_num_steps
+    for block_idx in tl.range(pid, tl.cdiv(out_len, BLOCK_SIZE), num_programs):
+        out_offset = block_idx * BLOCK_SIZE + offsets
+        out_mask = out_offset < out_len
+        copy_mask = out_offset < raw_out_len
+        src_loc = tl.load(src_out_cache_loc_ptr + out_offset, mask=copy_mask, other=0)
+        tl.store(dst_out_cache_loc_ptr + out_offset, src_loc, mask=out_mask)
+
+
+def draft_replay_pack_npu_triton_fused(
+    dst_seq_lens: torch.Tensor,
+    src_seq_lens: torch.Tensor,
+    dst_out_cache_loc: torch.Tensor,
+    src_out_cache_loc: torch.Tensor,
+    dst_positions: torch.Tensor,
+    src_positions: torch.Tensor,
+    dst_topk_p: torch.Tensor,
+    src_topk_p: torch.Tensor,
+    dst_topk_index: torch.Tensor,
+    src_topk_index: torch.Tensor,
+    dst_req_pool_indices: torch.Tensor,
+    src_req_pool_indices: torch.Tensor,
+    raw_bs: int,
+    bs: int,
+    topk: int,
+    speculative_num_steps: int,
+    seq_len_fill_value: int,
+    num_cores: int | None = None,
+) -> None:
+    if bs <= 0:
+        return
+    if num_cores is None:
+        num_cores = NUM_VECTOR_CORES
+    num_cores = int(max(1, num_cores))
+    raw_num_token = raw_bs * topk
+    num_tokens = bs * topk
+
+    _draft_replay_pack_fused_kernel[(num_cores,)](
+        dst_seq_lens,
+        src_seq_lens,
+        dst_topk_p,
+        src_topk_p,
+        dst_topk_index,
+        src_topk_index,
+        dst_req_pool_indices,
+        src_req_pool_indices,
+        dst_out_cache_loc,
+        src_out_cache_loc,
+        dst_positions,
+        src_positions,
+        raw_bs,
+        bs,
+        topk,
+        seq_len_fill_value,
+        raw_num_token,
+        num_tokens,
+        speculative_num_steps,
+        BLOCK_TOPK=16,
+        BLOCK_SIZE=256,
+    )
+
+
 @triton.jit(do_not_specialize=["batch_size", "topk", "parent_stride"])
 def _build_tree_efficient_kernel(
     parent_list_ptr,
@@ -382,23 +519,6 @@ def _cache_location_assigns_impl(
         MAX_STEP_CONST=MAX_STEP,
     )
     return token_pool if assign_mode == ASSIGN_TO_POOL else out_cache_loc
-
-
-def cache_loc_assign(
-    req_pool_indices: torch.Tensor,
-    token_pool: torch.Tensor,
-    start_offset: torch.Tensor,
-    end_offset: torch.Tensor,
-    out_cache_loc: torch.Tensor,
-) -> torch.Tensor:
-    return _cache_location_assigns_impl(
-        req_pool_indices,
-        token_pool,
-        start_offset,
-        end_offset,
-        out_cache_loc,
-        ASSIGN_TO_POOL,
-    )
 
 
 def cache_loc_update(

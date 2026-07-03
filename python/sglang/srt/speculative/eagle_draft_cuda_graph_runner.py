@@ -35,6 +35,7 @@ from sglang.srt.model_executor.runner_backend_utils import (
 from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
 from sglang.srt.speculative.eagle_info import EagleDraftInput
 from sglang.srt.utils import (
+    is_npu,
     require_attn_tp_gather,
     require_gathered_buffer,
     require_mlp_sync,
@@ -476,7 +477,9 @@ class EAGLEDraftCudaGraphRunner(DecodeCudaGraphRunner):
         else:
             bs = self._pad_to_bucket(raw_bs, self.capture_bs)
 
-        if bs != raw_bs:
+        use_npu_fused_pack = is_npu()
+
+        if bs != raw_bs and not use_npu_fused_pack:
             buffers.seq_lens.fill_(self.seq_len_fill_value)
             buffers.out_cache_loc.zero_()
             buffers.positions.zero_()
@@ -506,36 +509,80 @@ class EAGLEDraftCudaGraphRunner(DecodeCudaGraphRunner):
             f"{self.model_runner.model_config.vocab_size}",
         )
 
-        # Common inputs — batch the small per-field device copies into a grouped
-        # foreach copy (one foreach call per dtype pair) to cut launch overhead.
-        # hidden_states is handled separately below (see note), and seq_lens_cpu
-        # is handled further down since it lives on host.
-        copy_dsts = [
-            buffers.seq_lens[:raw_bs],
-            buffers.out_cache_loc[: raw_num_token * self.speculative_num_steps],
-            buffers.positions[:raw_num_token],
-            buffers.topk_p[:raw_bs],
-            buffers.topk_index[:raw_bs],
-            buffers.req_pool_indices[:raw_bs],
-        ]
-        copy_srcs = [
-            forward_batch.seq_lens,
-            forward_batch.out_cache_loc,
-            forward_batch.positions,
-            forward_batch.spec_info.topk_p,
-            forward_batch.spec_info.topk_index,
-            forward_batch.req_pool_indices,
-        ]
-        if buffers.rids_int is not None and forward_batch.rids_int is not None:
-            copy_dsts.append(buffers.rids_int[:raw_bs])
-            copy_srcs.append(forward_batch.rids_int)
-        if (
-            buffers.bootstrap_room_ids_int is not None
-            and forward_batch.bootstrap_room_ids_int is not None
-        ):
-            copy_dsts.append(buffers.bootstrap_room_ids_int[:raw_bs])
-            copy_srcs.append(forward_batch.bootstrap_room_ids_int)
-        _grouped_foreach_copy_(copy_dsts, copy_srcs)
+        if use_npu_fused_pack:
+            from sglang.srt.hardware_backend.npu.kernels import (
+                draft_replay_pack_npu_triton_fused,
+            )
+
+            if bs != raw_bs:
+                if buffers.rids_int is not None:
+                    buffers.rids_int.zero_()
+                if buffers.bootstrap_room_ids_int is not None:
+                    buffers.bootstrap_room_ids_int.fill_(-1)
+                if buffers.draft_probs is not None:
+                    buffers.draft_probs.zero_()
+                if buffers.hidden_states is not None:
+                    buffers.hidden_states.zero_()
+
+            draft_replay_pack_npu_triton_fused(
+                dst_seq_lens=buffers.seq_lens,
+                src_seq_lens=forward_batch.seq_lens,
+                dst_out_cache_loc=buffers.out_cache_loc,
+                src_out_cache_loc=forward_batch.out_cache_loc,
+                dst_positions=buffers.positions,
+                src_positions=forward_batch.positions,
+                dst_topk_p=buffers.topk_p,
+                src_topk_p=forward_batch.spec_info.topk_p,
+                dst_topk_index=buffers.topk_index,
+                src_topk_index=forward_batch.spec_info.topk_index,
+                dst_req_pool_indices=buffers.req_pool_indices,
+                src_req_pool_indices=forward_batch.req_pool_indices,
+                raw_bs=raw_bs,
+                bs=bs,
+                topk=self.topk,
+                speculative_num_steps=self.speculative_num_steps,
+                seq_len_fill_value=self.seq_len_fill_value,
+            )
+            if buffers.rids_int is not None and forward_batch.rids_int is not None:
+                buffers.rids_int[:raw_bs].copy_(forward_batch.rids_int)
+            if (
+                buffers.bootstrap_room_ids_int is not None
+                and forward_batch.bootstrap_room_ids_int is not None
+            ):
+                buffers.bootstrap_room_ids_int[:raw_bs].copy_(
+                    forward_batch.bootstrap_room_ids_int
+                )
+        else:
+            # Common inputs — batch the small per-field device copies into a grouped
+            # foreach copy (one foreach call per dtype pair) to cut launch overhead.
+            # hidden_states is handled separately below (see note), and seq_lens_cpu
+            # is handled further down since it lives on host.
+            copy_dsts = [
+                buffers.seq_lens[:raw_bs],
+                buffers.out_cache_loc[: raw_num_token * self.speculative_num_steps],
+                buffers.positions[:raw_num_token],
+                buffers.topk_p[:raw_bs],
+                buffers.topk_index[:raw_bs],
+                buffers.req_pool_indices[:raw_bs],
+            ]
+            copy_srcs = [
+                forward_batch.seq_lens,
+                forward_batch.out_cache_loc,
+                forward_batch.positions,
+                forward_batch.spec_info.topk_p,
+                forward_batch.spec_info.topk_index,
+                forward_batch.req_pool_indices,
+            ]
+            if buffers.rids_int is not None and forward_batch.rids_int is not None:
+                copy_dsts.append(buffers.rids_int[:raw_bs])
+                copy_srcs.append(forward_batch.rids_int)
+            if (
+                buffers.bootstrap_room_ids_int is not None
+                and forward_batch.bootstrap_room_ids_int is not None
+            ):
+                copy_dsts.append(buffers.bootstrap_room_ids_int[:raw_bs])
+                copy_srcs.append(forward_batch.bootstrap_room_ids_int)
+            _grouped_foreach_copy_(copy_dsts, copy_srcs)
 
         # hidden_states is large + contiguous: copy_() uses the cudaMemcpyAsync
         # DMA engine; foreach would force the ~3x slower compute-kernel copy.
