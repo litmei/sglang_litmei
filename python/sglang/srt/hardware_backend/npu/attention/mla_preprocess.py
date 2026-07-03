@@ -339,6 +339,34 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         sin = sin.repeat(1, 2)
         return cos, sin
 
+    def get_sin_cos_from_master_cache(self, positions, dtype):
+        pos = positions.flatten()
+        cos = self.rotary_emb.cos_cached_total.index_select(0, pos).to(
+            device=positions.device, dtype=dtype
+        )
+        sin = self.rotary_emb.sin_cached_total.index_select(0, pos).to(
+            device=positions.device, dtype=dtype
+        )
+        return cos, sin
+
+    def refresh_mlaprolog_runtime_cache(self, positions, forward_batch, dtype):
+        cos, sin = self.get_sin_cos_from_master_cache(positions, dtype)
+        cache_index_i64 = forward_batch.out_cache_loc.to(dtype=torch.int64)
+        forward_batch._longcat_mlaprolog_runtime_cache = {
+            "cos": cos,
+            "sin": sin,
+            "cache_index_i64": cache_index_i64,
+        }
+        return cos, sin, cache_index_i64
+
+    def get_mlaprolog_runtime_cache(self, positions, forward_batch, dtype):
+        cache = getattr(forward_batch, "_longcat_mlaprolog_runtime_cache", None)
+        if self.layer_id == 0 or cache is None:
+            return self.refresh_mlaprolog_runtime_cache(
+                positions, forward_batch, dtype
+            )
+        return cache["cos"], cache["sin"], cache["cache_index_i64"]
+
     def get_kv_cache_and_cache_idx(self, forward_batch):
         k_cache, v_cache = get_token_to_kv_pool().get_kv_buffer(self.layer_id)
         slot_mapping = forward_batch.out_cache_loc.to(dtype=torch.int32)
@@ -530,8 +558,10 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         if not self.has_preprocess_weights:
             self.mlaprolog_preprocess_weight()
             self.has_preprocess_weights = True
-        self.cos, self.sin = self.get_sin_cos(positions)
-        k_cache, v_cache, slot_mapping = self.get_kv_cache_and_cache_idx(forward_batch)
+        self.cos, self.sin, cache_index_i64 = self.get_mlaprolog_runtime_cache(
+            positions, forward_batch, hidden_states.dtype
+        )
+        k_cache, v_cache, _ = self.get_kv_cache_and_cache_idx(forward_batch)
         if self.kv_cache_dtype == "fp8_e4m3":
             dequant_scale_w_dq = self.qkv_a_proj_scale_q
             dequant_scale_w_uq_qr = self.q_b_proj_scale
@@ -551,7 +581,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 "rope_cos": self.cos,
                 "kv_cache": k_cache,
                 "kr_cache": v_cache,
-                "cache_index": slot_mapping.to(dtype=torch.int64),
+                "cache_index": cache_index_i64,
                 "rmsnorm_epsilon_cq": self.q_a_layernorm.variance_epsilon,
                 "rmsnorm_epsilon_ckv": self.kv_a_layernorm.variance_epsilon,
                 "cache_mode": cache_mode,
@@ -595,7 +625,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             "rope_cos": self.cos,
             "kv_cache": k_cache,
             "kr_cache": v_cache,
-            "cache_index": slot_mapping.to(dtype=torch.int64),
+            "cache_index": cache_index_i64,
             "dequant_scale_w_uq_qr": self.q_b_proj_weight_scale,
             "rmsnorm_epsilon_cq": self.q_a_layernorm.variance_epsilon,
             "rmsnorm_epsilon_ckv": self.kv_a_layernorm.variance_epsilon,
