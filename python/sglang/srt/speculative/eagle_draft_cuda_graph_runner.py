@@ -118,6 +118,7 @@ class EAGLEDraftCudaGraphRunner(DecodeCudaGraphRunner):
             if speculative_num_steps is None
             else speculative_num_steps
         )
+        self.enable_spec_v2_zero_bubble = envs.SGLANG_SPEC_V2_ZERO_BUBBLE.get()
         self.topk = model_runner.server_args.speculative_eagle_topk
         self.draft_attn_backend = draft_attn_backend or model_runner.draft_attn_backend
 
@@ -422,7 +423,10 @@ class EAGLEDraftCudaGraphRunner(DecodeCudaGraphRunner):
             output_cache_loc_backup = forward_batch.out_cache_loc
             hidden_states_backup = forward_batch.spec_info.hidden_states
 
-            ret = self.eagle_worker.draft_forward(forward_batch)
+            if self.enable_spec_v2_zero_bubble:
+                ret = self.eagle_worker.draft_forward_zero_bubble(forward_batch)
+            else:
+                ret = self.eagle_worker.draft_forward(forward_batch)
 
             forward_batch.out_cache_loc = output_cache_loc_backup
             forward_batch.spec_info.hidden_states = hidden_states_backup
@@ -448,6 +452,9 @@ class EAGLEDraftCudaGraphRunner(DecodeCudaGraphRunner):
             )
 
     def _postprocess_output_to_raw_bs(self, out, raw_bs):
+        if self.enable_spec_v2_zero_bubble:
+            ret_topk_p, ret_topk_index = (t[:raw_bs] for t in out)
+            return ret_topk_p, ret_topk_index
         parent_list, top_scores_index, draft_tokens, draft_probs = (
             t[:raw_bs] if t is not None else None for t in out
         )

@@ -717,11 +717,14 @@ def get_available_gpu_memory(
 
 
 def is_pin_memory_available(device=None) -> bool:
-    if not torch.cuda.is_available():
-        return False
-    if device is not None and str(device) == "cpu":
-        return False
-    return True
+    if device is None:
+        return torch.cuda.is_available() or is_npu()
+    device_type = str(device).split(":")[0]
+    if device_type == "cuda":
+        return torch.cuda.is_available()
+    if device_type == "npu":
+        return is_npu()
+    return False
 
 
 class LayerFn(Protocol):

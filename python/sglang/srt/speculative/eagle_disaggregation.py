@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+import torch.nn.functional as F
 
+from sglang.srt.environ import envs
 from sglang.srt.managers.overlap_utils import RelayPayload
 from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode
 from sglang.srt.speculative.eagle_info import EagleDraftInput
@@ -23,6 +25,7 @@ def build_eagle_disagg_draft_input(
     num_states = server_args.speculative_eagle_topk
     if server_args.enable_multi_layer_eagle:
         num_states *= server_args.speculative_num_steps
+    enable_spec_v2_zero_bubble = envs.SGLANG_SPEC_V2_ZERO_BUBBLE.get()
 
     topk_p = torch.stack(
         [
@@ -46,6 +49,12 @@ def build_eagle_disagg_draft_input(
         ],
         dim=0,
     )
+    if enable_spec_v2_zero_bubble and server_args.speculative_num_steps > 1:
+        target_width = server_args.speculative_num_steps * num_states
+        pad_size = target_width - topk_p.shape[-1]
+        if pad_size > 0:
+            topk_p = F.pad(topk_p, (0, pad_size))
+            topk_index = F.pad(topk_index, (0, pad_size))
 
     hidden_states = torch.stack(
         [req.hidden_states_tensor for req in batch.reqs], dim=0
