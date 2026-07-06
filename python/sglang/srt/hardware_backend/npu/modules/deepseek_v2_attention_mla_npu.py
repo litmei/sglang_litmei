@@ -290,8 +290,9 @@ def forward_mla_prepare_npu(
 
         q_nope_out = q_nope_out.transpose(0, 1)
 
+        explicit_rope_cos_sin = None
         if _use_explicit_npu_interleaved_rope(m):
-            m.rotary_emb.get_cos_sin_cache(
+            explicit_rope_cos_sin = m.rotary_emb.get_cos_sin_cache(
                 positions,
                 hidden_states.dtype,
                 offsets=None,
@@ -301,8 +302,13 @@ def forward_mla_prepare_npu(
         q_pe, k_pe = m.rotary_emb(positions, q_pe, k_pe)
 
         if m.kv_cache_dtype == "fp8_e4m3":
-            cos = m.rotary_emb.cos_cached.to(q_nope_out.device)
-            sin = m.rotary_emb.sin_cached.to(q_nope_out.device)
+            if explicit_rope_cos_sin is not None:
+                cos, sin = explicit_rope_cos_sin
+                cos = cos.to(q_nope_out.device)
+                sin = sin.to(q_nope_out.device)
+            else:
+                cos = m.rotary_emb.cos_cached.to(q_nope_out.device)
+                sin = m.rotary_emb.sin_cached.to(q_nope_out.device)
             q_nope_shape = q_nope_out.shape
             q_nope_out, dequant_scale_q_nope = torch_npu.npu_dynamic_quant(
                 q_nope_out.reshape(-1, q_nope_shape[-1]),
