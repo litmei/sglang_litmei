@@ -80,48 +80,6 @@ def _dequantize_mxfp8_query_norm(
     return query_bf16.reshape(query_norm.shape)
 
 
-def _uses_modelslim_mxfp8_attention(m: "DeepseekV2AttentionMLA") -> bool:
-    return hasattr(
-        m.fused_qkv_a_proj_with_mqa, "weight_scale_original"
-    ) and hasattr(m.q_b_proj, "weight_scale_original")
-
-
-def _recompute_dsa_mxfp8_query(
-    m: "DeepseekV2AttentionMLA",
-    positions: torch.Tensor,
-    hidden_states: torch.Tensor,
-    forward_batch: "ForwardBatch",
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    qkv_latent = m.fused_qkv_a_proj_with_mqa(hidden_states)[0]
-    if qkv_latent.shape[0] < 65535 and not dsa_use_prefill_cp(forward_batch):
-        q_lora, _, raw_k_pe = fused_split_qk_norm(
-            qkv_latent,
-            m.q_a_layernorm,
-            m.kv_a_layernorm,
-            m.q_lora_rank,
-            m.kv_lora_rank,
-            m.qk_rope_head_dim,
-            eps=m.q_a_layernorm.variance_epsilon,
-        )
-    else:
-        q_latent, latent_cache = qkv_latent.split(
-            [m.q_lora_rank, m.kv_lora_rank + m.qk_rope_head_dim], dim=-1
-        )
-        q_lora = m.q_a_layernorm(q_latent)
-        raw_k_pe = latent_cache[..., m.kv_lora_rank :].unsqueeze(1)
-
-    q = m.q_b_proj(q_lora)[0].view(-1, m.num_local_heads, m.qk_head_dim)
-    q_nope, q_pe = q.split([m.qk_nope_head_dim, m.qk_rope_head_dim], dim=-1)
-    q_nope_out = torch.bmm(q_nope.transpose(0, 1), m.w_kc).transpose(0, 1)
-
-    if m.layer_id == 0:
-        m.rotary_emb.sin_cos_cache = m.rotary_emb.cos_sin_cache.index_select(
-            0, positions
-        )
-    q_pe, _ = m.rotary_emb(positions, q_pe, raw_k_pe)
-    return q_pe, q_nope_out, q_lora
-
-
 # region MHA
 def forward_mha_prepare_npu(
     m: "DeepseekV2AttentionMLA",
@@ -539,12 +497,6 @@ def forward_dsa_prepare_npu(
             forward_batch,
             zero_allocator,
         )
-        if _uses_modelslim_mxfp8_attention(m):
-            # Keep MLAProlog's KV/cache results, but use the regular DSA query path.
-            q_pe, q_nope_out, q_lora = _recompute_dsa_mxfp8_query(
-                m, positions, hidden_states, forward_batch
-            )
-            dynamic_scale = None
     else:
         fused_qkv_a_proj_out = m.fused_qkv_a_proj_with_mqa(hidden_states)[0]
         if m.rotary_emb.is_neox_style:
@@ -751,10 +703,7 @@ def npu_mla_preprocess(
         ) = m.mla_preprocess.forward(
             positions, hidden_states, forward_batch, zero_allocator
         )
-        if (
-            q_lora.dtype == torch.float8_e4m3fn
-            and not _uses_modelslim_mxfp8_attention(m)
-        ):
+        if q_lora.dtype == torch.float8_e4m3fn:
             if dynamic_scale is None:
                 raise RuntimeError(
                     "MLAProlog returned MXFP8 query_norm without dequant scale"
