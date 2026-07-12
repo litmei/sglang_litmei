@@ -570,6 +570,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
 
     def forward_mlaprolog(self, positions, hidden_states, forward_batch):
         import torch_npu
+
         if not self.has_preprocess_weights:
             self.mlaprolog_preprocess_weight()
             self.has_preprocess_weights = True
@@ -577,13 +578,26 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             positions, forward_batch, hidden_states.dtype
         )
         k_cache, v_cache, _ = self.get_kv_cache_and_cache_idx(forward_batch)
+
+        cache_mode = "PA_NZ" if is_fia_nz() else "PA_BSND"
         if self.kv_cache_dtype == "fp8_e4m3":
+            kv_cache_quant_mode = 1
+            query_quant_mode = 1
+            quant_scale_ckv = self._get_quant_scale_ckv(hidden_states.device)
+        else:
+            kv_cache_quant_mode = 0
+            query_quant_mode = 0
+            quant_scale_ckv = None
+
+        is_mxfp8 = hasattr(
+            self.qkv_a_proj, "weight_scale_original"
+        ) and hasattr(self.q_b_proj, "weight_scale_original")
+        if is_mxfp8:
             dequant_scale_w_dq = self.qkv_a_proj_scale_q
             dequant_scale_w_uq_qr = self.q_b_proj_scale
             dequant_scale_w_dkv_kr = self.qkv_a_proj_scale_kv
             x, x_scale = _quantize_mla_query_for_mxfp8(hidden_states)
             dequant_scale_x = x_scale.view(torch.float8_e8m0fnu)
-            cache_mode = "PA_NZ" if is_fia_nz() else "PA_BSND"
             mla_prolog_input_args = {
                 "token_x": x,
                 "weight_dq": self.q_a_proj_weight,
@@ -606,11 +620,11 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 "dequant_scale_w_dkv_kr": dequant_scale_w_dkv_kr,
                 "weight_quant_mode": 3,
                 "dequant_scale_x": dequant_scale_x,
-                "kv_cache_quant_mode": 1,
-                "query_quant_mode": 1,
+                "kv_cache_quant_mode": kv_cache_quant_mode,
+                "query_quant_mode": query_quant_mode,
                 "kc_scale": 1.0,
                 "qc_qr_scale": 1.0,
-                "quant_scale_ckv": self._get_quant_scale_ckv(hidden_states.device),
+                "quant_scale_ckv": quant_scale_ckv,
             }
             q_nope, q_pe, dequant_scale_q_nope, qr, _ = (
                 torch_npu.npu_mla_prolog_v3(**mla_prolog_input_args)
