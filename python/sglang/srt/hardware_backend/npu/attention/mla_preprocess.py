@@ -341,10 +341,25 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
 
     def get_sin_cos_from_master_cache(self, positions, dtype):
         pos = positions.flatten()
-        cos = self.rotary_emb.cos_cached_total.index_select(0, pos).to(
+        cos_cached_total = getattr(self.rotary_emb, "cos_cached_total", None)
+        sin_cached_total = getattr(self.rotary_emb, "sin_cached_total", None)
+
+        if cos_cached_total is None or sin_cached_total is None:
+            cos_sin = self.rotary_emb.cos_sin_cache.index_select(0, pos)
+            cos, sin = cos_sin.chunk(2, dim=-1)
+            # MLAProlog consumes the same full-dim interleaved RoPE cache used
+            # by LongcatExplicitInterleavedRotaryEmbedding.
+            cos = cos.repeat(1, 2)
+            sin = sin.repeat(1, 2)
+            return (
+                cos.to(device=positions.device, dtype=dtype),
+                sin.to(device=positions.device, dtype=dtype),
+            )
+
+        cos = cos_cached_total.index_select(0, pos).to(
             device=positions.device, dtype=dtype
         )
-        sin = self.rotary_emb.sin_cached_total.index_select(0, pos).to(
+        sin = sin_cached_total.index_select(0, pos).to(
             device=positions.device, dtype=dtype
         )
         return cos, sin
