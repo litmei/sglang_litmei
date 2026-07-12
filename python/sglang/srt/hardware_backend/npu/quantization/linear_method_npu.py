@@ -281,22 +281,64 @@ class NPUMXFP8LinearMethod(_NPULinearMethodBase):
     def apply(
         self,
         layer: torch.nn.Module,
-        x: torch.Tensor,
+        x: torch.Tensor | tuple[torch.Tensor, torch.Tensor],
         bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        original_dtype = x.dtype
-        if original_dtype not in (torch.float16, torch.bfloat16):
-            x = x.to(torch.bfloat16)
+        e8m0_dtype = _get_float8_e8m0fnu_dtype()
+        if e8m0_dtype is None:
+            raise RuntimeError("NPU MXFP8 linear requires torch float8 E8M0 support.")
+        if isinstance(x, tuple):
+            qx, input_scale = x
+            if qx.dtype != torch.float8_e4m3fn:
+                raise RuntimeError(
+                    "Pre-quantized MXFP8 input must use torch.float8_e4m3fn, "
+                    f"got {qx.dtype}"
+                )
+
+            input_shape = qx.shape
+            qx = qx.reshape(-1, qx.shape[-1]).contiguous()
+            if qx.shape[-1] % (2 * MXFP8_BLOCK_SIZE) != 0:
+                raise RuntimeError(
+                    "Pre-quantized MXFP8 input hidden size must be divisible by "
+                    f"{2 * MXFP8_BLOCK_SIZE}, got {qx.shape[-1]}"
+                )
+
+            if input_scale.dtype == torch.uint8:
+                input_scale = input_scale.view(e8m0_dtype)
+            elif input_scale.dtype != e8m0_dtype:
+                raise RuntimeError(
+                    "Pre-quantized MXFP8 input scale must use E8M0 or its uint8 "
+                    f"bit representation, got {input_scale.dtype}"
+                )
+
+            expected_scale_shape = (
+                qx.shape[0],
+                qx.shape[1] // (2 * MXFP8_BLOCK_SIZE),
+                2,
+            )
+            if input_scale.numel() != qx.numel() // MXFP8_BLOCK_SIZE:
+                raise RuntimeError(
+                    "Unexpected pre-quantized MXFP8 input scale shape: "
+                    f"got {tuple(input_scale.shape)}, expected "
+                    f"{expected_scale_shape} or "
+                    f"{(qx.shape[0], qx.shape[1] // MXFP8_BLOCK_SIZE)}"
+                )
+            input_scale = input_scale.reshape(expected_scale_shape).contiguous()
             original_dtype = torch.bfloat16
+        else:
+            original_dtype = x.dtype
+            if original_dtype not in (torch.float16, torch.bfloat16):
+                x = x.to(torch.bfloat16)
+                original_dtype = torch.bfloat16
 
-        # Flatten to 2D [tokens, hidden] for npu_dynamic_mx_quant
-        input_shape = x.shape
-        x_2d = x.reshape(-1, x.shape[-1])
+            # Flatten to 2D [tokens, hidden] for npu_dynamic_mx_quant
+            input_shape = x.shape
+            x_2d = x.reshape(-1, x.shape[-1])
 
-        # Dynamic MXFP8 activation quantisation
-        qx, input_scale = torch.ops.npu.npu_dynamic_mx_quant(
-            x_2d, dst_type=torch.float8_e4m3fn
-        )
+            # Dynamic MXFP8 activation quantisation
+            qx, input_scale = torch.ops.npu.npu_dynamic_mx_quant(
+                x_2d, dst_type=torch.float8_e4m3fn
+            )
 
         # MXFP8 matmul (weight & scale already transposed at load time)
         # Use the cached FP32 bias from process_weights_after_loading; fall back

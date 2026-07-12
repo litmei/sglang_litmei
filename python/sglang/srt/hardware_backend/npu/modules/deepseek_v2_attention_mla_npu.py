@@ -56,30 +56,6 @@ def _get_fp8_kv_runtime_scale(
     return scale.to(device=device, dtype=torch.float32)
 
 
-def _dequantize_mxfp8_query_norm(
-    query_norm: torch.Tensor, dequant_scale: torch.Tensor
-) -> torch.Tensor:
-    query_2d = query_norm.reshape(-1, query_norm.shape[-1])
-    scale = dequant_scale
-    if scale.dtype == torch.uint8:
-        scale = scale.view(torch.float8_e8m0fnu)
-    if scale.dim() == 3 and scale.shape[-1] == 2:
-        scale = scale.reshape(scale.shape[0], -1)
-    else:
-        scale = scale.reshape(query_2d.shape[0], -1)
-
-    expected_shape = (query_2d.shape[0], query_2d.shape[1] // 32)
-    if tuple(scale.shape) != expected_shape:
-        raise RuntimeError(
-            "Unexpected MLAProlog MXFP8 query_norm scale shape: "
-            f"got {tuple(scale.shape)}, expected {expected_shape}"
-        )
-
-    query_bf16 = query_2d.reshape(*expected_shape, 32).to(torch.bfloat16)
-    query_bf16 = query_bf16 * scale.to(torch.bfloat16).unsqueeze(-1)
-    return query_bf16.reshape(query_norm.shape)
-
-
 # region MHA
 def forward_mha_prepare_npu(
     m: "DeepseekV2AttentionMLA",
@@ -708,8 +684,6 @@ def npu_mla_preprocess(
                 raise RuntimeError(
                     "MLAProlog returned MXFP8 query_norm without dequant scale"
                 )
-            q_lora = _dequantize_mxfp8_query_norm(q_lora, dynamic_scale)
-            dynamic_scale = None
     else:
         if m.alt_stream is not None:
             mla_event = torch.npu.Event()
