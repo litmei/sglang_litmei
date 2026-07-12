@@ -762,7 +762,7 @@ class DeepseekV2MoE(nn.Module):
                 not is_packed_weight
                 and self.shared_experts.gate_up_proj.weight.dtype == torch.float8_e4m3fn
             )
-            if self.shared_experts_is_fp8:
+            if self.shared_experts_is_fp8 and not _is_npu:
                 if (
                     _use_aiter
                     and config.quantization_config.get("quant_method")
