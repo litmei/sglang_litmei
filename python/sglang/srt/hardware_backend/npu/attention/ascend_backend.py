@@ -1279,14 +1279,7 @@ class AscendAttnBackend(AttentionBackend):
         dequant_scale_q_nope: Optional[torch.Tensor] = None,
         fp8_kv_scale: Optional[torch.Tensor] = None,
     ):
-        mla_preprocess_saved_kv_cache = (
-            topk_indices is None or forward_batch.forward_mode.is_decode()
-        )
-        if (
-            is_mla_preprocess_enabled()
-            and self.use_mla
-            and mla_preprocess_saved_kv_cache
-        ):
+        if is_mla_preprocess_enabled() and self.use_mla:
             # MLAPO and MLAPROLOG do save kv_cache
             save_kv_cache = False
         if self.is_dllm_model:
@@ -2731,14 +2724,7 @@ class AscendAttnBackend(AttentionBackend):
         dequant_scale_q_nope: Optional[torch.Tensor] = None,
         fp8_kv_scale: Optional[torch.Tensor] = None,
     ):
-        mla_preprocess_saved_kv_cache = (
-            topk_indices is None or forward_batch.forward_mode.is_decode()
-        )
-        if (
-            is_mla_preprocess_enabled()
-            and self.use_mla
-            and mla_preprocess_saved_kv_cache
-        ):
+        if is_mla_preprocess_enabled() and self.use_mla:
             # MLAPO does saving kv_cache
             save_kv_cache = False
         if topk_indices is not None:

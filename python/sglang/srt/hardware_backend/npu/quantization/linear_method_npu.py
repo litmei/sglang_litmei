@@ -289,19 +289,8 @@ class NPUMXFP8LinearMethod(_NPULinearMethodBase):
             raise RuntimeError("NPU MXFP8 linear requires torch float8 E8M0 support.")
         if isinstance(x, tuple):
             qx, input_scale = x
-            if qx.dtype != torch.float8_e4m3fn:
-                raise RuntimeError(
-                    "Pre-quantized MXFP8 input must use torch.float8_e4m3fn, "
-                    f"got {qx.dtype}"
-                )
-
             input_shape = qx.shape
             qx = qx.reshape(-1, qx.shape[-1]).contiguous()
-            if qx.shape[-1] % (2 * MXFP8_BLOCK_SIZE) != 0:
-                raise RuntimeError(
-                    "Pre-quantized MXFP8 input hidden size must be divisible by "
-                    f"{2 * MXFP8_BLOCK_SIZE}, got {qx.shape[-1]}"
-                )
 
             if input_scale.dtype == torch.uint8:
                 input_scale = input_scale.view(e8m0_dtype)
@@ -316,13 +305,7 @@ class NPUMXFP8LinearMethod(_NPULinearMethodBase):
                 qx.shape[1] // (2 * MXFP8_BLOCK_SIZE),
                 2,
             )
-            if input_scale.numel() != qx.numel() // MXFP8_BLOCK_SIZE:
-                raise RuntimeError(
-                    "Unexpected pre-quantized MXFP8 input scale shape: "
-                    f"got {tuple(input_scale.shape)}, expected "
-                    f"{expected_scale_shape} or "
-                    f"{(qx.shape[0], qx.shape[1] // MXFP8_BLOCK_SIZE)}"
-                )
+
             input_scale = input_scale.reshape(expected_scale_shape).contiguous()
             original_dtype = torch.bfloat16
         else:
