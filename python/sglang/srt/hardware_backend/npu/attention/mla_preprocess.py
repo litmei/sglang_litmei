@@ -626,7 +626,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 "qc_qr_scale": 1.0,
                 "quant_scale_ckv": quant_scale_ckv,
             }
-            q_nope, q_pe, dequant_scale_q_nope, qr, _ = (
+            q_nope, q_pe, dequant_scale_q_nope, qr, dequant_q_norm = (
                 torch_npu.npu_mla_prolog_v3(**mla_prolog_input_args)
             )
             return (
@@ -638,7 +638,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 forward_batch,
                 None,
                 positions,
-                None,
+                dequant_q_norm,
                 dequant_scale_q_nope,
             )
 
