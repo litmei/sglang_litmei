@@ -34,6 +34,40 @@ def _use_explicit_npu_interleaved_rope(m: "DeepseekV2AttentionMLA") -> bool:
     )
 
 
+def _apply_dsa_interleave_half_rope(
+    m: "DeepseekV2AttentionMLA",
+    positions: torch.Tensor,
+    q_pe: torch.Tensor,
+    k_pe: torch.Tensor,
+    forward_batch: "ForwardBatch",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if m.qk_rope_head_dim != 64:
+        raise RuntimeError(
+            "NPU interleave-half RoPE for DSA requires qk_rope_head_dim=64, "
+            f"got {m.qk_rope_head_dim}"
+        )
+
+    cache = getattr(forward_batch, "_npu_dsa_interleave_half_rope_cache", None)
+    if cache is None:
+        m.rotary_emb.get_cos_sin_with_position(positions)
+        cache = (
+            m.rotary_emb.position_cos.to(device=q_pe.device, dtype=q_pe.dtype),
+            m.rotary_emb.position_sin.to(device=q_pe.device, dtype=q_pe.dtype),
+        )
+        forward_batch._npu_dsa_interleave_half_rope_cache = cache
+    cos, sin = cache
+
+    q_shape = q_pe.shape
+    k_shape = k_pe.shape
+    q_pe = torch_npu.npu_interleave_rope(
+        q_pe.reshape(q_shape[0], q_shape[1], 1, q_shape[2]), cos, sin
+    ).reshape(q_shape)
+    k_pe = torch_npu.npu_interleave_rope(
+        k_pe.reshape(k_shape[0], k_shape[1], 1, k_shape[2]), cos, sin
+    ).reshape(k_shape)
+    return q_pe, k_pe
+
+
 def _get_fp8_kv_runtime_scale(
     m: "DeepseekV2AttentionMLA", attr_name: str, device: torch.device
 ) -> torch.Tensor | None:
@@ -455,10 +489,10 @@ def forward_dsa_prepare_npu(
     prev_topk_indices: torch.Tensor = None,
 ):
     dynamic_scale = None
-    mla_preprocess_used = is_mla_preprocess_enabled()
+    mla_preprocess_used = (
+        is_mla_preprocess_enabled() and forward_batch.forward_mode.is_decode()
+    )
     if mla_preprocess_used:
-        # Keep every cache-producing DSA mode on the same RoPE layout. Native
-        # prefill and MLAProlog decode use different KR cache arrangements.
         (
             q_pe,
             k_pe,
@@ -544,12 +578,16 @@ def forward_dsa_prepare_npu(
 
         q_nope_out = q_nope_out.transpose(0, 1)
 
-        if m.layer_id == 0:
-            m.rotary_emb.sin_cos_cache = m.rotary_emb.cos_sin_cache.index_select(
-                0, positions
+        if is_mla_preprocess_enabled() and not m.rotary_emb.is_neox_style:
+            q_pe, k_pe = _apply_dsa_interleave_half_rope(
+                m, positions, q_pe, k_pe, forward_batch
             )
-
-        q_pe, k_pe = m.rotary_emb(positions, q_pe, k_pe)
+        else:
+            if m.layer_id == 0:
+                m.rotary_emb.sin_cos_cache = m.rotary_emb.cos_sin_cache.index_select(
+                    0, positions
+                )
+            q_pe, k_pe = m.rotary_emb(positions, q_pe, k_pe)
 
         if dsa_use_prefill_cp(forward_batch):
             # support allgather+rerrange
