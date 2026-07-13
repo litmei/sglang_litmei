@@ -455,7 +455,10 @@ def forward_dsa_prepare_npu(
     prev_topk_indices: torch.Tensor = None,
 ):
     dynamic_scale = None
-    if is_mla_preprocess_enabled() and forward_batch.forward_mode.is_decode():
+    mla_preprocess_used = is_mla_preprocess_enabled()
+    if mla_preprocess_used:
+        # Keep every cache-producing DSA mode on the same RoPE layout. Native
+        # prefill and MLAProlog decode use different KR cache arrangements.
         (
             q_pe,
             k_pe,
@@ -573,6 +576,7 @@ def forward_dsa_prepare_npu(
         q_nope_out,
         k_nope,
         topk_indices,
+        mla_preprocess_used,
         forward_batch,
         zero_allocator,
         positions,
@@ -586,6 +590,7 @@ def forward_dsa_core_npu(
     q_nope_out: torch.Tensor,
     k_nope: torch.Tensor,
     topk_indices: torch.Tensor,
+    mla_preprocess_used: bool,
     forward_batch: "ForwardBatch",
     zero_allocator: "BumpAllocator",
     positions: torch.Tensor,
@@ -595,7 +600,7 @@ def forward_dsa_core_npu(
         k_nope.contiguous(),
         k_nope.contiguous(),
         forward_batch,
-        save_kv_cache=True,  # False if forward_batch.forward_mode.is_extend() else True,
+        save_kv_cache=not mla_preprocess_used,
         q_rope=q_pe.contiguous(),
         k_rope=k_pe.contiguous(),
         topk_indices=topk_indices,
