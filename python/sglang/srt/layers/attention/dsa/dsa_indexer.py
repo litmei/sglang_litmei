@@ -1971,27 +1971,147 @@ class Indexer(MultiPlatformOp):
                 else block_table
             )
 
-            indexer_query = q.view(-1, self.n_heads, self.head_dim)
-            indexer_weights = weights
-            if indexer_bs != bs:
-                indexer_query = indexer_query[:indexer_bs]
-                indexer_weights = indexer_weights[:indexer_bs]
+            if envs.SGLANG_DSA_INDEXER_QUANT.get():
+                # Quant branch: use npu_quant_lightning_indexer (int8)
+                q_flat = q.view(-1, self.n_heads, self.head_dim)  # [T1, N1, D]
+                k_paged = past_key_states  # [num_pages, page_size, 1, D] bf16
+                logger.warning(
+                    "[DSA-Indexer-Quant] q_flat: shape=%s dtype=%s | "
+                    "k_paged: shape=%s dtype=%s | "
+                    "weights: shape=%s dtype=%s | "
+                    "actual_seq_q: shape=%s dtype=%s val=%s | "
+                    "actual_seq_kv: shape=%s dtype=%s val=%s | "
+                    "block_table: shape=%s dtype=%s | "
+                    "sparse_count=%d sparse_mode=3",
+                    tuple(q_flat.shape), q_flat.dtype,
+                    tuple(k_paged.shape), k_paged.dtype,
+                    tuple(weights.shape), weights.dtype,
+                    tuple(actual_seq_lengths_q.shape),
+                    actual_seq_lengths_q.dtype,
+                    actual_seq_lengths_q.tolist(),
+                    tuple(actual_seq_lengths_kv.shape),
+                    actual_seq_lengths_kv.dtype,
+                    actual_seq_lengths_kv.tolist(),
+                    tuple(block_table.shape), block_table.dtype,
+                    self.index_topk,
+                )
 
-            topk_indices = torch_npu.npu_lightning_indexer(
-                query=indexer_query,
-                key=past_key_states,
-                weights=indexer_weights,
-                actual_seq_lengths_query=actual_seq_lengths_q.to(torch.int32),
-                actual_seq_lengths_key=actual_seq_lengths_kv.to(k.device).to(
-                    torch.int32
-                ),
-                block_table=block_table,
-                layout_query="TND",
-                layout_key="PA_BSND",
-                sparse_count=self.index_topk,
-                sparse_mode=3,
-            )
-            return topk_indices[0]
+                # Quantize query: [T1, N1, D] -> int8 [T1, N1, D] + fp16 scale [T1, N1]
+                q_int8, q_scale = torch_npu.npu_dynamic_quant(q_flat)
+                q_scale = q_scale.to(torch.float16)
+                weights_fp16 = weights.to(torch.float16)
+
+                # npu_quant_lightning_indexer requires N1=64 exactly.
+                # GLM-5.2 uses N1=32, so pad N1 from 32 -> 64 with zeros.
+                # Padded heads contribute zero to the topk scores (Q=0, W=0,
+                # scale=0) and do not affect the output [T1, N2=1, k].
+                n1 = q_int8.shape[1]
+                if n1 != 64:
+                    pad_n = 64 - n1
+                    # q_int8: [T1, N1, D] -> [T1, 64, D]
+                    q_int8 = torch.nn.functional.pad(q_int8, (0, 0, 0, pad_n))
+                    # q_scale: [T1, N1] -> [T1, 64]
+                    q_scale = torch.nn.functional.pad(q_scale, (0, pad_n))
+                    # weights_fp16: [T1, N1] -> [T1, 64]
+                    weights_fp16 = torch.nn.functional.pad(weights_fp16, (0, pad_n))
+
+                logger.warning(
+                    "[DSA-Indexer-Quant] q_int8: shape=%s dtype=%s | "
+                    "q_scale: shape=%s dtype=%s | n1_orig=%d",
+                    tuple(q_int8.shape), q_int8.dtype,
+                    tuple(q_scale.shape), q_scale.dtype, n1,
+                )
+
+                # Quantize paged key: [num_pages, page_size, 1, D] -> int8 + fp16 scale
+                # npu_dynamic_quant on 2D [N, D] gives scale [N, 1]
+                num_pages, page_size, n2, d = k_paged.shape
+                k_2d = k_paged.view(num_pages * page_size, d)
+                k_int8, k_scale = torch_npu.npu_dynamic_quant(k_2d)
+                k_int8 = k_int8.view(num_pages, page_size, n2, d)
+                k_scale = k_scale.to(torch.float16).view(num_pages, page_size, n2)
+                logger.warning(
+                    "[DSA-Indexer-Quant] k_int8: shape=%s dtype=%s | "
+                    "k_scale: shape=%s dtype=%s",
+                    tuple(k_int8.shape), k_int8.dtype,
+                    tuple(k_scale.shape), k_scale.dtype,
+                )
+
+                topk_indices = torch_npu.npu_quant_lightning_indexer(
+                    query=q_int8,
+                    key=k_int8,
+                    weights=weights_fp16,
+                    query_dequant_scale=q_scale,
+                    key_dequant_scale=k_scale,
+                    actual_seq_lengths_query=actual_seq_lengths_q.to(torch.int32),
+                    actual_seq_lengths_key=actual_seq_lengths_kv.to(
+                        k.device
+                    ).to(torch.int32),
+                    block_table=block_table,
+                    layout_query="TND",
+                    layout_key="PA_BSND",
+                    sparse_count=self.index_topk,
+                    sparse_mode=3,
+                    query_quant_mode=0,
+                    key_quant_mode=0,
+                )
+                logger.warning(
+                    "[DSA-Indexer-Quant] topk_indices: shape=%s dtype=%s "
+                    "sample[0,0,:5]=%s",
+                    tuple(topk_indices.shape), topk_indices.dtype,
+                    topk_indices[0, 0, :5].tolist(),
+                )
+                return topk_indices[0]
+            else:
+                indexer_query = q.view(-1, self.n_heads, self.head_dim)
+                indexer_weights = weights
+                if indexer_bs != bs:
+                    indexer_query = indexer_query[:indexer_bs]
+                    indexer_weights = indexer_weights[:indexer_bs]
+
+                logger.warning(
+                    "[DSA-Indexer-BF16] indexer_query: shape=%s dtype=%s | "
+                    "past_key_states: shape=%s dtype=%s | "
+                    "indexer_weights: shape=%s dtype=%s | "
+                    "actual_seq_q: shape=%s dtype=%s val=%s | "
+                    "actual_seq_kv: shape=%s dtype=%s val=%s | "
+                    "block_table: shape=%s dtype=%s | "
+                    "sparse_count=%d sparse_mode=3 | "
+                    "indexer_bs=%s bs=%s",
+                    tuple(indexer_query.shape), indexer_query.dtype,
+                    tuple(past_key_states.shape), past_key_states.dtype,
+                    tuple(indexer_weights.shape), indexer_weights.dtype,
+                    tuple(actual_seq_lengths_q.shape),
+                    actual_seq_lengths_q.dtype,
+                    actual_seq_lengths_q.tolist(),
+                    tuple(actual_seq_lengths_kv.shape),
+                    actual_seq_lengths_kv.dtype,
+                    actual_seq_lengths_kv.tolist(),
+                    tuple(block_table.shape), block_table.dtype,
+                    self.index_topk,
+                    indexer_bs, bs,
+                )
+
+                topk_indices = torch_npu.npu_lightning_indexer(
+                    query=indexer_query,
+                    key=past_key_states,
+                    weights=indexer_weights,
+                    actual_seq_lengths_query=actual_seq_lengths_q.to(torch.int32),
+                    actual_seq_lengths_key=actual_seq_lengths_kv.to(k.device).to(
+                        torch.int32
+                    ),
+                    block_table=block_table,
+                    layout_query="TND",
+                    layout_key="PA_BSND",
+                    sparse_count=self.index_topk,
+                    sparse_mode=3,
+                )
+                logger.warning(
+                    "[DSA-Indexer-BF16] topk_indices: shape=%s dtype=%s "
+                    "sample[0,0,:5]=%s",
+                    topk_indices[0].shape, topk_indices[0].dtype,
+                    topk_indices[0][0, 0, :5].tolist(),
+                )
+                return topk_indices[0]
 
     def do_npu_cp_balance_indexer(
         self,
