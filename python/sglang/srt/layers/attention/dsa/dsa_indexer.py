@@ -1709,6 +1709,16 @@ class Indexer(MultiPlatformOp):
         )
 
         bs = q_lora.shape[0]
+        if (
+            not is_prefill
+            and not get_attn_backend().graph_mode
+            and forward_batch.num_token_non_padded_cpu == 0
+        ):
+            return torch.empty(
+                (0, self.index_topk),
+                dtype=torch.int32,
+                device=x.device,
+            )
 
         if self.rotary_emb.is_neox_style:
             if not hasattr(forward_batch, "npu_indexer_sin_cos_cache"):

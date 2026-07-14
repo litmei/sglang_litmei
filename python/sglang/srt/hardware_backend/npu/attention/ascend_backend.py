@@ -1177,6 +1177,13 @@ class AscendAttnBackend(AttentionBackend):
             and not forward_batch.forward_mode.is_target_verify()
         )
 
+        if (
+            not is_prefill
+            and not self.graph_mode
+            and forward_batch.num_token_non_padded_cpu == 0
+        ):
+            return torch.zeros_like(q)
+
         if save_kv_cache:
             k = k.view(-1, layer.tp_k_head_num, self.kv_lora_rank)
             k_rope = k_rope.view(-1, layer.tp_k_head_num, self.qk_rope_head_dim)
