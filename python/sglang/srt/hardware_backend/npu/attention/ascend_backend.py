@@ -1184,6 +1184,18 @@ class AscendAttnBackend(AttentionBackend):
                 layer, forward_batch.out_cache_loc, k, k_rope
             )
         q_nope, q_pe = q, q_rope
+        num_token_padding = q_nope.shape[0]
+        if (
+            not is_prefill
+            and not self.graph_mode
+            and forward_batch.num_token_non_padded_cpu is not None
+        ):
+            num_token_non_padded = min(
+                num_token_padding, forward_batch.num_token_non_padded_cpu
+            )
+            q_nope = q_nope[:num_token_non_padded]
+            q_pe = q_pe[:num_token_non_padded]
+            topk_indices = topk_indices[:num_token_non_padded]
         k_nope, k_pe = self.token_to_kv_pool.get_kv_buffer(layer.layer_id)
 
         if is_prefill:
@@ -1260,6 +1272,21 @@ class AscendAttnBackend(AttentionBackend):
                 return_softmax_lse=False,
             )
 
+        if (
+            not is_prefill
+            and not self.graph_mode
+            and attn_out.shape[0] < num_token_padding
+        ):
+            attn_out = torch.cat(
+                [
+                    attn_out,
+                    attn_out.new_zeros(
+                        num_token_padding - attn_out.shape[0],
+                        *attn_out.shape[1:],
+                    ),
+                ],
+                dim=0,
+            )
         return attn_out
 
     def forward_extend(

@@ -1851,6 +1851,13 @@ class Indexer(MultiPlatformOp):
         get_token_to_kv_pool().set_index_k_buffer(
             layer_id, forward_batch.out_cache_loc, k
         )
+        indexer_bs = bs
+        if (
+            not is_prefill
+            and not get_attn_backend().graph_mode
+            and forward_batch.num_token_non_padded_cpu is not None
+        ):
+            indexer_bs = min(indexer_bs, forward_batch.num_token_non_padded_cpu)
         if is_prefill:
             if (
                 self.dsa_enable_prefill_cp
@@ -1896,14 +1903,14 @@ class Indexer(MultiPlatformOp):
                     num_draft_tokens = get_attn_backend().speculative_num_draft_tokens
                     actual_seq_lengths_q = torch.arange(
                         num_draft_tokens,
-                        num_draft_tokens + bs,
+                        num_draft_tokens + indexer_bs,
                         num_draft_tokens,
                         dtype=torch.int32,
                         device=k.device,
                     )
                 else:
                     actual_seq_lengths_q = torch.tensor(
-                        [1 + i * 1 for i in range(bs)],
+                        [1 + i * 1 for i in range(indexer_bs)],
                         dtype=torch.int32,
                         device=k.device,
                     )
@@ -1947,10 +1954,16 @@ class Indexer(MultiPlatformOp):
                 else block_table
             )
 
+            indexer_query = q.view(-1, self.n_heads, self.head_dim)
+            indexer_weights = weights
+            if indexer_bs != bs:
+                indexer_query = indexer_query[:indexer_bs]
+                indexer_weights = indexer_weights[:indexer_bs]
+
             topk_indices = torch_npu.npu_lightning_indexer(
-                query=q.view(-1, self.n_heads, self.head_dim),
+                query=indexer_query,
                 key=past_key_states,
-                weights=weights,
+                weights=indexer_weights,
                 actual_seq_lengths_query=actual_seq_lengths_q.to(torch.int32),
                 actual_seq_lengths_key=actual_seq_lengths_kv.to(k.device).to(
                     torch.int32
