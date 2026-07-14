@@ -2042,7 +2042,9 @@ class Indexer(MultiPlatformOp):
                     weights=weights_fp16,
                     query_dequant_scale=q_scale,
                     key_dequant_scale=k_scale,
-                    actual_seq_lengths_query=actual_seq_lengths_q.to(torch.int32),
+                    actual_seq_lengths_query=actual_seq_lengths_q.to(
+                        k.device
+                    ).to(torch.int32),
                     actual_seq_lengths_key=actual_seq_lengths_kv.to(
                         k.device
                     ).to(torch.int32),
