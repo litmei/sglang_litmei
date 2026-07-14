@@ -1972,68 +1972,64 @@ class Indexer(MultiPlatformOp):
             )
 
             if envs.SGLANG_DSA_INDEXER_QUANT.get():
-                # Quant branch: use npu_quant_lightning_indexer (int8)
-                q_flat = q.view(-1, self.n_heads, self.head_dim)  # [T1, N1, D]
-                k_paged = past_key_states  # [num_pages, page_size, 1, D] bf16
+                # FP8 branch: use npu_quant_lightning_indexer with FP8 inputs.
+                # On A5 the KV cache is stored as FP8 (E4M3FN). We feed FP8
+                # tensors directly to the operator (validated by tests on A5).
+                # The dequant_scale is set to 1.0 since the operator accepts
+                # the FP8 dtype natively and no per-token int8 scale applies.
+                q_flat = q.view(-1, self.n_heads, self.head_dim)  # [T1, N1, D] bf16
+                k_paged = past_key_states  # [num_pages, page_size, 1, D]
+                # If KV cache is already FP8, use it directly; otherwise cast
+                # bf16 -> fp8 (E4M3FN) to simulate the A5 storage layout.
+                if k_paged.dtype != torch.float8_e4m3fn:
+                    k_fp8 = k_paged.to(torch.float8_e4m3fn)
+                else:
+                    k_fp8 = k_paged
+                # query: bf16 -> fp8
+                q_fp8 = q_flat.to(torch.float8_e4m3fn)
+                weights_fp16 = weights.to(torch.float16)
+
                 logger.warning(
-                    "[DSA-Indexer-Quant] q_flat: shape=%s dtype=%s | "
-                    "k_paged: shape=%s dtype=%s | "
-                    "weights: shape=%s dtype=%s | "
-                    "actual_seq_q: shape=%s dtype=%s val=%s | "
-                    "actual_seq_kv: shape=%s dtype=%s val=%s | "
-                    "block_table: shape=%s dtype=%s | "
-                    "sparse_count=%d sparse_mode=3",
-                    tuple(q_flat.shape), q_flat.dtype,
-                    tuple(k_paged.shape), k_paged.dtype,
-                    tuple(weights.shape), weights.dtype,
-                    tuple(actual_seq_lengths_q.shape),
-                    actual_seq_lengths_q.dtype,
+                    "[DSA-Indexer-FP8] q_fp8: shape=%s dtype=%s | "
+                    "k_fp8: shape=%s dtype=%s | "
+                    "weights_fp16: shape=%s dtype=%s | "
+                    "actual_seq_q: val=%s | actual_seq_kv: val=%s | "
+                    "block_table: shape=%s dtype=%s | sparse_count=%d",
+                    tuple(q_fp8.shape), q_fp8.dtype,
+                    tuple(k_fp8.shape), k_fp8.dtype,
+                    tuple(weights_fp16.shape), weights_fp16.dtype,
                     actual_seq_lengths_q.tolist(),
-                    tuple(actual_seq_lengths_kv.shape),
-                    actual_seq_lengths_kv.dtype,
                     actual_seq_lengths_kv.tolist(),
                     tuple(block_table.shape), block_table.dtype,
                     self.index_topk,
                 )
 
-                # Quantize query: [T1, N1, D] -> int8 [T1, N1, D] + fp16 scale [T1, N1]
-                q_int8, q_scale = torch_npu.npu_dynamic_quant(q_flat)
-                q_scale = q_scale.to(torch.float16)
-                weights_fp16 = weights.to(torch.float16)
-
                 # npu_quant_lightning_indexer requires N1=64 exactly.
                 # GLM-5.2 uses N1=32, so pad N1 from 32 -> 64 with zeros.
-                # Padded heads contribute zero to the topk scores (Q=0, W=0,
-                # scale=0) and do not affect the output [T1, N2=1, k].
-                n1 = q_int8.shape[1]
+                n1 = q_fp8.shape[1]
                 if n1 != 64:
                     pad_n = 64 - n1
-                    # q_int8: [T1, N1, D] -> [T1, 64, D]
-                    q_int8 = torch.nn.functional.pad(q_int8, (0, 0, 0, pad_n))
-                    # q_scale: [T1, N1] -> [T1, 64]
-                    q_scale = torch.nn.functional.pad(q_scale, (0, pad_n))
+                    # q_fp8: [T1, N1, D] -> [T1, 64, D]
+                    # FP8 doesn't support pad directly, view as int8 to pad.
+                    q_fp8 = torch.nn.functional.pad(
+                        q_fp8.view(torch.int8), (0, 0, 0, pad_n)
+                    ).view(torch.float8_e4m3fn)
                     # weights_fp16: [T1, N1] -> [T1, 64]
-                    weights_fp16 = torch.nn.functional.pad(weights_fp16, (0, pad_n))
+                    weights_fp16 = torch.nn.functional.pad(
+                        weights_fp16, (0, pad_n)
+                    )
 
-                logger.warning(
-                    "[DSA-Indexer-Quant] q_int8: shape=%s dtype=%s | "
-                    "q_scale: shape=%s dtype=%s | n1_orig=%d",
-                    tuple(q_int8.shape), q_int8.dtype,
-                    tuple(q_scale.shape), q_scale.dtype, n1,
+                # dequant_scale: all ones (FP8 input, no int8 quantization scale).
+                # query_dequant_scale: [T1, 64] fp16
+                q_scale = torch.ones(
+                    q_fp8.shape[0], q_fp8.shape[1],
+                    dtype=torch.float16, device=k_fp8.device,
                 )
-
-                # Quantize paged key: [num_pages, page_size, 1, D] -> int8 + fp16 scale
-                # npu_dynamic_quant on 2D [N, D] gives scale [N, 1]
-                num_pages, page_size, n2, d = k_paged.shape
-                k_2d = k_paged.view(num_pages * page_size, d)
-                k_int8, k_scale = torch_npu.npu_dynamic_quant(k_2d)
-                k_int8 = k_int8.view(num_pages, page_size, n2, d)
-                k_scale = k_scale.to(torch.float16).view(num_pages, page_size, n2)
-                logger.warning(
-                    "[DSA-Indexer-Quant] k_int8: shape=%s dtype=%s | "
-                    "k_scale: shape=%s dtype=%s",
-                    tuple(k_int8.shape), k_int8.dtype,
-                    tuple(k_scale.shape), k_scale.dtype,
+                # key_dequant_scale: [num_pages, page_size, n2] fp16
+                num_pages, page_size, n2, d = k_fp8.shape
+                k_scale = torch.ones(
+                    num_pages, page_size, n2,
+                    dtype=torch.float16, device=k_fp8.device,
                 )
 
                 actual_seq_q_i32 = actual_seq_lengths_q.to(
@@ -2043,102 +2039,9 @@ class Indexer(MultiPlatformOp):
                     k.device
                 ).to(torch.int32)
 
-                # Dump inputs for offline replay (env-gated)
-                import os
-                dump_dir = os.environ.get("SGLANG_DSA_INDEXER_DUMP_DIR", "")
-                if dump_dir:
-                    os.makedirs(dump_dir, exist_ok=True)
-                    dump_path = os.path.join(dump_dir, "quant_inputs.pt")
-                    meta = {
-                        "q_int8": {
-                            "shape": tuple(q_int8.shape),
-                            "dtype": str(q_int8.dtype),
-                            "stride": tuple(q_int8.stride()),
-                            "storage_offset": q_int8.storage_offset(),
-                            "is_contiguous": q_int8.is_contiguous(),
-                        },
-                        "k_int8": {
-                            "shape": tuple(k_int8.shape),
-                            "dtype": str(k_int8.dtype),
-                            "stride": tuple(k_int8.stride()),
-                            "storage_offset": k_int8.storage_offset(),
-                            "is_contiguous": k_int8.is_contiguous(),
-                        },
-                        "weights_fp16": {
-                            "shape": tuple(weights_fp16.shape),
-                            "dtype": str(weights_fp16.dtype),
-                            "stride": tuple(weights_fp16.stride()),
-                            "storage_offset": weights_fp16.storage_offset(),
-                            "is_contiguous": weights_fp16.is_contiguous(),
-                        },
-                        "q_scale": {
-                            "shape": tuple(q_scale.shape),
-                            "dtype": str(q_scale.dtype),
-                            "stride": tuple(q_scale.stride()),
-                            "storage_offset": q_scale.storage_offset(),
-                            "is_contiguous": q_scale.is_contiguous(),
-                        },
-                        "k_scale": {
-                            "shape": tuple(k_scale.shape),
-                            "dtype": str(k_scale.dtype),
-                            "stride": tuple(k_scale.stride()),
-                            "storage_offset": k_scale.storage_offset(),
-                            "is_contiguous": k_scale.is_contiguous(),
-                        },
-                        "block_table": {
-                            "shape": tuple(block_table.shape),
-                            "dtype": str(block_table.dtype),
-                            "stride": tuple(block_table.stride()),
-                            "storage_offset": block_table.storage_offset(),
-                            "is_contiguous": block_table.is_contiguous(),
-                            "val": block_table.tolist(),
-                        },
-                        "actual_seq_q_i32": {
-                            "shape": tuple(actual_seq_q_i32.shape),
-                            "dtype": str(actual_seq_q_i32.dtype),
-                            "stride": tuple(actual_seq_q_i32.stride()),
-                            "storage_offset": actual_seq_q_i32.storage_offset(),
-                            "is_contiguous": actual_seq_q_i32.is_contiguous(),
-                            "val": actual_seq_q_i32.tolist(),
-                        },
-                        "actual_seq_kv_i32": {
-                            "shape": tuple(actual_seq_kv_i32.shape),
-                            "dtype": str(actual_seq_kv_i32.dtype),
-                            "stride": tuple(actual_seq_kv_i32.stride()),
-                            "storage_offset": actual_seq_kv_i32.storage_offset(),
-                            "is_contiguous": actual_seq_kv_i32.is_contiguous(),
-                            "val": actual_seq_kv_i32.tolist(),
-                        },
-                        "scalar_args": {
-                            "sparse_count": int(self.index_topk),
-                            "sparse_mode": 3,
-                            "layout_query": "TND",
-                            "layout_key": "PA_BSND",
-                            "query_quant_mode": 0,
-                            "key_quant_mode": 0,
-                        },
-                    }
-                    torch.save(
-                        {
-                            "meta": meta,
-                            "q_int8": q_int8.cpu().clone(),
-                            "k_int8": k_int8.cpu().clone(),
-                            "weights_fp16": weights_fp16.cpu().clone(),
-                            "q_scale": q_scale.cpu().clone(),
-                            "k_scale": k_scale.cpu().clone(),
-                            "block_table": block_table.cpu().clone(),
-                            "actual_seq_q_i32": actual_seq_q_i32.cpu().clone(),
-                            "actual_seq_kv_i32": actual_seq_kv_i32.cpu().clone(),
-                        },
-                        dump_path,
-                    )
-                    logger.warning(
-                        "[DSA-Indexer-Quant] dumped inputs to %s", dump_path
-                    )
-
                 topk_indices = torch_npu.npu_quant_lightning_indexer(
-                    query=q_int8,
-                    key=k_int8,
+                    query=q_fp8,
+                    key=k_fp8,
                     weights=weights_fp16,
                     query_dequant_scale=q_scale,
                     key_dequant_scale=k_scale,
@@ -2153,7 +2056,7 @@ class Indexer(MultiPlatformOp):
                     key_quant_mode=0,
                 )
                 logger.warning(
-                    "[DSA-Indexer-Quant] topk_indices: shape=%s dtype=%s "
+                    "[DSA-Indexer-FP8] topk_indices: shape=%s dtype=%s "
                     "sample[0,0,:5]=%s",
                     tuple(topk_indices.shape), topk_indices.dtype,
                     topk_indices[0, 0, :5].tolist(),
