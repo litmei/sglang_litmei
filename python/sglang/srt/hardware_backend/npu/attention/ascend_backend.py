@@ -1219,16 +1219,18 @@ class AscendAttnBackend(AttentionBackend):
                     actual_seq_qlen = (
                         torch.arange(
                             self.speculative_num_draft_tokens,
-                            self.speculative_num_draft_tokens + q.shape[0],
+                            self.speculative_num_draft_tokens + q_nope.shape[0],
                             self.speculative_num_draft_tokens,
                             dtype=torch.int32,
                         )
-                        .to(q.device)
+                        .to(q_nope.device)
                         .to(torch.int32)
                     )
                 else:
                     actual_seq_qlen = (
-                        torch.arange(1, q.shape[0] + 1).to(q.device).to(torch.int32)
+                        torch.arange(1, q_nope.shape[0] + 1)
+                        .to(q_nope.device)
+                        .to(torch.int32)
                     )
             else:
                 actual_seq_qlen = self.forward_metadata.actual_seq_lengths_q
