@@ -1180,7 +1180,7 @@ class AscendAttnBackend(AttentionBackend):
         if (
             not is_prefill
             and not self.graph_mode
-            and forward_batch.num_token_non_padded_cpu == 0
+            and forward_batch.forward_mode.is_idle()
         ):
             return torch.zeros_like(q)
 
@@ -1192,17 +1192,22 @@ class AscendAttnBackend(AttentionBackend):
             )
         q_nope, q_pe = q, q_rope
         num_token_padding = q_nope.shape[0]
-        if (
-            not is_prefill
-            and not self.graph_mode
-            and forward_batch.num_token_non_padded_cpu is not None
-        ):
-            num_token_non_padded = min(
-                num_token_padding, forward_batch.num_token_non_padded_cpu
+        if not is_prefill and not self.graph_mode:
+            query_tokens_per_req = (
+                self.speculative_num_draft_tokens
+                if (
+                    forward_batch.forward_mode.is_draft_extend_v2()
+                    or forward_batch.forward_mode.is_target_verify()
+                )
+                else 1
             )
-            q_nope = q_nope[:num_token_non_padded]
-            q_pe = q_pe[:num_token_non_padded]
-            topk_indices = topk_indices[:num_token_non_padded]
+            num_query_tokens = min(
+                num_token_padding,
+                self.forward_metadata.block_tables.shape[0] * query_tokens_per_req,
+            )
+            q_nope = q_nope[:num_query_tokens]
+            q_pe = q_pe[:num_query_tokens]
+            topk_indices = topk_indices[:num_query_tokens]
         k_nope, k_pe = self.token_to_kv_pool.get_kv_buffer(layer.layer_id)
 
         if is_prefill:

@@ -1712,7 +1712,7 @@ class Indexer(MultiPlatformOp):
         if (
             not is_prefill
             and not get_attn_backend().graph_mode
-            and forward_batch.num_token_non_padded_cpu == 0
+            and forward_batch.forward_mode.is_idle()
         ):
             return torch.empty(
                 (0, self.index_topk),
@@ -1862,12 +1862,19 @@ class Indexer(MultiPlatformOp):
             layer_id, forward_batch.out_cache_loc, k
         )
         indexer_bs = bs
-        if (
-            not is_prefill
-            and not get_attn_backend().graph_mode
-            and forward_batch.num_token_non_padded_cpu is not None
-        ):
-            indexer_bs = min(indexer_bs, forward_batch.num_token_non_padded_cpu)
+        if not is_prefill and not get_attn_backend().graph_mode:
+            query_tokens_per_req = (
+                get_attn_backend().speculative_num_draft_tokens
+                if (
+                    forward_batch.forward_mode.is_draft_extend_v2()
+                    or forward_batch.forward_mode.is_target_verify()
+                )
+                else 1
+            )
+            indexer_bs = min(
+                indexer_bs,
+                actual_seq_lengths_kv.numel() * query_tokens_per_req,
+            )
         if is_prefill:
             if (
                 self.dsa_enable_prefill_cp
