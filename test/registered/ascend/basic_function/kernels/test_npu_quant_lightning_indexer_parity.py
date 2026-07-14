@@ -61,6 +61,44 @@ def per_token_head_symmetric_quantize(
 
 
 # ---------------------------------------------------------------------------
+# FP8 量化工具：模拟 A5 环境 KV cache 以 FP8 (E4M3FN) 存储
+# ---------------------------------------------------------------------------
+def bf16_to_fp8(x: torch.Tensor) -> torch.Tensor:
+    """bf16/fp16/fp32 -> float8_e4m3fn。
+
+    E4M3FN: 1 sign + 4 exponent + 3 mantissa bits
+    范围: [-448, 448], 最小正常值: 2^-6 = 0.015625
+    适合存储 KV cache（值域相对集中）。
+    """
+    if not hasattr(torch, "float8_e4m3fn"):
+        raise RuntimeError("当前 PyTorch 版本不支持 float8_e4m3fn")
+    return x.to(torch.float8_e4m3fn)
+
+
+def fp8_to_bf16(x_fp8: torch.Tensor) -> torch.Tensor:
+    """float8_e4m3fn -> bf16。"""
+    if not hasattr(torch, "float8_e4m3fn"):
+        raise RuntimeError("当前 PyTorch 版本不支持 float8_e4m3fn")
+    return x_fp8.to(torch.bfloat16)
+
+
+def fp8_kv_cache_to_int8(
+    k_fp8: torch.Tensor, eps: float = 1e-8
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """模拟实际场景：KV cache 以 FP8 存储，需先反量化到 bf16，再量化到 int8。
+
+    输入: k_fp8 shape [..., D], dtype = float8_e4m3fn
+    输出: k_int8 shape [..., D], dtype = int8
+          k_scale shape [...], dtype = fp16
+
+    流程: FP8 -> BF16 -> per-token-head int8 量化
+    """
+    k_bf16 = fp8_to_bf16(k_fp8)  # FP8 -> BF16
+    k_int8, k_scale = per_token_head_symmetric_quantize(k_bf16, eps=eps)
+    return k_int8, k_scale
+
+
+# ---------------------------------------------------------------------------
 # CPU 参考实现（仅用于小规模验证算子调用参数正确性）
 # ---------------------------------------------------------------------------
 def ref_lightning_indexer_bf16(
@@ -812,6 +850,374 @@ class TestNpuQuantRealisticScenario(unittest.TestCase):
 
 
 @unittest.skipUnless(NPU_AVAILABLE, "NPU 不可用，跳过")
+class TestNpuQuantFP8Scenario(unittest.TestCase):
+    """FP8 (E4M3FN) 直接输入场景测试，模拟 A5 环境。
+
+    A5 环境中 KV cache 以 FP8 存储。此测试直接将 FP8 tensor 传给
+    npu_quant_lightning_indexer 算子（不转 int8），验证算子是否原生支持 FP8。
+
+    两种传法：
+    1. view(torch.int8): 共享底层存储，FP8 字节直接当 int8 解释
+    2. 直接传 FP8 dtype: 让算子自己处理（可能报错）
+    """
+
+    OVERLAP_THRESHOLD = 0.85
+
+    def setUp(self):
+        torch.npu.set_device(0)
+        torch.npu.empty_cache()
+
+    def tearDown(self):
+        torch.npu.synchronize()
+        torch.npu.empty_cache()
+
+    def _gen_fp8_data(
+        self,
+        seq_lens_q: list[int],
+        seq_lens_k: list[int],
+        n1: int = 32,
+        block_count: int = 500,
+        seed: int = 42,
+    ) -> dict:
+        """生成 FP8 场景的测试数据。query 和 key 均为 FP8。"""
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+        n2 = 1
+        d = 128
+        block_size = 128
+        B = len(seq_lens_q)
+        T1 = sum(seq_lens_q)
+
+        # query: [T1, N1, D] bf16 -> FP8
+        q_bf16 = torch.randn(T1, n1, d, dtype=torch.bfloat16) * 3.0
+        query_fp8 = bf16_to_fp8(q_bf16)
+        # key (paged): [block_count, block_size, N2, D] bf16 -> FP8
+        k_bf16 = torch.randn(
+            block_count, block_size, n2, d, dtype=torch.bfloat16
+        ) * 3.0
+        key_fp8 = bf16_to_fp8(k_bf16)
+        # weights: [T1, N1] bf16
+        weights = torch.randn(T1, n1, dtype=torch.bfloat16) * 0.3
+
+        # block_table
+        max_blocks_per_seq = max(
+            (sk + block_size - 1) // block_size for sk in seq_lens_k
+        )
+        block_table = torch.zeros(
+            (B, max_blocks_per_seq), dtype=torch.int32
+        )
+        blk_offset = 0
+        for b, sk in enumerate(seq_lens_k):
+            nb = (sk + block_size - 1) // block_size
+            block_table[b, :nb] = torch.arange(
+                blk_offset, blk_offset + nb, dtype=torch.int32
+            )
+            blk_offset += nb
+
+        return {
+            "query_bf16": q_bf16,
+            "query_fp8": query_fp8,
+            "key_bf16": k_bf16,
+            "key_fp8": key_fp8,
+            "weights": weights,
+            "block_table": block_table,
+            "seq_lens_q": seq_lens_q,
+            "seq_lens_k": seq_lens_k,
+            "n1": n1,
+            "n2": n2,
+            "d": d,
+            "block_size": block_size,
+            "sparse_count": 2048,
+            "sparse_mode": 3,
+            "block_count": block_count,
+        }
+
+    def _run_fp8_direct_view_test(self, data: dict, label: str):
+        """方式1: FP8 -> view(int8) 后传给算子。
+
+        FP8 与 int8 都是 1 字节，view(int8) 共享底层存储。
+        scale 设为 1.0，让算子把 FP8 字节直接当 int8 用。
+        这会产生错误结果（位模式不同），但验证算子是否不 segfault。
+        """
+        device = NPU_DEVICE
+        q_fp8 = data["query_fp8"].to(device)
+        k_fp8 = data["key_fp8"].to(device)
+        w = data["weights"].to(device)
+        bt = data["block_table"]
+        sq = data["seq_lens_q"]
+        sk = data["seq_lens_k"]
+        sc = data["sparse_count"]
+        sm = data["sparse_mode"]
+        n1_orig = data["n1"]
+
+        actual_seq_q = torch.tensor(
+            np.cumsum(sq), dtype=torch.int32, device=device
+        )
+        actual_seq_k = torch.tensor(sk, dtype=torch.int32, device=device)
+
+        print(f"\n[{label}] n1_orig={n1_orig}, block_count={data['block_count']}")
+        print(f"  q_fp8: shape={tuple(q_fp8.shape)} dtype={q_fp8.dtype}")
+        print(f"  k_fp8: shape={tuple(k_fp8.shape)} dtype={k_fp8.dtype}")
+
+        # view(int8)
+        num_pages, page_size, n2, d = k_fp8.shape
+        q_view = q_fp8.view(torch.int8)
+        k_view = k_fp8.view(torch.int8)
+
+        # scale 用 1.0
+        q_scale = torch.ones(
+            q_view.shape[0], q_view.shape[1],
+            dtype=torch.float16, device=device
+        )
+        k_scale = torch.ones(
+            num_pages, page_size, n2, dtype=torch.float16, device=device
+        )
+        weights_fp16 = w.to(torch.float16)
+
+        # N1 pad 到 64
+        if n1_orig != 64:
+            pad_n = 64 - n1_orig
+            q_view = torch.nn.functional.pad(q_view, (0, 0, 0, pad_n))
+            q_scale = torch.nn.functional.pad(q_scale, (0, pad_n))
+            weights_fp16 = torch.nn.functional.pad(weights_fp16, (0, pad_n))
+
+        print(f"  q_view: shape={tuple(q_view.shape)} dtype={q_view.dtype}")
+        print(f"  k_view: shape={tuple(k_view.shape)} dtype={k_view.dtype}")
+
+        try:
+            indices = torch_npu.npu_quant_lightning_indexer(
+                query=q_view,
+                key=k_view,
+                weights=weights_fp16,
+                query_dequant_scale=q_scale,
+                key_dequant_scale=k_scale,
+                query_quant_mode=0,
+                key_quant_mode=0,
+                actual_seq_lengths_query=actual_seq_q,
+                actual_seq_lengths_key=actual_seq_k,
+                block_table=bt.to(device),
+                layout_query="TND",
+                layout_key="PA_BSND",
+                sparse_count=sc,
+                sparse_mode=sm,
+            )
+            torch.npu.synchronize()
+            print(f"  [fp8_view] SUCCESS: indices shape={tuple(indices.shape)}")
+            print(f"  [fp8_view] indices[0,0,:5]={indices[0,0,:5].cpu().tolist()}")
+        except Exception as e:
+            print(f"  [fp8_view] FAILED: {type(e).__name__}: {e}")
+            raise
+
+    def _run_fp8_direct_dtype_test(self, data: dict, label: str):
+        """方式2: 直接传 FP8 dtype 给算子（不 view int8）。
+
+        算子文档说仅支持 int8，此测试验证算子对 FP8 dtype 的行为。
+        如果报错，说明算子不支持 FP8；如果不报错，验证结果。
+        """
+        device = NPU_DEVICE
+        q_fp8 = data["query_fp8"].to(device)
+        k_fp8 = data["key_fp8"].to(device)
+        w = data["weights"].to(device)
+        bt = data["block_table"]
+        sq = data["seq_lens_q"]
+        sk = data["seq_lens_k"]
+        sc = data["sparse_count"]
+        sm = data["sparse_mode"]
+        n1_orig = data["n1"]
+
+        actual_seq_q = torch.tensor(
+            np.cumsum(sq), dtype=torch.int32, device=device
+        )
+        actual_seq_k = torch.tensor(sk, dtype=torch.int32, device=device)
+
+        print(f"\n[{label}] n1_orig={n1_orig}, block_count={data['block_count']}")
+        print(f"  q_fp8: shape={tuple(q_fp8.shape)} dtype={q_fp8.dtype}")
+        print(f"  k_fp8: shape={tuple(k_fp8.shape)} dtype={k_fp8.dtype}")
+
+        # scale 用 1.0
+        num_pages, page_size, n2, d = k_fp8.shape
+        q_scale = torch.ones(
+            q_fp8.shape[0], q_fp8.shape[1],
+            dtype=torch.float16, device=device
+        )
+        k_scale = torch.ones(
+            num_pages, page_size, n2, dtype=torch.float16, device=device
+        )
+        weights_fp16 = w.to(torch.float16)
+
+        # N1 pad 到 64
+        if n1_orig != 64:
+            pad_n = 64 - n1_orig
+            q_fp8 = torch.nn.functional.pad(q_fp8, (0, 0, 0, pad_n))
+            q_scale = torch.nn.functional.pad(q_scale, (0, pad_n))
+            weights_fp16 = torch.nn.functional.pad(weights_fp16, (0, pad_n))
+
+        print(f"  q_fp8 (padded): shape={tuple(q_fp8.shape)} dtype={q_fp8.dtype}")
+
+        try:
+            indices = torch_npu.npu_quant_lightning_indexer(
+                query=q_fp8,
+                key=k_fp8,
+                weights=weights_fp16,
+                query_dequant_scale=q_scale,
+                key_dequant_scale=k_scale,
+                query_quant_mode=0,
+                key_quant_mode=0,
+                actual_seq_lengths_query=actual_seq_q,
+                actual_seq_lengths_key=actual_seq_k,
+                block_table=bt.to(device),
+                layout_query="TND",
+                layout_key="PA_BSND",
+                sparse_count=sc,
+                sparse_mode=sm,
+            )
+            torch.npu.synchronize()
+            print(f"  [fp8_dtype] SUCCESS: indices shape={tuple(indices.shape)}")
+            print(f"  [fp8_dtype] indices[0,0,:5]={indices[0,0,:5].cpu().tolist()}")
+        except Exception as e:
+            print(f"  [fp8_dtype] FAILED: {type(e).__name__}: {e}")
+            raise
+
+    def _run_fp8_parity_test(self, data: dict, label: str):
+        """FP8 parity 测试：FP8 直接输入 vs BF16 参考路径。
+
+        对比 FP8 直接传给算子的输出与 BF16 算子输出的重合率。
+        用于验证 FP8 路径的正确性（如果算子支持 FP8）。
+        """
+        device = NPU_DEVICE
+        q_bf16 = data["query_bf16"].to(device)
+        k_bf16 = data["key_bf16"].to(device)
+        q_fp8 = data["query_fp8"].to(device)
+        k_fp8 = data["key_fp8"].to(device)
+        w = data["weights"].to(device)
+        bt = data["block_table"]
+        sq = data["seq_lens_q"]
+        sk = data["seq_lens_k"]
+        sc = data["sparse_count"]
+        sm = data["sparse_mode"]
+        n1_orig = data["n1"]
+
+        actual_seq_q = torch.tensor(
+            np.cumsum(sq), dtype=torch.int32, device=device
+        )
+        actual_seq_k = torch.tensor(sk, dtype=torch.int32, device=device)
+
+        print(f"\n[{label}] n1_orig={n1_orig}, block_count={data['block_count']}")
+
+        # --- BF16 参考路径 ---
+        indices_bf16, _ = torch_npu.npu_lightning_indexer(
+            query=q_bf16,
+            key=k_bf16,
+            weights=w,
+            actual_seq_lengths_query=actual_seq_q,
+            actual_seq_lengths_key=actual_seq_k,
+            block_table=bt.to(device),
+            layout_query="TND",
+            layout_key="PA_BSND",
+            sparse_count=sc,
+            sparse_mode=sm,
+        )
+        torch.npu.synchronize()
+        print(f"  [bf16] indices[0,0,:5]={indices_bf16[0,0,:5].cpu().tolist()}")
+
+        # --- FP8 路径（view int8）---
+        num_pages, page_size, n2, d = k_fp8.shape
+        q_view = q_fp8.view(torch.int8)
+        k_view = k_fp8.view(torch.int8)
+        q_scale = torch.ones(
+            q_view.shape[0], q_view.shape[1],
+            dtype=torch.float16, device=device
+        )
+        k_scale = torch.ones(
+            num_pages, page_size, n2, dtype=torch.float16, device=device
+        )
+        weights_fp16 = w.to(torch.float16)
+
+        if n1_orig != 64:
+            pad_n = 64 - n1_orig
+            q_view = torch.nn.functional.pad(q_view, (0, 0, 0, pad_n))
+            q_scale = torch.nn.functional.pad(q_scale, (0, pad_n))
+            weights_fp16 = torch.nn.functional.pad(weights_fp16, (0, pad_n))
+
+        indices_fp8 = torch_npu.npu_quant_lightning_indexer(
+            query=q_view,
+            key=k_view,
+            weights=weights_fp16,
+            query_dequant_scale=q_scale,
+            key_dequant_scale=k_scale,
+            query_quant_mode=0,
+            key_quant_mode=0,
+            actual_seq_lengths_query=actual_seq_q,
+            actual_seq_lengths_key=actual_seq_k,
+            block_table=bt.to(device),
+            layout_query="TND",
+            layout_key="PA_BSND",
+            sparse_count=sc,
+            sparse_mode=sm,
+        )
+        torch.npu.synchronize()
+        print(f"  [fp8] indices[0,0,:5]={indices_fp8[0,0,:5].cpu().tolist()}")
+
+        overlap = compute_overlap_ratio(indices_bf16.cpu(), indices_fp8.cpu())
+        print(f"  [{label}] bf16 vs fp8 topk 重合率: {overlap:.4f}")
+        # FP8 view int8 会产生错误结果，重合率低是预期的
+        # 这里不强制阈值，只打印对比结果
+
+    # ===== view(int8) 方式测试 =====
+    def test_fp8_view_decode_small(self):
+        """FP8 view int8 - decode 场景：B=1, sq=6, sk=6, n1=32."""
+        data = self._gen_fp8_data(
+            seq_lens_q=[6], seq_lens_k=[6], n1=32, block_count=500, seed=42
+        )
+        self._run_fp8_direct_view_test(data, "fp8_view_decode_small")
+
+    def test_fp8_view_decode_large_pool(self):
+        """FP8 view int8 - 大 pool：B=1, sq=6, sk=6, n1=32, block_count=26857."""
+        data = self._gen_fp8_data(
+            seq_lens_q=[6], seq_lens_k=[6], n1=32, block_count=26857, seed=42
+        )
+        self._run_fp8_direct_view_test(data, "fp8_view_decode_large_pool")
+
+    def test_fp8_view_prefill(self):
+        """FP8 view int8 - prefill 场景：B=1, sq=512, sk=512, n1=32."""
+        data = self._gen_fp8_data(
+            seq_lens_q=[512], seq_lens_k=[512], n1=32, block_count=500, seed=100
+        )
+        self._run_fp8_direct_view_test(data, "fp8_view_prefill")
+
+    # ===== 直接传 FP8 dtype 测试 =====
+    def test_fp8_dtype_decode_small(self):
+        """FP8 直接 dtype - decode 场景：B=1, sq=6, sk=6, n1=32."""
+        data = self._gen_fp8_data(
+            seq_lens_q=[6], seq_lens_k=[6], n1=32, block_count=500, seed=42
+        )
+        self._run_fp8_direct_dtype_test(data, "fp8_dtype_decode_small")
+
+    def test_fp8_dtype_decode_large_pool(self):
+        """FP8 直接 dtype - 大 pool：B=1, sq=6, sk=6, n1=32, block_count=26857."""
+        data = self._gen_fp8_data(
+            seq_lens_q=[6], seq_lens_k=[6], n1=32, block_count=26857, seed=42
+        )
+        self._run_fp8_direct_dtype_test(data, "fp8_dtype_decode_large_pool")
+
+    # ===== parity 对比测试 =====
+    def test_fp8_parity_decode_small(self):
+        """FP8 vs BF16 parity - decode 场景。"""
+        data = self._gen_fp8_data(
+            seq_lens_q=[6], seq_lens_k=[6], n1=32, block_count=500, seed=42
+        )
+        self._run_fp8_parity_test(data, "fp8_parity_decode_small")
+
+    def test_fp8_parity_prefill(self):
+        """FP8 vs BF16 parity - prefill 场景。"""
+        data = self._gen_fp8_data(
+            seq_lens_q=[512], seq_lens_k=[512], n1=32, block_count=500, seed=100
+        )
+        self._run_fp8_parity_test(data, "fp8_parity_prefill")
+
+
+@unittest.skipUnless(NPU_AVAILABLE, "NPU 不可用，跳过")
 class TestNpuLightningIndexerAgainstRef(unittest.TestCase):
     """NPU 算子 vs CPU 参考实现，验证算子调用参数正确。"""
 
@@ -988,6 +1394,46 @@ class TestQuantizationLogic(unittest.TestCase):
         overlap /= T
         print(f"[scores] bf16 vs int8 topk 重合率: {overlap:.4f}")
         self.assertGreater(overlap, 0.90, f"topk 重合率 {overlap} 过低")
+
+    def test_fp8_roundtrip_error(self):
+        """验证 BF16 -> FP8 -> BF16 的反量化误差（A5 环境 KV cache 存储精度）。"""
+        if not hasattr(torch, "float8_e4m3fn"):
+            self.skipTest("当前 PyTorch 版本不支持 float8_e4m3fn")
+        torch.manual_seed(0)
+        x = torch.randn(64, 128, dtype=torch.bfloat16) * 3.0  # [T=64, D=128]
+        x_fp8 = bf16_to_fp8(x)
+        x_back = fp8_to_bf16(x_fp8)
+        max_err = (x.float() - x_back.float()).abs().max().item()
+        rel_err = ((x.float() - x_back.float()).abs() / (x.float().abs() + 1e-6)).mean().item()
+        print(f"\n[fp8_roundtrip] max abs error: {max_err:.6f}, mean rel error: {rel_err:.6f}")
+        # E4M3FN 的精度较低，允许较大的误差
+        self.assertLess(max_err, 0.5, f"FP8 roundtrip 误差 {max_err} 过大")
+
+    def test_fp8_to_int8_pipeline_error(self):
+        """验证 FP8 -> BF16 -> int8 完整 pipeline 的反量化误差。"""
+        if not hasattr(torch, "float8_e4m3fn"):
+            self.skipTest("当前 PyTorch 版本不支持 float8_e4m3fn")
+        torch.manual_seed(1)
+        x = torch.randn(64, 128, dtype=torch.bfloat16) * 3.0
+
+        # 直接 int8 量化
+        q_int8_direct, scale_direct = per_token_head_symmetric_quantize(x)
+        x_deq_direct = q_int8_direct.float() * scale_direct.float().unsqueeze(-1)
+
+        # FP8 -> BF16 -> int8 量化（A5 实际路径）
+        x_fp8 = bf16_to_fp8(x)
+        x_back = fp8_to_bf16(x_fp8)
+        q_int8_fp8, scale_fp8 = per_token_head_symmetric_quantize(x_back)
+        x_deq_fp8 = q_int8_fp8.float() * scale_fp8.float().unsqueeze(-1)
+
+        # 对比：直接 int8 vs FP8->int8
+        max_err = (x_deq_direct - x_deq_fp8).abs().max().item()
+        # 对比：原始 BF16 vs FP8->int8
+        max_err_to_orig = (x.float() - x_deq_fp8).abs().max().item()
+        print(f"\n[fp8_to_int8] direct-int8 vs fp8-int8 max err: {max_err:.6f}")
+        print(f"[fp8_to_int8] orig-bf16 vs fp8-int8 max err: {max_err_to_orig:.6f}")
+        # FP8 引入额外误差，但应小于 0.5
+        self.assertLess(max_err_to_orig, 0.5, f"FP8->int8 pipeline 误差 {max_err_to_orig} 过大")
 
 
 if __name__ == "__main__":
