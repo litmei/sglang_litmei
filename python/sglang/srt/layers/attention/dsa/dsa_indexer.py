@@ -2036,18 +2036,114 @@ class Indexer(MultiPlatformOp):
                     tuple(k_scale.shape), k_scale.dtype,
                 )
 
+                actual_seq_q_i32 = actual_seq_lengths_q.to(
+                    k.device
+                ).to(torch.int32)
+                actual_seq_kv_i32 = actual_seq_lengths_kv.to(
+                    k.device
+                ).to(torch.int32)
+
+                # Dump inputs for offline replay (env-gated)
+                import os
+                dump_dir = os.environ.get("SGLANG_DSA_INDEXER_DUMP_DIR", "")
+                if dump_dir:
+                    os.makedirs(dump_dir, exist_ok=True)
+                    dump_path = os.path.join(dump_dir, "quant_inputs.pt")
+                    meta = {
+                        "q_int8": {
+                            "shape": tuple(q_int8.shape),
+                            "dtype": str(q_int8.dtype),
+                            "stride": tuple(q_int8.stride()),
+                            "storage_offset": q_int8.storage_offset(),
+                            "is_contiguous": q_int8.is_contiguous(),
+                        },
+                        "k_int8": {
+                            "shape": tuple(k_int8.shape),
+                            "dtype": str(k_int8.dtype),
+                            "stride": tuple(k_int8.stride()),
+                            "storage_offset": k_int8.storage_offset(),
+                            "is_contiguous": k_int8.is_contiguous(),
+                        },
+                        "weights_fp16": {
+                            "shape": tuple(weights_fp16.shape),
+                            "dtype": str(weights_fp16.dtype),
+                            "stride": tuple(weights_fp16.stride()),
+                            "storage_offset": weights_fp16.storage_offset(),
+                            "is_contiguous": weights_fp16.is_contiguous(),
+                        },
+                        "q_scale": {
+                            "shape": tuple(q_scale.shape),
+                            "dtype": str(q_scale.dtype),
+                            "stride": tuple(q_scale.stride()),
+                            "storage_offset": q_scale.storage_offset(),
+                            "is_contiguous": q_scale.is_contiguous(),
+                        },
+                        "k_scale": {
+                            "shape": tuple(k_scale.shape),
+                            "dtype": str(k_scale.dtype),
+                            "stride": tuple(k_scale.stride()),
+                            "storage_offset": k_scale.storage_offset(),
+                            "is_contiguous": k_scale.is_contiguous(),
+                        },
+                        "block_table": {
+                            "shape": tuple(block_table.shape),
+                            "dtype": str(block_table.dtype),
+                            "stride": tuple(block_table.stride()),
+                            "storage_offset": block_table.storage_offset(),
+                            "is_contiguous": block_table.is_contiguous(),
+                            "val": block_table.tolist(),
+                        },
+                        "actual_seq_q_i32": {
+                            "shape": tuple(actual_seq_q_i32.shape),
+                            "dtype": str(actual_seq_q_i32.dtype),
+                            "stride": tuple(actual_seq_q_i32.stride()),
+                            "storage_offset": actual_seq_q_i32.storage_offset(),
+                            "is_contiguous": actual_seq_q_i32.is_contiguous(),
+                            "val": actual_seq_q_i32.tolist(),
+                        },
+                        "actual_seq_kv_i32": {
+                            "shape": tuple(actual_seq_kv_i32.shape),
+                            "dtype": str(actual_seq_kv_i32.dtype),
+                            "stride": tuple(actual_seq_kv_i32.stride()),
+                            "storage_offset": actual_seq_kv_i32.storage_offset(),
+                            "is_contiguous": actual_seq_kv_i32.is_contiguous(),
+                            "val": actual_seq_kv_i32.tolist(),
+                        },
+                        "scalar_args": {
+                            "sparse_count": int(self.index_topk),
+                            "sparse_mode": 3,
+                            "layout_query": "TND",
+                            "layout_key": "PA_BSND",
+                            "query_quant_mode": 0,
+                            "key_quant_mode": 0,
+                        },
+                    }
+                    torch.save(
+                        {
+                            "meta": meta,
+                            "q_int8": q_int8.cpu().clone(),
+                            "k_int8": k_int8.cpu().clone(),
+                            "weights_fp16": weights_fp16.cpu().clone(),
+                            "q_scale": q_scale.cpu().clone(),
+                            "k_scale": k_scale.cpu().clone(),
+                            "block_table": block_table.cpu().clone(),
+                            "actual_seq_q_i32": actual_seq_q_i32.cpu().clone(),
+                            "actual_seq_kv_i32": actual_seq_kv_i32.cpu().clone(),
+                        },
+                        dump_path,
+                    )
+                    logger.warning(
+                        "[DSA-Indexer-Quant] dumped inputs to %s", dump_path
+                    )
+
                 topk_indices = torch_npu.npu_quant_lightning_indexer(
                     query=q_int8,
                     key=k_int8,
                     weights=weights_fp16,
                     query_dequant_scale=q_scale,
                     key_dequant_scale=k_scale,
-                    actual_seq_lengths_query=actual_seq_lengths_q.to(
-                        k.device
-                    ).to(torch.int32),
-                    actual_seq_lengths_key=actual_seq_lengths_kv.to(
-                        k.device
-                    ).to(torch.int32),
+                    actual_seq_lengths_query=actual_seq_q_i32,
+                    actual_seq_lengths_key=actual_seq_kv_i32,
                     block_table=block_table,
                     layout_query="TND",
                     layout_key="PA_BSND",
