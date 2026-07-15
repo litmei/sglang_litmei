@@ -1817,6 +1817,7 @@ class Indexer(MultiPlatformOp):
                 x = x.view(-1, self.hidden_size)
                 weights = self.weights_proj(x.float())[0].to(torch.bfloat16)
 
+            # q从这边获取，且q看起来已经有了scale
             q_lora = (q_lora, dynamic_scale) if dynamic_scale is not None else q_lora
             q = self.wq_b(q_lora)[0]  # [bs, 1536] @ [1536, 64 * 128] = [bs, 64 * 128]
             q = q.view(bs, self.n_heads, self.head_dim)  # [bs, 64, 128]
@@ -1858,6 +1859,7 @@ class Indexer(MultiPlatformOp):
                 torch.npu.current_stream(),
             )
 
+        # 将当前层计算出的k缓存到token_to_kv_pool中
         get_token_to_kv_pool().set_index_k_buffer(
             layer_id, forward_batch.out_cache_loc, k
         )
@@ -1936,6 +1938,7 @@ class Indexer(MultiPlatformOp):
                     get_attn_backend().forward_metadata.actual_seq_lengths_q
                 )
 
+        # 取出当前层的k缓存
         past_key_states = get_token_to_kv_pool().get_index_k_buffer(layer_id)
 
         if self.rotary_emb.is_neox_style and self.alt_stream is not None:
@@ -1949,6 +1952,22 @@ class Indexer(MultiPlatformOp):
         ):
             weights = scattered_to_tp_attn_full(weights, forward_batch)
         block_table = get_attn_backend().forward_metadata.block_tables
+
+        logger.warning(
+            "[DSA-Indexer] q: shape=%s dtype=%s | "
+            "past_key_states: shape=%s dtype=%s | "
+            "weights: shape=%s dtype=%s | "
+            "actual_seq_q: val=%s dtype=%s | actual_seq_kv: val=%s dtype=%s | "
+            "sparse_count=%d | block_table: shape=%s dtype=%s",
+            tuple(q.shape), q.dtype,
+            tuple(past_key_states.shape), past_key_states.dtype,
+            tuple(weights.shape), weights.dtype,
+            actual_seq_lengths_q.tolist(), actual_seq_lengths_q.dtype,
+            actual_seq_lengths_kv.tolist(), actual_seq_lengths_kv.dtype,
+            self.index_topk,
+            tuple(block_table.shape), block_table.dtype,
+        )
+
         if (
             is_prefill
             and self.dsa_enable_prefill_cp
@@ -1971,50 +1990,43 @@ class Indexer(MultiPlatformOp):
                 else block_table
             )
 
+            # 刚开始时，q是bf16
             if envs.SGLANG_DSA_INDEXER_QUANT.get():
                 # FP8 branch: use npu_quant_lightning_indexer with FP8 inputs.
-                # On A5 the KV cache is stored as FP8 (E4M3FN). We feed FP8
-                # tensors directly to the operator (validated by tests on A5).
-                # The dequant_scale is set to 1.0 since the operator accepts
-                # the FP8 dtype natively and no per-token int8 scale applies.
+                # The KV pool stores indexer key directly as FP8 (E4M3FN)
+                # (see NPUMLATokenToKVPool.set_index_k_buffer). We feed the FP8
+                # key + FP8 query to the operator directly; the dequant_scale is
+                # set to 1.0 since the operator accepts FP8 natively (validated
+                # by tests on A5 — no per-token int8 quantization needed).
                 q_flat = q.view(-1, self.n_heads, self.head_dim)  # [T1, N1, D] bf16
-                k_paged = past_key_states  # [num_pages, page_size, 1, D]
-                # If KV cache is already FP8, use it directly; otherwise cast
-                # bf16 -> fp8 (E4M3FN) to simulate the A5 storage layout.
-                if k_paged.dtype != torch.float8_e4m3fn:
-                    k_fp8 = k_paged.to(torch.float8_e4m3fn)
-                else:
-                    k_fp8 = k_paged
+                k_paged = past_key_states  # [num_pages, page_size, 1, D] fp8
                 # query: bf16 -> fp8
                 q_fp8 = q_flat.to(torch.float8_e4m3fn)
                 weights_fp16 = weights.to(torch.float16)
 
                 logger.warning(
                     "[DSA-Indexer-FP8] q_fp8: shape=%s dtype=%s | "
-                    "k_fp8: shape=%s dtype=%s | "
+                    "k_paged: shape=%s dtype=%s | "
                     "weights_fp16: shape=%s dtype=%s | "
                     "actual_seq_q: val=%s | actual_seq_kv: val=%s | "
-                    "block_table: shape=%s dtype=%s | sparse_count=%d",
+                    "sparse_count=%d",
                     tuple(q_fp8.shape), q_fp8.dtype,
-                    tuple(k_fp8.shape), k_fp8.dtype,
+                    tuple(k_paged.shape), k_paged.dtype,
                     tuple(weights_fp16.shape), weights_fp16.dtype,
                     actual_seq_lengths_q.tolist(),
                     actual_seq_lengths_kv.tolist(),
-                    tuple(block_table.shape), block_table.dtype,
                     self.index_topk,
                 )
 
                 # dequant_scale: all ones (FP8 input, no int8 quantization scale).
-                # query_dequant_scale: [T1, 64] fp16
                 q_scale = torch.ones(
                     q_fp8.shape[0], q_fp8.shape[1],
-                    dtype=torch.float16, device=k_fp8.device,
+                    dtype=torch.float16, device=k_paged.device,
                 )
-                # key_dequant_scale: [num_pages, page_size, n2] fp16
-                num_pages, page_size, n2, d = k_fp8.shape
+                num_pages, page_size, n2, d = k_paged.shape
                 k_scale = torch.ones(
                     num_pages, page_size, n2,
-                    dtype=torch.float16, device=k_fp8.device,
+                    dtype=torch.float16, device=k_paged.device,
                 )
 
                 actual_seq_q_i32 = actual_seq_lengths_q.to(
@@ -2026,7 +2038,7 @@ class Indexer(MultiPlatformOp):
 
                 topk_indices = torch_npu.npu_quant_lightning_indexer(
                     query=q_fp8,
-                    key=k_fp8,
+                    key=k_paged,
                     weights=weights_fp16,
                     query_dequant_scale=q_scale,
                     key_dequant_scale=k_scale,
