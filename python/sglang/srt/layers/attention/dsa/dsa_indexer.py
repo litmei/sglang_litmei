@@ -2004,21 +2004,6 @@ class Indexer(MultiPlatformOp):
                     self.index_topk,
                 )
 
-                # npu_quant_lightning_indexer requires N1=64 exactly.
-                # GLM-5.2 uses N1=32, so pad N1 from 32 -> 64 with zeros.
-                n1 = q_fp8.shape[1]
-                if n1 != 64:
-                    pad_n = 64 - n1
-                    # q_fp8: [T1, N1, D] -> [T1, 64, D]
-                    # FP8 doesn't support pad directly, view as int8 to pad.
-                    q_fp8 = torch.nn.functional.pad(
-                        q_fp8.view(torch.int8), (0, 0, 0, pad_n)
-                    ).view(torch.float8_e4m3fn)
-                    # weights_fp16: [T1, N1] -> [T1, 64]
-                    weights_fp16 = torch.nn.functional.pad(
-                        weights_fp16, (0, pad_n)
-                    )
-
                 # dequant_scale: all ones (FP8 input, no int8 quantization scale).
                 # query_dequant_scale: [T1, 64] fp16
                 q_scale = torch.ones(
