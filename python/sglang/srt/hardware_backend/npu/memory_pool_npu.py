@@ -315,9 +315,9 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         self.index_head_dim = index_head_dim
         self.k_store_dtype = self.store_dtype
         self.v_store_dtype = self.store_dtype
-        if self.dtype == torch.float8_e4m3fn:
-            self.k_store_dtype = torch.float8_e4m3fn
-            self.v_store_dtype = torch.bfloat16
+        # if self.dtype == torch.float8_e4m3fn:
+        #     self.k_store_dtype = torch.float8_e4m3fn  # fp8 不被 npu_scatter_nd_update_ 支持
+        #     self.v_store_dtype = torch.bfloat16
 
         self.custom_mem_pool = None
 
@@ -358,6 +358,16 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
                     dtype=self.k_store_dtype,
                     device=self.device,
                 )
+            self.index_k_scale_buffer = torch.zeros(
+                (
+                    layer_num,
+                    self.size // self.page_size + 1,
+                    self.page_size,
+                    1,
+                ),
+                dtype=torch.float32,
+                device=self.device,
+            )
 
         self._finalize_allocation_log(size)
 
@@ -414,6 +424,12 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         if self.store_dtype != self.dtype:
             return self.index_k_buffer[layer_id - self.start_layer].view(self.dtype)
         return self.index_k_buffer[layer_id - self.start_layer]
+
+    def get_index_k_scale_buffer(self, layer_id: int):
+        if self.layer_transfer_counter is not None:
+            self.layer_transfer_counter.wait_until(layer_id - self.start_layer)
+
+        return self.index_k_scale_buffer[layer_id - self.start_layer]
 
     # for disagg
     def get_contiguous_buf_infos(self):
@@ -492,6 +508,20 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
             ),
             loc.view(-1, 1),
             index_k.view(-1, 1, self.index_head_dim),
+        )
+
+    def set_index_k_scale_buffer(
+        self,
+        layer_id: int,
+        loc: torch.Tensor,
+        index_k_scale: torch.Tensor,
+    ):
+        torch_npu.npu_scatter_nd_update_(
+            self.index_k_scale_buffer[layer_id - self.start_layer].view(
+                -1, 1
+            ),
+            loc.view(-1, 1),
+            index_k_scale.view(-1, 1),
         )
 
     def _chunk_copy_npu_to_cpu(self, buf_of_layers, indices):
