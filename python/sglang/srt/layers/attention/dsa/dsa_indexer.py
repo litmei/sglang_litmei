@@ -1950,7 +1950,8 @@ class Indexer(MultiPlatformOp):
         past_key_states = get_token_to_kv_pool().get_index_k_buffer(layer_id)
         if is_use_quant_lightning_indexer:
             past_key_states_scale = get_token_to_kv_pool().get_index_k_scale_buffer(layer_id)
-        print(f"-- Indexer get_index_k_buffer -- past_key_states {past_key_states.shape} {past_key_states.dtype} | k_scale {k_scale.shape} {k_scale.dtype}")
+            print(f"-- Indexer get_index_k_buffer -- past_key_states_scale {past_key_states_scale.shape} {past_key_states_scale.dtype}")
+        print(f"-- Indexer get_index_k_buffer -- past_key_states {past_key_states.shape} {past_key_states.dtype}")
 
         if self.rotary_emb.is_neox_style and self.alt_stream is not None:
             torch.npu.current_stream().wait_event(q_rope_event)
