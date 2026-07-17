@@ -1858,6 +1858,16 @@ class Indexer(MultiPlatformOp):
                 torch.npu.current_stream(),
             )
 
+        # 将当前层计算出的k缓存到token_to_kv_pool中
+        print(f"-- Indexer set_index_k_buffer -- k {k.dtype} | q {q.dtype}")
+        is_use_quant_lightning_indexer = get_token_to_kv_pool().dtype == torch.float8_e4m3fn
+        if is_use_quant_lightning_indexer:
+            k, k_scale = torch_npu.npu_dynamic_quant(
+                k, dst_type=get_token_to_kv_pool().dtype
+            )
+            get_token_to_kv_pool().set_index_k_scale_buffer(
+                layer_id, forward_batch.out_cache_loc, k_scale
+            )
         get_token_to_kv_pool().set_index_k_buffer(
             layer_id, forward_batch.out_cache_loc, k
         )
@@ -1936,7 +1946,12 @@ class Indexer(MultiPlatformOp):
                     get_attn_backend().forward_metadata.actual_seq_lengths_q
                 )
 
+        # 取出当前层的k缓存
         past_key_states = get_token_to_kv_pool().get_index_k_buffer(layer_id)
+        if is_use_quant_lightning_indexer:
+            past_key_states_scale = get_token_to_kv_pool().get_index_k_scale_buffer(layer_id)
+            print(f"-- Indexer get_index_k_buffer -- past_key_states_scale {past_key_states_scale.shape} {past_key_states_scale.dtype}")
+        print(f"-- Indexer get_index_k_buffer -- past_key_states {past_key_states.shape} {past_key_states.dtype}")
 
         if self.rotary_emb.is_neox_style and self.alt_stream is not None:
             torch.npu.current_stream().wait_event(q_rope_event)
@@ -1949,6 +1964,22 @@ class Indexer(MultiPlatformOp):
         ):
             weights = scattered_to_tp_attn_full(weights, forward_batch)
         block_table = get_attn_backend().forward_metadata.block_tables
+
+        logger.warning(
+            "[DSA-Indexer] q: shape=%s dtype=%s | "
+            "past_key_states: shape=%s dtype=%s | "
+            "weights: shape=%s dtype=%s | "
+            "actual_seq_q: val=%s dtype=%s | actual_seq_kv: val=%s dtype=%s | "
+            "sparse_count=%d | block_table: shape=%s dtype=%s",
+            tuple(q.shape), q.dtype,
+            tuple(past_key_states.shape), past_key_states.dtype,
+            tuple(weights.shape), weights.dtype,
+            actual_seq_lengths_q.tolist(), actual_seq_lengths_q.dtype,
+            actual_seq_lengths_kv.tolist(), actual_seq_lengths_kv.dtype,
+            self.index_topk,
+            tuple(block_table.shape), block_table.dtype,
+        )
+
         if (
             is_prefill
             and self.dsa_enable_prefill_cp
@@ -1977,21 +2008,100 @@ class Indexer(MultiPlatformOp):
                 indexer_query = indexer_query[:indexer_bs]
                 indexer_weights = indexer_weights[:indexer_bs]
 
-            topk_indices = torch_npu.npu_lightning_indexer(
-                query=indexer_query,
-                key=past_key_states,
-                weights=indexer_weights,
-                actual_seq_lengths_query=actual_seq_lengths_q.to(torch.int32),
-                actual_seq_lengths_key=actual_seq_lengths_kv.to(k.device).to(
-                    torch.int32
-                ),
-                block_table=block_table,
-                layout_query="TND",
-                layout_key="PA_BSND",
-                sparse_count=self.index_topk,
-                sparse_mode=3,
-            )
-            return topk_indices[0]
+            if is_use_quant_lightning_indexer:
+                indexer_query, indexer_query_scale = torch_npu.npu_dynamic_quant(
+                    indexer_query,
+                    dst_type=get_token_to_kv_pool().dtype
+                )
+
+                logger.warning(
+                    "[DSA-Indexer-FP8] q: shape=%s dtype=%s | "
+                    "k: shape=%s dtype=%s | "
+                    "weights: shape=%s dtype=%s | "
+                    "actual_seq_q: val=%s | actual_seq_kv: val=%s | "
+                    "sparse_count=%d",
+                    tuple(indexer_query.shape), indexer_query.dtype,
+                    tuple(k.shape), k.dtype,
+                    tuple(indexer_weights.shape), indexer_weights.dtype,
+                    actual_seq_lengths_q.tolist(),
+                    actual_seq_lengths_kv.tolist(),
+                    self.index_topk,
+                )
+
+                topk_indices = torch_npu.npu_quant_lightning_indexer(
+                    query=indexer_query,
+                    key=past_key_states,
+                    weights=indexer_weights,
+                    query_dequant_scale=indexer_query_scale,
+                    key_dequant_scale=past_key_states_scale,
+                    actual_seq_lengths_query=actual_seq_lengths_q.to(torch.int32),
+                    actual_seq_lengths_key=actual_seq_lengths_kv.to(k.device).to(
+                        torch.int32
+                    ),
+                    block_table=block_table,
+                    layout_query="TND",
+                    layout_key="PA_BSND",
+                    sparse_count=self.index_topk,
+                    sparse_mode=3,
+                    query_quant_mode=0,
+                    key_quant_mode=0,
+                )
+                logger.warning(
+                    "[DSA-Indexer-FP8] topk_indices: shape=%s dtype=%s "
+                    "sample[0,0,:5]=%s",
+                    tuple(topk_indices.shape), topk_indices.dtype,
+                    topk_indices[0, 0, :5].tolist(),
+                )
+                # from safetensors.torch import save_file
+                # save_file({'t': topk_indices}, f"/mnt/share/xjw/dump/topk_indices_new_{layer_id}.safetensors")
+                return topk_indices
+            else:
+                logger.warning(
+                    "[DSA-Indexer-BF16] indexer_query: shape=%s dtype=%s | "
+                    "past_key_states: shape=%s dtype=%s | "
+                    "indexer_weights: shape=%s dtype=%s | "
+                    "actual_seq_q: shape=%s dtype=%s val=%s | "
+                    "actual_seq_kv: shape=%s dtype=%s val=%s | "
+                    "block_table: shape=%s dtype=%s | "
+                    "sparse_count=%d sparse_mode=3 | "
+                    "indexer_bs=%s bs=%s",
+                    tuple(indexer_query.shape), indexer_query.dtype,
+                    tuple(past_key_states.shape), past_key_states.dtype,
+                    tuple(indexer_weights.shape), indexer_weights.dtype,
+                    tuple(actual_seq_lengths_q.shape),
+                    actual_seq_lengths_q.dtype,
+                    actual_seq_lengths_q.tolist(),
+                    tuple(actual_seq_lengths_kv.shape),
+                    actual_seq_lengths_kv.dtype,
+                    actual_seq_lengths_kv.tolist(),
+                    tuple(block_table.shape), block_table.dtype,
+                    self.index_topk,
+                    indexer_bs, bs,
+                )
+
+                topk_indices = torch_npu.npu_lightning_indexer(
+                    query=indexer_query,
+                    key=past_key_states,
+                    weights=indexer_weights,
+                    actual_seq_lengths_query=actual_seq_lengths_q.to(torch.int32),
+                    actual_seq_lengths_key=actual_seq_lengths_kv.to(k.device).to(
+                        torch.int32
+                    ),
+                    block_table=block_table,
+                    layout_query="TND",
+                    layout_key="PA_BSND",
+                    sparse_count=self.index_topk,
+                    sparse_mode=3,
+                )
+                logger.warning(
+                    "[DSA-Indexer-BF16] topk_indices: shape=%s dtype=%s "
+                    "sample[0,0,:5]=%s",
+                    topk_indices[0].shape, topk_indices[0].dtype,
+                    topk_indices[0][0, 0, :5].tolist(),
+                )
+                # from safetensors.torch import save_file
+                # save_file({'t': topk_indices[0]}, f"/mnt/share/xjw/dump/topk_indices_old_{layer_id}.safetensors")
+                return topk_indices[0]
 
     def do_npu_cp_balance_indexer(
         self,
