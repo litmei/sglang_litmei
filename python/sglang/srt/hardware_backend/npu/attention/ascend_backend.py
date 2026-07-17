@@ -1263,9 +1263,16 @@ class AscendAttnBackend(AttentionBackend):
                 actual_seq_lengths_kv,
             )
         else:
-            if self.token_to_kv_pool.dtype == torch.float8_e4m3fn:
+            if getattr(
+                self.token_to_kv_pool, "dsa_kv_cache_store_fp8", False
+            ):
+                if q_nope.dtype != torch.bfloat16 or q_pe.dtype != torch.bfloat16:
+                    raise RuntimeError(
+                        "DSA FP8 quant sparse attention requires BF16 query, "
+                        f"got q_nope={q_nope.dtype}, q_pe={q_pe.dtype}"
+                    )
                 query = torch.cat([q_nope, q_pe], dim=-1).contiguous()
-                tile_size = 128
+                tile_size = self.token_to_kv_pool.dsa_kv_quant_tile_size
                 packed_cache_dim = (
                     self.kv_lora_rank
                     + self.qk_rope_head_dim * 2

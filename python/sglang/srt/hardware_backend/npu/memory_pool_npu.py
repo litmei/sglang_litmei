@@ -285,6 +285,8 @@ class NPUMHATokenToKVPool(MHATokenToKVPool):
 
 class NPUMLATokenToKVPool(MLATokenToKVPool):
 
+    dsa_kv_quant_tile_size = 128
+
     def __init__(
         self,
         size: int,
@@ -328,7 +330,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         )
         self.k_store_dtype = self.store_dtype
         self.v_store_dtype = self.store_dtype
-        if self.dtype == torch.float8_e4m3fn:
+        if self.dsa_kv_cache_store_fp8:
             self.k_store_dtype = torch.float8_e4m3fn
             self.v_store_dtype = torch.bfloat16
 
@@ -468,6 +470,84 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
             ]
         return kv_data_ptrs, kv_data_lens, kv_item_lens
 
+    def _pack_dsa_fp8_kv_cache(
+        self,
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor,
+        num_tokens: int,
+    ) -> torch.Tensor:
+        tile_size = self.dsa_kv_quant_tile_size
+        if self.kv_lora_rank % tile_size != 0:
+            raise RuntimeError(
+                f"kv_lora_rank {self.kv_lora_rank} must be divisible by "
+                f"DSA FP8 tile size {tile_size}"
+            )
+
+        num_tiles = self.kv_lora_rank // tile_size
+        expected_cache_dim = (
+            self.kv_lora_rank
+            + self.qk_rope_head_dim * torch.bfloat16.itemsize
+            + num_tiles * torch.float32.itemsize
+        )
+        if self.kv_cache_dim != expected_cache_dim:
+            raise RuntimeError(
+                f"Unexpected DSA FP8 cache dim {self.kv_cache_dim}, "
+                f"expected {expected_cache_dim}"
+            )
+        if cache_k.numel() != num_tokens * self.kv_lora_rank:
+            raise RuntimeError(
+                f"Unexpected DSA k_nope shape {tuple(cache_k.shape)} for "
+                f"{num_tokens} cache locations"
+            )
+        if cache_v.numel() != num_tokens * self.qk_rope_head_dim:
+            raise RuntimeError(
+                f"Unexpected DSA k_rope shape {tuple(cache_v.shape)} for "
+                f"{num_tokens} cache locations"
+            )
+
+        # Quantize each 128-element no-PE tile independently.  The scale
+        # returned by npu_dynamic_quant is the FP32 dequant scale consumed by
+        # npu_kv_quant_sparse_flash_attention.
+        k_nope_tiles = (
+            cache_k.to(torch.bfloat16)
+            .reshape(num_tokens * num_tiles, tile_size)
+            .contiguous()
+        )
+        k_nope_fp8, k_nope_scale = torch_npu.npu_dynamic_quant(
+            k_nope_tiles,
+            dst_type=torch.float8_e4m3fn,
+        )
+        k_nope_fp8 = k_nope_fp8.reshape(
+            num_tokens, 1, self.kv_lora_rank
+        ).contiguous()
+        k_rope_bf16 = (
+            cache_v.to(torch.bfloat16)
+            .reshape(num_tokens, 1, self.qk_rope_head_dim)
+            .contiguous()
+        )
+        k_nope_scale = (
+            k_nope_scale.to(torch.float32)
+            .reshape(num_tokens, 1, num_tiles)
+            .contiguous()
+        )
+
+        # Packed byte layout expected by the NPU quant sparse attention op:
+        # [nope_fp8(512) | rope_bf16_bytes(128) | fp32_scales(16)].
+        packed = torch.empty(
+            (num_tokens, 1, self.kv_cache_dim),
+            dtype=torch.float8_e4m3fn,
+            device=cache_k.device,
+        )
+        packed_bytes = packed.view(torch.uint8)
+        rope_begin = self.kv_lora_rank
+        rope_end = rope_begin + self.qk_rope_head_dim * torch.bfloat16.itemsize
+        packed_bytes[..., :rope_begin].copy_(k_nope_fp8.view(torch.uint8))
+        packed_bytes[..., rope_begin:rope_end].copy_(
+            k_rope_bf16.view(torch.uint8)
+        )
+        packed_bytes[..., rope_end:].copy_(k_nope_scale.view(torch.uint8))
+        return packed
+
     def set_kv_buffer(
         self,
         layer: "RadixAttention",
@@ -477,6 +557,25 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
     ):
         loc, _ = unwrap_write_loc(loc_info)
         layer_id = layer.layer_id
+        if self.dsa_kv_cache_store_fp8:
+            if cache_v is None:
+                cache_k, cache_v = cache_k.split(
+                    [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
+                )
+            packed_cache = self._pack_dsa_fp8_kv_cache(
+                cache_k,
+                cache_v,
+                loc.numel(),
+            )
+            torch_npu.npu_scatter_nd_update_(
+                self.k_buffer[layer_id - self.start_layer].view(
+                    -1, 1, self.kv_cache_dim
+                ),
+                loc.view(-1, 1),
+                packed_cache,
+            )
+            return
+
         if cache_k.dtype != self.dtype:
             cache_k = cache_k.to(self.dtype)
             cache_v = cache_v.to(self.dtype)
