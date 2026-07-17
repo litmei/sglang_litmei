@@ -296,6 +296,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         layer_num: int,
         device: str,
         enable_memory_saver: bool,
+        kv_cache_dim: Optional[int] = None,
         start_layer: Optional[int] = None,
         end_layer: Optional[int] = None,
     ):
@@ -313,11 +314,23 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         self.kv_lora_rank = kv_lora_rank
         self.qk_rope_head_dim = qk_rope_head_dim
         self.index_head_dim = index_head_dim
+        self.dsa_kv_cache_store_fp8 = (
+            index_head_dim is not None
+            and dtype == torch.float8_e4m3fn
+            and kv_cache_dim is not None
+            and kv_cache_dim != kv_lora_rank + qk_rope_head_dim
+        )
+        self.kv_cache_dim = (
+            kv_cache_dim if self.dsa_kv_cache_store_fp8 else kv_lora_rank
+        )
+        self.kr_cache_dim = (
+            0 if self.dsa_kv_cache_store_fp8 else qk_rope_head_dim
+        )
         self.k_store_dtype = self.store_dtype
         self.v_store_dtype = self.store_dtype
-        # if self.dtype == torch.float8_e4m3fn:
-        #     self.k_store_dtype = torch.float8_e4m3fn  # fp8 不被 npu_scatter_nd_update_ 支持
-        #     self.v_store_dtype = torch.bfloat16
+        if self.dtype == torch.float8_e4m3fn:
+            self.k_store_dtype = torch.float8_e4m3fn
+            self.v_store_dtype = torch.bfloat16
 
         self.custom_mem_pool = None
 
@@ -329,7 +342,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
                     self.size // self.page_size + 1,
                     self.page_size,
                     1,
-                    self.kv_lora_rank,
+                    self.kv_cache_dim,
                 ),
                 dtype=self.k_store_dtype,
                 device=self.device,
@@ -340,7 +353,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
                     self.size // self.page_size + 1,
                     self.page_size,
                     1,
-                    self.qk_rope_head_dim,
+                    self.kr_cache_dim,
                 ),
                 dtype=self.v_store_dtype,
                 device=self.device,

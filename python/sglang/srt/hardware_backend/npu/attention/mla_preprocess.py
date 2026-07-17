@@ -615,6 +615,13 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                     f"Unexpected DSA FP8 cache dim {k_cache.shape[-1]}, "
                     f"expected {packed_cache_dim}"
                 )
+            if k_cache.dtype == torch.uint8:
+                k_cache = k_cache.view(torch.float8_e4m3fn)
+            if k_cache.dtype != torch.float8_e4m3fn:
+                raise RuntimeError(
+                    f"Unexpected DSA FP8 cache dtype {k_cache.dtype}, "
+                    f"expected {torch.float8_e4m3fn}"
+                )
 
             cache_mode = "PA_BSND"
             k_cache = k_cache.view(

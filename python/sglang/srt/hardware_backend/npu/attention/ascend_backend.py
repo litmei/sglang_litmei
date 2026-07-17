@@ -1276,6 +1276,13 @@ class AscendAttnBackend(AttentionBackend):
                         f"Unexpected DSA FP8 cache dim {k_nope.shape[-1]}, "
                         f"expected {packed_cache_dim}"
                     )
+                if k_nope.dtype == torch.uint8:
+                    k_nope = k_nope.view(torch.float8_e4m3fn)
+                if k_nope.dtype != torch.float8_e4m3fn:
+                    raise RuntimeError(
+                        f"Unexpected DSA FP8 cache dtype {k_nope.dtype}, "
+                        f"expected {torch.float8_e4m3fn}"
+                    )
                 key = k_nope.view(-1, self.page_size, 1, packed_cache_dim)
 
                 attn_out = torch_npu.npu_kv_quant_sparse_flash_attention(

@@ -615,6 +615,7 @@ class ModelRunnerKVCacheMixin:
                     index_head_dim=(
                         self.model_config.index_head_dim if is_dsa_model else None
                     ),
+                    kv_cache_dim=self.calculate_mla_kv_cache_dim(),
                     layer_num=self.num_effective_layers,
                     device=self.device,
                     enable_memory_saver=self.server_args.enable_memory_saver,
