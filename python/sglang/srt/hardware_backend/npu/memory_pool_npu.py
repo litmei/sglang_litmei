@@ -434,7 +434,7 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         if self.layer_transfer_counter is not None:
             self.layer_transfer_counter.wait_until(layer_id - self.start_layer)
 
-        if self.store_dtype != self.dtype:
+        if self.k_store_dtype != self.dtype:
             return self.index_k_buffer[layer_id - self.start_layer].view(self.dtype)
         return self.index_k_buffer[layer_id - self.start_layer]
 
@@ -512,8 +512,8 @@ class NPUMLATokenToKVPool(MLATokenToKVPool):
         if index_k.dtype != self.dtype:
             index_k = index_k.to(self.dtype)
 
-        if self.store_dtype != self.dtype:
-            index_k = index_k.view(self.store_dtype)
+        if self.k_store_dtype != self.dtype:
+            index_k = index_k.view(self.k_store_dtype)
 
         torch_npu.npu_scatter_nd_update_(
             self.index_k_buffer[layer_id - self.start_layer].view(
