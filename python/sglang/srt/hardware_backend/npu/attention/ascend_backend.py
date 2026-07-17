@@ -1264,8 +1264,19 @@ class AscendAttnBackend(AttentionBackend):
             )
         else:
             if self.token_to_kv_pool.dtype == torch.float8_e4m3fn:
-                query = torch.cat([q_nope, q_pe], dim=-1)
-                key = None  # todo
+                query = torch.cat([q_nope, q_pe], dim=-1).contiguous()
+                tile_size = 128
+                packed_cache_dim = (
+                    self.kv_lora_rank
+                    + self.qk_rope_head_dim * 2
+                    + self.kv_lora_rank // tile_size * 4
+                )
+                if k_nope.shape[-1] != packed_cache_dim:
+                    raise RuntimeError(
+                        f"Unexpected DSA FP8 cache dim {k_nope.shape[-1]}, "
+                        f"expected {packed_cache_dim}"
+                    )
+                key = k_nope.view(-1, self.page_size, 1, packed_cache_dim)
 
                 attn_out = torch_npu.npu_kv_quant_sparse_flash_attention(
                     query=query,
@@ -1289,6 +1300,9 @@ class AscendAttnBackend(AttentionBackend):
                     layout_kv="PA_BSND",
                     sparse_mode=3,
                     attention_mode=2,
+                    quant_scale_repo_mode=1,
+                    tile_size=tile_size,
+                    rope_head_dim=self.qk_rope_head_dim,
                 )
             else:
                 attn_out, _, _ = torch_npu.npu_sparse_flash_attention(

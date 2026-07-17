@@ -579,19 +579,69 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         )
         k_cache, v_cache, _ = self.get_kv_cache_and_cache_idx(forward_batch)
 
-        cache_mode = "PA_NZ" if is_fia_nz() else "PA_BSND"
-        if self.kv_cache_dtype == "fp8_e4m3":
+        is_mxfp8 = hasattr(
+            self.qkv_a_proj, "weight_scale_original"
+        ) and hasattr(self.q_b_proj, "weight_scale_original")
+        # Keep DSA's packed per-tile cache isolated from MLA/FIA FP8 cache.
+        dsa_fp8_packed_cache = getattr(
+            get_token_to_kv_pool(), "dsa_kv_cache_store_fp8", False
+        )
+        kr_cache = v_cache
+        packed_cache_args = {}
+
+        if dsa_fp8_packed_cache:
+            if not is_mxfp8:
+                raise RuntimeError(
+                    "DSA FP8 per-tile MLAProlog cache currently requires MXFP8 weights"
+                )
+            if is_fia_nz():
+                raise RuntimeError(
+                    "DSA FP8 per-tile MLAProlog cache does not support PA_NZ"
+                )
+
+            tile_size = 128
+            if self.kv_lora_rank % tile_size != 0:
+                raise RuntimeError(
+                    f"kv_lora_rank {self.kv_lora_rank} must be divisible by "
+                    f"tile_size {tile_size}"
+                )
+            packed_cache_dim = (
+                self.kv_lora_rank
+                + self.qk_rope_head_dim * 2
+                + self.kv_lora_rank // tile_size * 4
+            )
+            if k_cache.shape[-1] != packed_cache_dim:
+                raise RuntimeError(
+                    f"Unexpected DSA FP8 cache dim {k_cache.shape[-1]}, "
+                    f"expected {packed_cache_dim}"
+                )
+
+            cache_mode = "PA_BSND"
+            k_cache = k_cache.view(
+                -1, get_attn_backend().page_size, 1, packed_cache_dim
+            )
+            kr_cache = torch.empty(
+                (1, 1, 1, 0), dtype=torch.bfloat16, device=k_cache.device
+            )
+            kv_cache_quant_mode = 3
+            query_quant_mode = 0
+            quant_scale_ckv = None
+            packed_cache_args = {
+                "ckvkr_repo_mode": 1,
+                "quant_scale_repo_mode": 1,
+                "tile_size": tile_size,
+            }
+        elif self.kv_cache_dtype == "fp8_e4m3":
+            cache_mode = "PA_NZ" if is_fia_nz() else "PA_BSND"
             kv_cache_quant_mode = 1
             query_quant_mode = 1
             quant_scale_ckv = self._get_quant_scale_ckv(hidden_states.device)
         else:
+            cache_mode = "PA_NZ" if is_fia_nz() else "PA_BSND"
             kv_cache_quant_mode = 0
             query_quant_mode = 0
             quant_scale_ckv = None
 
-        is_mxfp8 = hasattr(
-            self.qkv_a_proj, "weight_scale_original"
-        ) and hasattr(self.q_b_proj, "weight_scale_original")
         if is_mxfp8:
             dequant_scale_w_dq = self.qkv_a_proj_scale_q
             dequant_scale_w_uq_qr = self.q_b_proj_scale
@@ -609,7 +659,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 "rope_sin": self.sin,
                 "rope_cos": self.cos,
                 "kv_cache": k_cache,
-                "kr_cache": v_cache,
+                "kr_cache": kr_cache,
                 "cache_index": cache_index_i64,
                 "rmsnorm_epsilon_cq": self.q_a_layernorm.variance_epsilon,
                 "rmsnorm_epsilon_ckv": self.kv_a_layernorm.variance_epsilon,
@@ -626,12 +676,13 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 "qc_qr_scale": 1.0,
                 "quant_scale_ckv": quant_scale_ckv,
             }
+            mla_prolog_input_args.update(packed_cache_args)
             q_nope, q_pe, dequant_scale_q_nope, qr, dequant_q_norm = (
                 torch_npu.npu_mla_prolog_v3(**mla_prolog_input_args)
             )
             return (
                 q_pe,
-                v_cache,
+                kr_cache,
                 q_nope,
                 k_cache,
                 qr,
