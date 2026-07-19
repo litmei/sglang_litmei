@@ -103,11 +103,6 @@ def npu_fused_experts_fp8(
     )
     expert_tokens = expert_tokens.to(torch.int64)
 
-    row_ids = torch.arange(
-        hidden_states.shape[0], device=hidden_states.device, dtype=torch.int64
-    )
-    valid_mask = row_ids < expert_tokens[-1]
-
     hidden_states = fp8_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -127,7 +122,6 @@ def npu_fused_experts_fp8(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = hidden_states * valid_mask.unsqueeze(1).to(hidden_states.dtype)
 
     final_hidden_states = torch.ops.npu.npu_moe_finalize_routing(
         hidden_states,
@@ -276,11 +270,6 @@ def npu_fused_experts_mxfp8(
     )
     expert_tokens = expert_tokens.to(torch.int64)
 
-    row_ids = torch.arange(
-        hidden_states.shape[0], device=hidden_states.device, dtype=torch.int64
-    )
-    valid_mask = row_ids < expert_tokens[-1]
-
     hidden_states = mxfp8_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -300,7 +289,6 @@ def npu_fused_experts_mxfp8(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = hidden_states * valid_mask.unsqueeze(1).to(hidden_states.dtype)
 
     final_hidden_states = torch.ops.npu.npu_moe_finalize_routing(
         hidden_states,
@@ -626,11 +614,6 @@ def npu_fused_experts_w4a8_mxfp(
         expanded_expert_idx, num_experts
     ).to(torch.int64)
 
-    row_ids = torch.arange(
-        hidden_states.shape[0], device=hidden_states.device, dtype=torch.int64
-    )
-    valid_mask = row_ids < expert_tokens[-1]
-
     hidden_states = w4a8_mxfp_gmm_npu(
         input=hidden_states,
         input_scale=None,
@@ -650,7 +633,6 @@ def npu_fused_experts_w4a8_mxfp(
         group_list=expert_tokens,
         output_dtype=original_dtype,
     )
-    hidden_states = hidden_states * valid_mask.unsqueeze(1).to(hidden_states.dtype)
 
     final_hidden_states = torch.ops.npu.npu_moe_finalize_routing(
         hidden_states,
