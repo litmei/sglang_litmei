@@ -10,7 +10,6 @@ from sglang.srt.model_executor.forward_context import (
     get_attn_backend,
     get_token_to_kv_pool,
 )
-from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import is_npu_before_atlas_a5
 from sglang.srt.utils import get_bool_env_var
 
@@ -130,7 +129,6 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         self.qk_rope_head_dim = qk_rope_head_dim  # 64
         self.qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
         self.v_head_dim = v_head_dim
-        self.kv_cache_dtype = get_global_server_args().kv_cache_dtype
         self.q_b_proj_weight_scale = self.q_b_proj.weight_scale.view(1, -1).to(
             torch.float
         ) if hasattr(self.q_b_proj, 'weight_scale') else None
@@ -586,6 +584,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         dsa_fp8_packed_cache = getattr(
             get_token_to_kv_pool(), "dsa_kv_cache_store_fp8", False
         )
+        active_kv_cache_dtype = get_token_to_kv_pool().dtype
         kr_cache = v_cache
         packed_cache_args = {}
 
@@ -638,7 +637,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 "quant_scale_repo_mode": 1,
                 "tile_size": tile_size,
             }
-        elif self.kv_cache_dtype == "fp8_e4m3":
+        elif active_kv_cache_dtype == torch.float8_e4m3fn:
             cache_mode = "PA_NZ" if is_fia_nz() else "PA_BSND"
             kv_cache_quant_mode = 1
             query_quant_mode = 1
@@ -700,10 +699,15 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
                 dequant_scale_q_nope,
             )
 
+        is_q_b_proj_quantized = self.q_b_proj_weight_scale is not None
         mla_prolog_input_args = {
             "token_x": hidden_states,
             "weight_dq": self.q_a_proj_weight,
-            "weight_uq_qr": self.q_b_proj.weight,
+            "weight_uq_qr": (
+                self.q_b_proj.weight
+                if is_q_b_proj_quantized
+                else self.q_b_proj_weight
+            ),
             "weight_uk": self.w_kc,
             "weight_dkv_kr": self.kv_a_proj_weight,
             "rmsnorm_gamma_cq": self.q_a_layernorm.weight,
@@ -713,17 +717,26 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
             "kv_cache": k_cache,
             "kr_cache": v_cache,
             "cache_index": cache_index_i64,
-            "dequant_scale_w_uq_qr": self.q_b_proj_weight_scale,
             "rmsnorm_epsilon_cq": self.q_a_layernorm.variance_epsilon,
             "rmsnorm_epsilon_ckv": self.kv_a_layernorm.variance_epsilon,
             "cache_mode": "PA_BSND",
             "query_norm_flag": True,
-            "weight_quant_mode": 1,  # 0:no quant; 1:uq_qr: quant; 2: weight_dq,weight_uq_qr,weight_dkv_kr: quant
+            "weight_quant_mode": 1 if is_q_b_proj_quantized else 0,
+            # The non-MX branch keeps its existing non-quantized cache/query
+            # contract. In particular, the BF16 draft uses the documented
+            # mode-0/mode-0/mode-0 MLAProlog combination.
+            "kv_cache_quant_mode": 0,
+            "query_quant_mode": 0,
         }
+        if is_q_b_proj_quantized:
+            mla_prolog_input_args["dequant_scale_w_uq_qr"] = (
+                self.q_b_proj_weight_scale
+            )
         q_nope, q_pe, dequant_scale_q_nope, qr, dequant_q_norm = (
             torch_npu.npu_mla_prolog_v3(**mla_prolog_input_args)
         )
-        dequant_q_norm = dequant_q_norm.view(hidden_states.shape[0])
+        if dequant_q_norm is not None:
+            dequant_q_norm = dequant_q_norm.view(hidden_states.shape[0])
         return (
             q_pe,
             v_cache,

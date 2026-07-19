@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Dict, Union
 import torch
 
 from sglang.srt.configs.model_config import AttentionArch, is_deepseek_dsa
-from sglang.srt.server_args import get_global_server_args
 from sglang.srt.speculative.eagle_draft_cuda_graph_runner import (
     EAGLEDraftCudaGraphRunner,
 )
@@ -32,7 +31,7 @@ class EAGLEDraftNpuGraphRunner(EAGLEDraftCudaGraphRunner):
     def __init__(self, eagle_worker: EagleDraftWorker):
         self.use_fia_v2 = (
             eagle_worker.draft_runner.model_config.attention_arch == AttentionArch.MLA
-            and get_global_server_args().kv_cache_dtype == "fp8_e4m3"
+            and eagle_worker.draft_runner.kv_cache_dtype == torch.float8_e4m3fn
         )
         self._init_arch_map()
         super().__init__(eagle_worker)

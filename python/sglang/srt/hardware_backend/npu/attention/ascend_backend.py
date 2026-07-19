@@ -330,7 +330,7 @@ class AscendAttnBackend(AttentionBackend):
         self.graph_mode = False
         self.use_fa = get_bool_env_var("ASCEND_USE_FA", "False")
         self.use_fia = get_bool_env_var("ASCEND_USE_FIA", "False")
-        self.kv_cache_dtype = model_runner.server_args.kv_cache_dtype
+        self.kv_cache_dtype = model_runner.kv_cache_dtype
         self.enable_torch_compile = model_runner.server_args.enable_torch_compile
         self.speculative_num_draft_tokens = (
             model_runner.server_args.speculative_num_draft_tokens
@@ -421,7 +421,7 @@ class AscendAttnBackend(AttentionBackend):
             key=kv_cached,
             value=k_rope_cached,
         )
-        if self.kv_cache_dtype == "fp8_e4m3":
+        if self.kv_cache_dtype == torch.float8_e4m3fn:
             kv_scale = self._resolve_fp8_kv_scale(fp8_kv_scale, kv_cached.device)
             kv_cached = torch.mul(kv_cached.to(kv_scale.dtype), kv_scale).to(
                 torch.bfloat16
@@ -2360,7 +2360,7 @@ class AscendAttnBackend(AttentionBackend):
                 self.speculative_num_draft_tokens,
             )
 
-            if self.kv_cache_dtype == "fp8_e4m3":
+            if self.kv_cache_dtype == torch.float8_e4m3fn:
                 dequant_scale_q_nope = dequant_scale_q_nope.squeeze(2)
                 q_fp8, dequant_scale_query = q_nope, dequant_scale_q_nope
                 kv_scale = self._resolve_fp8_kv_scale(fp8_kv_scale, q_nope.device)
@@ -2732,7 +2732,7 @@ class AscendAttnBackend(AttentionBackend):
                     self.forward_metadata.seq_lens_cpu_int.cpu().int().tolist()
                 )
 
-            if self.kv_cache_dtype == "fp8_e4m3":
+            if self.kv_cache_dtype == torch.float8_e4m3fn:
                 dequant_scale_q_nope = dequant_scale_q_nope.transpose(-1, -2)
                 q_fp8, dequant_scale_query = q_nope, dequant_scale_q_nope
                 kv_scale = self._resolve_fp8_kv_scale(fp8_kv_scale, q_nope.device)
@@ -3128,7 +3128,7 @@ class AscendAttnBackend(AttentionBackend):
                     self.qk_rope_head_dim,
                 )
 
-                if self.kv_cache_dtype == "fp8_e4m3":
+                if self.kv_cache_dtype == torch.float8_e4m3fn:
                     dequant_scale_q_nope = dequant_scale_q_nope.transpose(-1, -2)
                     if self.forward_metadata.seq_lens_cpu_int is None:
                         actual_seq_len_kv = self.forward_metadata.seq_lens_cpu_list

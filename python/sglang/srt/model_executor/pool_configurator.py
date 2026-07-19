@@ -32,6 +32,7 @@ from sglang.srt.mem_cache.memory_pool import DSATokenToKVPool
 from sglang.srt.utils.common import (
     ceil_align,
     is_float4_e2m1fn_x2,
+    is_npu,
     spec_decode_alloc_len_per_request,
 )
 
@@ -65,6 +66,17 @@ if TYPE_CHECKING:
     from sglang.srt.model_executor.model_runner import ModelRunner
 
 logger = logging.getLogger(__name__)
+
+
+def use_npu_glm_nextn_bf16_kv_cache(server_args, model_config) -> bool:
+    """Whether GLM DSA NextN should override only its draft KV cache to BF16."""
+    return (
+        is_npu()
+        and envs.SGLANG_NPU_GLM_NEXTN_BF16_KV_CACHE.get()
+        and server_args.kv_cache_dtype == "fp8_e4m3"
+        and getattr(model_config.hf_text_config, "model_type", None)
+        == "glm_moe_dsa"
+    )
 
 
 def _get_dsv4_compress_state_dtype_sizes() -> tuple[int, int]:
@@ -139,10 +151,39 @@ class DefaultPoolConfigurator(MemoryPoolConfigurator):
                 and int(eagle_draft_num_layers) > 0
                 and int(num_layers) > 0
             ):
-                self._cell_size = int(
-                    self._cell_size
-                    * (1 + int(eagle_draft_num_layers) / int(num_layers))
-                )
+                if (
+                    mr.spec_algorithm.is_eagle()
+                    and use_npu_glm_nextn_bf16_kv_cache(
+                        mr.server_args, mr.model_config
+                    )
+                ):
+                    # NPUMLATokenToKVPool stores a BF16 DSA draft layer as
+                    # ckv[512] + kr[64]. Its indexer cache also follows the
+                    # pool dtype and keeps one FP32 scale slot per token.
+                    model_config = mr.model_config
+                    draft_layer_size = (
+                        (
+                            model_config.kv_lora_rank
+                            + model_config.qk_rope_head_dim
+                        )
+                        * torch.bfloat16.itemsize
+                    )
+                    if is_deepseek_dsa(model_config.hf_config):
+                        index_head_dim = get_dsa_index_head_dim(
+                            model_config.hf_config
+                        )
+                        draft_layer_size += (
+                            index_head_dim * torch.bfloat16.itemsize
+                            + torch.float32.itemsize
+                        )
+                    self._cell_size += int(eagle_draft_num_layers) * int(
+                        draft_layer_size
+                    )
+                else:
+                    self._cell_size = int(
+                        self._cell_size
+                        * (1 + int(eagle_draft_num_layers) / int(num_layers))
+                    )
 
         # DFLASH: scale cell_size to account for draft model KV cache
         if mr.spec_algorithm.is_dflash() and not mr.is_draft_worker:

@@ -118,7 +118,7 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
         )
         if_use_v2 = if_use_v2 or (
             model_runner.model_config.attention_arch == AttentionArch.MLA
-            and model_runner.server_args.kv_cache_dtype == "fp8_e4m3"
+            and model_runner.kv_cache_dtype == torch.float8_e4m3fn
         )
         self.if_use_v2 = if_use_v2
 

@@ -528,6 +528,10 @@ class Envs:
     SGLANG_NPU_DISABLE_ACL_FORMAT_WEIGHT = EnvBool(False)
     SGLANG_NPU_USE_MULTI_STREAM = EnvBool(False)
     SGLANG_NPU_USE_MLAPO = EnvBool(False)
+    # Keep the GLM DSA NextN draft KV cache in BF16 when the target KV cache
+    # uses FP8. This is intentionally a draft-only override; the target keeps
+    # the FP8 layout selected by --kv-cache-dtype.
+    SGLANG_NPU_GLM_NEXTN_BF16_KV_CACHE = EnvBool(False)
     # Forward native implementation for activation gelu tanh for model Skywork-Reward-Gemma-2-27B-v0.2
     SGLANG_NPU_FORWARD_NATIVE_GELUTANH = EnvBool(False)
     # Forward native implementation for gemma rms norm for model Skywork-Reward-Gemma-2-27B-v0.2

@@ -162,7 +162,10 @@ from sglang.srt.model_executor.hook_manager import register_forward_hooks
 from sglang.srt.model_executor.model_runner_kv_cache_mixin import (
     ModelRunnerKVCacheMixin,
 )
-from sglang.srt.model_executor.pool_configurator import MemoryPoolConfig
+from sglang.srt.model_executor.pool_configurator import (
+    MemoryPoolConfig,
+    use_npu_glm_nextn_bf16_kv_cache,
+)
 from sglang.srt.model_executor.runner import (
     EagerRunner,
     PrefillCudaGraphRunner,
@@ -1462,7 +1465,13 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             pyt_hooks = PytHooks()
             pyt_hooks.register_hooks(self.model, module_prefix="model")
 
-        if self.server_args.kv_cache_dtype == "fp8_e4m3":
+        if self.server_args.kv_cache_dtype == "fp8_e4m3" and not (
+            self.is_draft_worker
+            and self.spec_algorithm.is_eagle()
+            and use_npu_glm_nextn_bf16_kv_cache(
+                self.server_args, self.model_config
+            )
+        ):
             if self.server_args.quantization_param_path is not None:
                 if callable(getattr(self.model, "load_kv_cache_scales", None)):
                     self.model.load_kv_cache_scales(
@@ -2355,6 +2364,23 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         return result[1] if result else None
 
     def configure_kv_cache_dtype(self):
+        if (
+            self.is_draft_worker
+            and self.spec_algorithm.is_eagle()
+            and use_npu_glm_nextn_bf16_kv_cache(
+                self.server_args, self.model_config
+            )
+        ):
+            # ServerArgs is shared by target and draft runners. Override only
+            # this runner so the target retains its FP8 packed DSA KV cache.
+            self.kv_cache_dtype = torch.bfloat16
+            logger.info(
+                "Using BF16 KV cache for the GLM NextN draft while keeping "
+                "the target KV cache in FP8 "
+                "(SGLANG_NPU_GLM_NEXTN_BF16_KV_CACHE=1)."
+            )
+            return
+
         if self.server_args.kv_cache_dtype == "auto":
             quant_config = getattr(self.model, "quant_config", None)
             kv_cache_quant_algo = getattr(quant_config, "kv_cache_quant_algo", None)
