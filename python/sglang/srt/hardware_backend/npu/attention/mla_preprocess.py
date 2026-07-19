@@ -735,8 +735,17 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         q_nope, q_pe, dequant_scale_q_nope, qr, dequant_q_norm = (
             torch_npu.npu_mla_prolog_v3(**mla_prolog_input_args)
         )
-        if dequant_q_norm is not None:
+        # In weight_quant_mode=0 this optional output has no value. Depending
+        # on the torch_npu version it may be returned as an empty Tensor rather
+        # than None, so do not reshape it to the batch size.
+        if (
+            is_q_b_proj_quantized
+            and dequant_q_norm is not None
+            and dequant_q_norm.numel() > 0
+        ):
             dequant_q_norm = dequant_q_norm.view(hidden_states.shape[0])
+        else:
+            dequant_q_norm = None
         return (
             q_pe,
             v_cache,
