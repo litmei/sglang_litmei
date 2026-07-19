@@ -491,13 +491,7 @@ def forward_dsa_prepare_npu(
     dynamic_scale = None
     mla_preprocess_used = (
         is_mla_preprocess_enabled()
-        and (
-            forward_batch.forward_mode.is_decode()
-            or (
-                m.is_nextn
-                and forward_batch.forward_mode.is_draft_extend_v2()
-            )
-        )
+        and not forward_batch.forward_mode.is_extend_or_draft_extend_or_mixed()
     )
     if mla_preprocess_used:
         (
