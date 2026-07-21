@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import os
 import time
 from typing import List, Optional, Tuple
 
@@ -114,6 +115,9 @@ _is_hip = is_hip()
 _is_xpu = is_xpu()
 
 logger = logging.getLogger(__name__)
+
+# MTP precision debug: dump verify logits to compare with non-MTP decode logits.
+_MTP_DEBUG = os.environ.get("SGLANG_MTP_DEBUG") == "1"
 
 
 def _get_plan_stream(
@@ -1501,12 +1505,34 @@ class EAGLEWorkerV2(BaseSpecWorker):
         # eagle_prepare_for_verify marked the batch in exactly that case; the
         # non-cuda-graph path stays unmarked and gets forward_extend's init
         # (post-pad).
+        if _MTP_DEBUG:
+            _vi = verify_input
+            _draft_tok = _vi.draft_token if hasattr(_vi, "draft_token") else None
+            print(
+                f"[MTP_DBG_VERIFY] before verify: "
+                f"draft_token_shape={_draft_tok.shape if _draft_tok is not None else None} "
+                f"draft_token={_draft_tok.tolist() if _draft_tok is not None else None} "
+                f"positions_shape={_vi.positions.shape if hasattr(_vi, 'positions') and _vi.positions is not None else None}",
+                flush=True,
+            )
         forward_batch_output = self.target_worker.forward_batch_generation(
             batch=None,
             forward_batch=verify_forward_batch,
             is_verify=True,
         )
         logits_output = forward_batch_output.logits_output
+        if _MTP_DEBUG and logits_output is not None and logits_output.next_token_logits is not None:
+            _vl = logits_output.next_token_logits
+            _bs = verify_forward_batch.batch_size if hasattr(verify_forward_batch, "batch_size") else 0
+            print(
+                f"[MTP_DBG_VERIFY] after verify: "
+                f"logits_shape={tuple(_vl.shape)} bs={_bs} "
+                f"argmax(first_row_per_req)={_vl[:_bs].argmax(dim=-1).tolist() if _bs > 0 else []} "
+                f"logits_stats(min={_vl.min().item():.6f} "
+                f"max={_vl.max().item():.6f} "
+                f"mean={_vl.float().mean().item():.6f})",
+                flush=True,
+            )
 
         # Generate vocab mask for constrained decoding
         vocab_mask = None

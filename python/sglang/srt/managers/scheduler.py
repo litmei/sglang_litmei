@@ -285,6 +285,82 @@ else:
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# MTP precision debug: dump forward_batch_generation inputs/outputs to compare
+# MTP-on verify vs MTP-off decode at the same (req, position). Enable with
+# SGLANG_MTP_DEBUG=1.
+# ---------------------------------------------------------------------------
+_MTP_DEBUG = os.environ.get("SGLANG_MTP_DEBUG") == "1"
+_mtp_debug_ct = 0
+
+
+def _mtp_debug_dump(tag: str, batch, batch_result=None):
+    """Dump forward inputs/outputs for MTP precision comparison.
+
+    tag: "before" or "after"
+    batch: ScheduleBatch
+    batch_result: GenerationBatchResult (only for tag="after")
+    """
+    global _mtp_debug_ct
+    if tag == "before":
+        _mtp_debug_ct += 1
+    ct = _mtp_debug_ct
+
+    spec = "none" if batch.spec_algorithm.is_none() else str(batch.spec_algorithm)
+    mode = str(batch.forward_mode) if batch.forward_mode is not None else "?"
+
+    if tag == "before":
+        # Dump inputs: forward_mode, spec, seq_lens, input_ids, req_ids
+        seq_lens = batch.seq_lens.tolist() if batch.seq_lens is not None else []
+        input_ids = batch.input_ids.tolist() if batch.input_ids is not None else []
+        req_ids = [r.rid for r in batch.reqs] if batch.reqs else []
+        print(
+            f"[MTP_DBG] ct={ct} {tag} mode={mode} spec={spec} "
+            f"bs={len(batch.reqs) if batch.reqs else 0} "
+            f"seq_lens={seq_lens} req_ids={req_ids} "
+            f"input_ids={input_ids}",
+            flush=True,
+        )
+    else:
+        # Dump outputs: logits shape/argmax/stats, next_token_ids, accept_lens
+        lo = batch_result.logits_output
+        if lo is not None and lo.next_token_logits is not None:
+            logits = lo.next_token_logits
+            argmax = logits.argmax(dim=-1)
+            # For spec verify, logits shape is [bs*(draft+1), vocab]; show
+            # first row per req-group if speculative_num_draft_tokens is set.
+            ndt = getattr(batch_result, "speculative_num_draft_tokens", None)
+            ndt = (ndt + 1) if ndt else 1
+            bs = len(batch.reqs) if batch.reqs else (logits.shape[0] // ndt)
+            print(
+                f"[MTP_DBG] ct={ct} {tag} mode={mode} spec={spec} "
+                f"logits_shape={tuple(logits.shape)} ndt={ndt} bs={bs} "
+                f"argmax(first_row_per_req)={argmax[:bs].tolist()} "
+                f"logits_stats(min={logits.min().item():.6f} "
+                f"max={logits.max().item():.6f} "
+                f"mean={logits.float().mean().item():.6f})",
+                flush=True,
+            )
+        else:
+            print(
+                f"[MTP_DBG] ct={ct} {tag} mode={mode} spec={spec} "
+                f"logits=None",
+                flush=True,
+            )
+        nti = batch_result.next_token_ids
+        if nti is not None:
+            nti_list = nti.tolist() if hasattr(nti, "tolist") else nti
+            print(
+                f"[MTP_DBG] ct={ct} {tag} next_token_ids={nti_list}",
+                flush=True,
+            )
+        if batch_result.accept_lens is not None:
+            print(
+                f"[MTP_DBG] ct={ct} {tag} accept_lens={batch_result.accept_lens.tolist()}",
+                flush=True,
+            )
+
+
 # Test retract decode for debugging purposes
 TEST_RETRACT = envs.SGLANG_TEST_RETRACT.get()
 TEST_RETRACT_INTERVAL = envs.SGLANG_TEST_RETRACT_INTERVAL.get()
@@ -3246,9 +3322,15 @@ class Scheduler(
                         )
 
                         # FIXME: pp is not compatible with overlap
+
+                        if _MTP_DEBUG:
+                            _mtp_debug_dump("before", batch)
                         batch_result = self.model_worker.forward_batch_generation(
                             batch, **fwd_kwargs
                         )
+                        if _MTP_DEBUG:
+                            _mtp_debug_dump("after", batch, batch_result)
+
                         if batch.spec_algorithm.is_none():
                             self.future_map.publish(future_indices, batch.seq_lens + 1)
                         # Park any refs the worker wants kept alive 2 iters
@@ -3290,7 +3372,11 @@ class Scheduler(
                 # future_map relay / on_publish).
                 resolve_forward_inputs(batch, self.future_map)
                 with self._forward_isolation(batch, overlap=False):
+                    if _MTP_DEBUG:
+                        _mtp_debug_dump("before", batch)
                     batch_result = self.model_worker.forward_batch_generation(batch)
+                    if _MTP_DEBUG:
+                        _mtp_debug_dump("after", batch, batch_result)
                 # The isolation restore reverted the worker's in-forward SB edits;
                 # re-apply what must carry to the next iter.
                 batch.spec_info = batch_result.next_draft_input
@@ -3314,9 +3400,13 @@ class Scheduler(
                     else {}
                 )
                 resolve_forward_inputs(batch, self.future_map)
+                if _MTP_DEBUG:
+                    _mtp_debug_dump("before", batch)
                 batch_result = self.model_worker.forward_batch_generation(
                     batch, **kwargs
                 )
+                if _MTP_DEBUG:
+                    _mtp_debug_dump("after", batch, batch_result)
                 if batch_result.has_sampled_token_ids:
                     # Non-spec: relay via future_map, gathered next iter.
                     self._relay_forward_payload(batch.req_pool_indices, batch_result)
