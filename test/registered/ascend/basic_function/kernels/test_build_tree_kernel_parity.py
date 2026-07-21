@@ -546,53 +546,73 @@ def compare_and_report(
     print(inputs.describe())
 
     print("\nOutputs:")
-    keys = ["retrieve_index", "retrieve_next_token", "retrieve_next_sibling", "positions"]
+    scalar_keys = ["retrieve_index", "retrieve_next_token", "retrieve_next_sibling", "positions"]
+    all_keys = scalar_keys + ["tree_mask"]
     for branch, res in results.items():
         print(f"  [{branch}]")
-        for k in keys:
+        for k in scalar_keys:
             print(f"    {k:24s}: {_fmt(res[k])}")
-        # tree_mask is large; only show summary
+        # tree_mask is large; show summary + first 32 elements
         tm = res["tree_mask"]
+        tm_preview = tm.flatten().tolist()
+        tm_preview = tm_preview[:32] + (["..."] if len(tm_preview) > 32 else [])
         print(f"    {'tree_mask':24s}: shape={tuple(tm.shape)}, "
-              f"dtype={tm.dtype}, sum={int(tm.sum())}, numel={tm.numel()}")
+              f"dtype={tm.dtype}, sum={int(tm.sum())}, numel={tm.numel()}, "
+              f"values={tm_preview}")
+
+    # QLEN_ONLY tree_mask semantics note
+    qlen_only_note = ""
+    if inputs.tree_mask_mode == 1:
+        qlen_only_note = (
+            "  NOTE: QLEN_ONLY tree_mask layout is implementation-defined.\n"
+            "        XPU triton uses (N*N*B + N*B) flat layout with per-token rows;\n"
+            "        NPU triton / reference may use a different (N*B,) packed layout.\n"
+            "        tree_mask divergence here does NOT imply a real bug if the\n"
+            "        downstream attention kernel consumes the same layout it produced."
+        )
 
     if reference_name and reference_name in results:
         ref = results[reference_name]
         print(f"\nComparison against reference ({reference_name}):")
+        if qlen_only_note:
+            print(qlen_only_note)
         for branch, res in results.items():
             if branch == reference_name:
                 continue
-            matches = all(torch.equal(res[k], ref[k]) for k in keys)
-            status = "MATCH" if matches else "DIFFER"
+            scalar_match = all(torch.equal(res[k], ref[k]) for k in scalar_keys)
+            tm_match = torch.equal(res["tree_mask"], ref["tree_mask"])
+            if scalar_match and tm_match:
+                status = "MATCH"
+            elif scalar_match and not tm_match:
+                status = "MATCH (scalars) / DIFFER (tree_mask)"
+            else:
+                status = "DIFFER"
             print(f"  {branch:14s} vs {reference_name}: {status}")
-            if not matches:
-                for k in keys:
-                    if not torch.equal(res[k], ref[k]):
-                        print(f"    {k}:")
-                        print(f"      {branch:14s}: {_fmt(res[k])}")
-                        print(f"      {reference_name:14s}: {_fmt(ref[k])}")
-            # Also compare tree_mask
-            if not torch.equal(res["tree_mask"], ref["tree_mask"]):
-                print(f"    tree_mask differs: "
-                      f"sum {branch}={int(res['tree_mask'].sum())} vs "
-                      f"sum {reference_name}={int(ref['tree_mask'].sum())}")
+            for k in all_keys:
+                if not torch.equal(res[k], ref[k]):
+                    print(f"    {k}:")
+                    print(f"      {branch:14s}: {_fmt(res[k])}")
+                    print(f"      {reference_name:14s}: {_fmt(ref[k])}")
     else:
         # No reference; compare NPU triton vs XPU triton
         if "npu_triton" in results and "xpu_triton" in results:
             a, b = results["npu_triton"], results["xpu_triton"]
-            matches = all(torch.equal(a[k], b[k]) for k in keys)
-            status = "MATCH" if matches else "DIFFER"
+            if qlen_only_note:
+                print(qlen_only_note)
+            scalar_match = all(torch.equal(a[k], b[k]) for k in scalar_keys)
+            tm_match = torch.equal(a["tree_mask"], b["tree_mask"])
+            if scalar_match and tm_match:
+                status = "MATCH"
+            elif scalar_match and not tm_match:
+                status = "MATCH (scalars) / DIFFER (tree_mask)"
+            else:
+                status = "DIFFER"
             print(f"\nNPU triton vs XPU triton: {status}")
-            if not matches:
-                for k in keys:
-                    if not torch.equal(a[k], b[k]):
-                        print(f"  {k}:")
-                        print(f"    npu_triton: {_fmt(a[k])}")
-                        print(f"    xpu_triton: {_fmt(b[k])}")
-            if not torch.equal(a["tree_mask"], b["tree_mask"]):
-                print(f"  tree_mask differs: "
-                      f"sum npu={int(a['tree_mask'].sum())} vs "
-                      f"sum xpu={int(b['tree_mask'].sum())}")
+            for k in all_keys:
+                if not torch.equal(a[k], b[k]):
+                    print(f"  {k}:")
+                    print(f"    npu_triton: {_fmt(a[k])}")
+                    print(f"    xpu_triton: {_fmt(b[k])}")
 
 
 # ---------------------------------------------------------------------------
