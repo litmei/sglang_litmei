@@ -181,9 +181,6 @@ def spec_need_hidden_states(server_args: Optional[ServerArgs] = None) -> bool:
     if server_args is None:
         server_args = get_global_server_args()
 
-    if envs.SGLANG_SPEC_V2_ZERO_BUBBLE.get():
-        return False
-
     # STANDALONE drafts don't consume `spec_info.hidden_states` (vanilla LLM).
     # multi_layer_eagle and DFLASH don't relay hidden_states through FutureMap.
     # TODO(lsyin): also skip when step == 1.
