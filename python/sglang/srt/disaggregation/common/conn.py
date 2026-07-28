@@ -43,6 +43,7 @@ from sglang.srt.utils.network import (
     get_local_ip_auto,
     get_zmq_socket_on_host,
 )
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ class CommonKVManager(BaseKVManager):
         )
 
         # bind zmq socket
-        self._zmq_ctx = zmq.Context()
+        self._zmq_ctx = zmq_context_core_binding(zmq.Context())
         self.rank_port, self.server_socket = get_zmq_socket_on_host(
             self._zmq_ctx, zmq.PULL, host=self.local_ip
         )
@@ -1161,7 +1162,7 @@ class CommonKVSender(BaseKVSender):
 
 
 class CommonKVReceiver(BaseKVReceiver):
-    _ctx = zmq.Context()
+    _ctx = zmq_context_core_binding(zmq.Context())
     _socket_cache = {}
     _socket_locks = {}
     _global_lock = threading.Lock()

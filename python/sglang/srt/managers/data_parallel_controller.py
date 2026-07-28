@@ -65,6 +65,7 @@ from sglang.srt.utils.network import (
     get_zmq_socket,
     get_zmq_socket_on_host,
 )
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.utils.watchdog import Watchdog
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
@@ -145,7 +146,7 @@ class DataParallelController:
         self.run_scheduler_process_func = run_scheduler_process_func
 
         # Init inter-process communication
-        self.context = zmq.Context(1 + server_args.dp_size)
+        self.context = zmq_context_core_binding(zmq.Context(1 + server_args.dp_size))
         if server_args.node_rank == 0:
             self.recv_from_tokenizer = get_zmq_socket(
                 self.context, zmq.PULL, port_args.scheduler_input_ipc_name, False

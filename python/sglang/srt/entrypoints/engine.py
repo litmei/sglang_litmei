@@ -111,6 +111,7 @@ from sglang.srt.utils import (
 )
 from sglang.srt.utils.msgspec_utils import msgspec_to_builtins
 from sglang.srt.utils.network import get_zmq_socket, is_port_available
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.utils.watchdog import SubprocessWatchdog
 from sglang.version import __version__
@@ -252,7 +253,7 @@ class Engine(EngineScoreMixin, EngineBase):
         self.port_args = port_args
 
         # Initialize ZMQ sockets
-        context = zmq.Context(2)
+        context = zmq_context_core_binding(zmq.Context(2))
         if self.server_args.node_rank == 0:
             self.send_to_rpc = get_zmq_socket(
                 context, zmq.DEALER, self.port_args.rpc_ipc_name, True

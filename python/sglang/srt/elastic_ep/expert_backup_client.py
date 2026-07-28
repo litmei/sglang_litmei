@@ -16,6 +16,7 @@ from sglang.srt.eplb.expert_location import get_global_expert_location_metadata
 from sglang.srt.managers.io_struct import UpdateExpertBackupReq, sock_recv, sock_send
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils.network import get_local_ip_auto
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
 
 PORT_BASE = envs.SGLANG_BACKUP_PORT_BASE.get()
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class ExpertBackupClient:
         moe_ep_rank: int,
         get_model: Callable[[], Any],
     ):
-        context = zmq.Context(2)
+        context = zmq_context_core_binding(zmq.Context(2))
         self.server_args = server_args
         self.engine_num = server_args.nnodes
         self.engine_rank = server_args.node_rank

@@ -42,6 +42,7 @@ from sglang.srt.utils.network import (
     get_local_ip_auto,
     get_zmq_socket_on_host,
 )
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
 
 logger = logging.getLogger(__name__)
 
@@ -679,7 +680,7 @@ class WaitingImageRequest:
         self.receive_count = receive_count
         self.num_items_assigned = recv_req.num_items_assigned
         self.embedding_port, self.recv_socket = get_zmq_socket_on_host(
-            zmq.Context(), zmq.PULL, host=host_name
+            zmq_context_core_binding(zmq.Context()), zmq.PULL, host=host_name
         )
         logger.info(f"Waiting for input {self.embedding_port = }")
         self.recv_embedding_data = None
@@ -1419,7 +1420,7 @@ class MMReceiverBase(ABC):
         scheduler: Optional["Scheduler"] = None,
         encode_urls: Optional[List[str]] = None,
     ):
-        self.context = zmq.asyncio.Context(20)
+        self.context = zmq_context_core_binding(zmq.asyncio.Context(20))
         self.encoder_transfer_backend = server_args.encoder_transfer_backend
         # When ``encode_urls`` is shared with an :class:`EncoderBootstrapServer`
         # (tokenizer manager process), it grows / shrinks in place as encoders

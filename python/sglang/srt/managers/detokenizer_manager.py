@@ -50,6 +50,7 @@ from sglang.utils import (
     find_printable_text,
     get_exception_traceback,
 )
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
         self.init_request_dispatcher()
 
     def init_ipc_channels(self, port_args: PortArgs, server_args: ServerArgs):
-        context = zmq.Context(2)
+        context = zmq_context_core_binding(zmq.Context(2))
         self.recv_from_scheduler = get_zmq_socket(
             context, zmq.PULL, port_args.detokenizer_ipc_name, True
         )

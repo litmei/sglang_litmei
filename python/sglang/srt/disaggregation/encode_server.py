@@ -85,6 +85,7 @@ from sglang.srt.utils.network import (
     get_local_ip_auto,
     get_zmq_socket,
 )
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
 
 logger = logging.getLogger(__name__)
 
@@ -318,8 +319,8 @@ class MMEncoder:
             device_config=self.device_config,
         )
 
-        self.context = zmq.asyncio.Context(2)
-        self.sync_context = zmq.Context()  # Reuse sync context for thread pool
+        self.context = zmq_context_core_binding(zmq.asyncio.Context(2))
+        self.sync_context = zmq_context_core_binding(zmq.Context())  # Reuse sync context for thread pool
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
         # Dedicated executor for image preprocessing (resize/normalize).
         # Separate from self.executor (ZMQ sends) to avoid contention under high concurrency.
@@ -3351,7 +3352,7 @@ async def run_dp_worker(
         encoder=enc, send_sockets=[], max_batch_size=ENCODER_MAX_BATCH_SIZE
     )
 
-    ctx = zmq.asyncio.Context(2)
+    ctx = zmq_context_core_binding(zmq.asyncio.Context(2))
     recv_sock = get_zmq_socket(ctx, zmq.PULL, dispatch_path, False)
     send_sock = get_zmq_socket(ctx, zmq.PUSH, result_path, False)
     send_lock = asyncio.Lock()
@@ -3627,7 +3628,7 @@ def launch_server(server_args: ServerArgs):
         add_prometheus_middleware(app)
 
     ctx = mp.get_context("spawn")
-    zmq_ctx = zmq.Context(10)
+    zmq_ctx = zmq_context_core_binding(zmq.Context(10))
     ipc_path_prefix = random_uuid()
     port_args = PortArgs.init_new(server_args)
     if server_args.dist_init_addr:
@@ -3685,7 +3686,7 @@ def _launch_server_dp(server_args: ServerArgs):
 
     ctx = mp.get_context("spawn")
     ipc_prefix = random_uuid()
-    async_zmq_ctx = zmq.asyncio.Context(dp_size + 1)
+    async_zmq_ctx = zmq_context_core_binding(asyncio.Context(dp_size + 1))
 
     result_path = f"ipc:///tmp/{ipc_prefix}_dp_result"
     result_socket = get_zmq_socket(async_zmq_ctx, zmq.PULL, result_path, True)

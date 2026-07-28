@@ -24,6 +24,8 @@ import zmq
 
 from sglang.srt.managers.io_struct import sock_recv, sock_send, wrap_as_pickle
 
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
+
 # -------------------------------------- config base ------------------------------------------
 
 
@@ -1434,7 +1436,7 @@ def _create_zmq_rpc_broadcast(
     rank = _get_rank()
     world_size = dist.get_world_size() if dist.is_initialized() else 1
 
-    ctx = zmq.Context()
+    ctx = zmq_context_core_binding(zmq.Context())
     sock = ctx.socket(zmq.REP)
     sock.bind("tcp://*:0")
     bound_port = int(sock.getsockopt_string(zmq.LAST_ENDPOINT).rsplit(":", 1)[1])
