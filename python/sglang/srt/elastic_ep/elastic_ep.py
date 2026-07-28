@@ -369,8 +369,9 @@ def _maybe_create_message_queue(group) -> None:
 
 
 def _try_recover_world(global_ranks: List[int]) -> bool:
-    from mooncake import ep as mooncake_ep
+    from sglang.srt.utils.numa_utils import get_mooncake__ep
 
+    mooncake_ep = get_mooncake__ep()
     world_backend = torch.distributed.group.WORLD
     if not all(mooncake_ep.get_peer_state(world_backend, global_ranks)):
         return False
@@ -394,7 +395,9 @@ def try_recover_ranks(global_ranks: List[int]) -> bool:
     if not _try_recover_world(global_ranks):
         return False
 
-    from mooncake import ep as mooncake_ep
+    from sglang.srt.utils.numa_utils import get_mooncake__ep
+
+    mooncake_ep = get_mooncake__ep()
 
     for group in _iter_live_parallel_groups():
         local_ranks = _map_global_to_group_local_ranks(group.ranks, global_ranks)

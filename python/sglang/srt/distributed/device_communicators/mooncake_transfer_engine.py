@@ -111,7 +111,9 @@ class MooncakeTransferEngine:
         ib_device: Optional[str] = None,
     ):
         try:
-            from mooncake.engine import TransferEngine
+            from sglang.srt.utils.numa_utils import get_mooncake__engine__transfer_engine
+
+            TransferEngine = get_mooncake__engine__transfer_engine()
         except ImportError as e:
             raise ImportError(
                 "Please install mooncake by following the instructions at "

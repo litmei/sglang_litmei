@@ -306,7 +306,9 @@ class GroupCoordinator:
         for ranks in group_ranks:
             subgroup_timeout = _MODEL_PARALLEL_GROUP_TIMEOUT
             if "mooncake" in torch_distributed_backend:
-                from mooncake.ep import MooncakeBackendOptions
+                from sglang.srt.utils.numa_utils import get_mooncake__ep__mooncake_backend_options
+
+                MooncakeBackendOptions = get_mooncake__ep__mooncake_backend_options()
 
                 pg_active_size = len(ranks)
                 if not recovered_rank and max_world_size is not None:
@@ -1973,7 +1975,9 @@ def init_distributed_environment(
     )
     if "mooncake" in backend:
         try:
-            from mooncake import ep as mooncake_ep
+            from sglang.srt.utils.numa_utils import get_mooncake__ep
+
+            mooncake_ep = get_mooncake__ep()
         except ImportError as e:
             raise ImportError(
                 "Please install mooncake by following the instructions at "
@@ -1996,7 +2000,9 @@ def init_distributed_environment(
         _MODEL_PARALLEL_GROUP_TIMEOUT = timeout
 
         if backend == "mooncake":
-            from mooncake.ep import MooncakeBackendOptions
+            from sglang.srt.utils.numa_utils import get_mooncake__ep__mooncake_backend_options
+
+            MooncakeBackendOptions = get_mooncake__ep__mooncake_backend_options()
 
             use_max_ws = max_world_size and max_world_size > world_size
             ar_size = max_world_size if use_max_ws else world_size
