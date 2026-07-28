@@ -372,6 +372,7 @@ class ZmqLoadSnapshotWriter:
         self, endpoint: str, dp_size: int, dp_rank: int, publish_interval: int = 1
     ):
         import zmq as _zmq
+        from sglang.srt.utils.numa_utils import zmq_context_core_binding
 
         if dp_rank < 0 or dp_rank >= dp_size:
             raise ValueError(f"invalid dp_rank={dp_rank} for dp_size={dp_size}")
@@ -381,7 +382,7 @@ class ZmqLoadSnapshotWriter:
         self.dp_rank = dp_rank
 
         self._zmq = _zmq
-        self._ctx = _zmq.Context.instance()
+        self._ctx = zmq_context_core_binding(_zmq.Context.instance())
         self._socket = self._ctx.socket(_zmq.PUSH)
         if is_zmq_endpoint_ipv6(endpoint):
             self._socket.setsockopt(_zmq.IPV6, 1)
@@ -519,9 +520,10 @@ class ZmqShmLoadSnapshotReader:
 
     def __init__(self, endpoint: str, shm_path: str, dp_size: int):
         import zmq as _zmq
+        from sglang.srt.utils.numa_utils import zmq_context_core_binding
 
         self._zmq = _zmq
-        self._ctx = _zmq.Context.instance()
+        self._ctx = zmq_context_core_binding(_zmq.Context.instance())
         self._socket = self._ctx.socket(_zmq.PULL)
         if is_zmq_endpoint_ipv6(endpoint):
             self._socket.setsockopt(_zmq.IPV6, 1)

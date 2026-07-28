@@ -13,6 +13,7 @@ import msgspec
 import numpy as np
 import numpy.typing as npt
 import zmq
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
 from mori.cpp import TransferStatus
 from mori.io import (
     BackendType,
@@ -315,7 +316,7 @@ class MoriKVManager(CommonKVManager):
         self.aux_mem_descs: List[MemoryDesc] = []
         self.state_mem_descs: List[List[MemoryDesc]] = []
         self.transfer_lock = threading.Lock()
-        self._zmq_ctx = zmq.Context()
+        self._zmq_ctx = zmq_context_core_binding(zmq.Context())
         self._socket_local = threading.local()
         self._send_aux_rdma = envs.SGLANG_MORI_SEND_AUX_RDMA.get()
         self._register_local_buffers()

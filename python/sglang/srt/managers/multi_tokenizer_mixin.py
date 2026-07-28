@@ -543,7 +543,7 @@ class MultiDetokenizerRouter:
         self.ipc_name_list = ipc_name_list
         self.num_workers = len(ipc_name_list)
         self.socket_mapping = SocketMapping()
-        context = zmq.Context(2)
+        context = zmq_context_core_binding(zmq.Context(2))
         self.recv_from_scheduler = get_zmq_socket(
             context, zmq.PULL, port_args.detokenizer_ipc_name, True
         )

@@ -1409,12 +1409,13 @@ class KVEventsSubscriber:
 
     def _run(self) -> None:
         import zmq
+        from sglang.srt.utils.numa_utils import zmq_context_core_binding
         from msgspec.msgpack import Decoder
 
         from sglang.srt.disaggregation.kv_events import KVEventBatch
 
         decoder = Decoder(type=KVEventBatch)
-        ctx = zmq.Context.instance()
+        ctx = zmq_context_core_binding(zmq.Context.instance())
         sub = ctx.socket(zmq.SUB)
         sub.connect(self._endpoint)
         sub.setsockopt_string(zmq.SUBSCRIBE, self._topic)

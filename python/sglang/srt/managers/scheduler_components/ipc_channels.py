@@ -6,6 +6,7 @@ import zmq
 from sglang.srt.managers.scheduler_components.output_sender import SenderWrapper
 from sglang.srt.server_args import PortArgs
 from sglang.srt.utils.network import get_zmq_socket
+from sglang.srt.utils.numa_utils import zmq_context_core_binding
 
 if TYPE_CHECKING:
     from sglang.test.scripted_runtime.tokenizer_recv_proxy import (
@@ -31,7 +32,7 @@ class SchedulerIpcChannels:
         metrics_enabled: bool,
         enable_scripted_runtime: bool,
     ) -> "SchedulerIpcChannels":
-        context = zmq.Context(2)
+        context = zmq_context_core_binding(zmq.Context(2))
 
         if is_rank_zero:
             recv_from_tokenizer = get_zmq_socket(

@@ -149,6 +149,7 @@ class _FpmPublisherThread:
         max_queue_size: int = 10_000,
     ) -> None:
         import zmq
+        from sglang.srt.utils.numa_utils import zmq_context_core_binding
 
         self._queue: queue.Queue[ForwardPassMetrics | None] = queue.Queue(
             maxsize=max_queue_size
@@ -157,7 +158,7 @@ class _FpmPublisherThread:
         self._worker_id = worker_id
         self._dp_rank = dp_rank
 
-        self._ctx = zmq.Context()
+        self._ctx = zmq_context_core_binding(zmq.Context())
         self._pub = self._ctx.socket(zmq.PUB)
         self._pub.bind(endpoint)
         self._zmq = zmq
