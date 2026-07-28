@@ -159,8 +159,9 @@ def _resolve_backend(*, device: str, server_args: ServerArgs, gpu_id: int) -> st
                 ib_device_for_gpu.split(",") if ib_device_for_gpu else []
             )
             try:
-                from mooncake import ep as mooncake_ep
+                from sglang.srt.utils.numa_utils import get_mooncake__ep
 
+                mooncake_ep = get_mooncake__ep()
                 mooncake_ep.set_device_filter(mooncake_ib_device)
             except:
                 pass  # A warning will be raised in `init_distributed_environment`

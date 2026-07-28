@@ -739,6 +739,7 @@ class MooncakeNamespace(enum.Enum):
     Buffer = enum.auto()
     MooncakeHostMemAllocator = enum.auto()
     MooncakeDistributedStore = enum.auto()
+    ReplicateConfig = enum.auto()
 
 
 @mooncake_binding_wrapper
@@ -810,4 +811,13 @@ def get_mooncake__store__mooncake_distributed_store():
     if name := MooncakeNamespace.MooncakeDistributedStore not in _MOONCAKE_IMPORT_HELPER:
         from mooncake.store import MooncakeDistributedStore
         _MOONCAKE_IMPORT_HELPER[name] = MooncakeDistributedStore
+    return _MOONCAKE_IMPORT_HELPER[name]
+
+
+@mooncake_binding_wrapper
+def get_mooncake__store__replicate_config():
+    global _MOONCAKE_IMPORT_HELPER
+    if name := MooncakeNamespace.ReplicateConfig not in _MOONCAKE_IMPORT_HELPER:
+        from mooncake.store import ReplicateConfig
+        _MOONCAKE_IMPORT_HELPER[name] = ReplicateConfig
     return _MOONCAKE_IMPORT_HELPER[name]

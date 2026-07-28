@@ -265,7 +265,9 @@ class MooncakeBaseStore:
 
     def _import_mooncake_group_semantics(self):
         try:
-            from mooncake.store import ReplicateConfig
+            from sglang.srt.utils.numa_utils import get_mooncake__store__replicate_config
+
+            ReplicateConfig = get_mooncake__store__replicate_config()
         except ImportError:
             return None, False
 

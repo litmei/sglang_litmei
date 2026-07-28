@@ -34,7 +34,9 @@ class RemoteInstanceWeightTransporter:
 
     def init_engine(self):
         try:
-            from mooncake.engine import TransferEngine
+            from sglang.srt.utils.numa_utils import get_mooncake__engine__transfer_engine
+
+            TransferEngine = get_mooncake__engine__transfer_engine()
         except ImportError:
             logger.warning(
                 "Please install mooncake for using remote instance transfer engine: pip install mooncake-transfer-engine"

@@ -415,8 +415,9 @@ def try_recover_ranks(global_ranks: List[int]) -> bool:
 
 
 def _join_world_group() -> None:
-    from mooncake import ep as mooncake_ep
+    from sglang.srt.utils.numa_utils import get_mooncake__ep
 
+    mooncake_ep = get_mooncake__ep()
     mooncake_ep.join_group(torch.distributed.group.WORLD)
 
 
@@ -428,8 +429,9 @@ def join_scale_process_group() -> None:
 
 def join_process_groups() -> None:
     """Rejoin WORLD and every launch-time parallel group after recovery."""
-    from mooncake import ep as mooncake_ep
+    from sglang.srt.utils.numa_utils import get_mooncake__ep
 
+    mooncake_ep = get_mooncake__ep()
     _join_world_group()
     for group in _iter_live_parallel_groups():
         if group.world_size <= 1:
