@@ -26,6 +26,46 @@ logger = logging.getLogger(__name__)
 _cpu_to_node_cache = None
 _node_to_cpus_cache = {}
 
+libnuma = None
+
+for libnuma_so in ["libnuma.so", "libnuma.so.1"]:
+    try:
+        libnuma = ctypes.CDLL(libnuma_so)
+    except OSError as e:
+        logger.debug(f"{e}")
+        libnuma = None
+    if libnuma is not None:
+        break
+
+if libnuma is None:
+    logger.warning("libnuma is None")
+else:
+    from ctypes import *
+
+    class bitmask_t(Structure):
+        _fields_ = [
+            ('size', c_ulong),
+            ('maskp', POINTER(c_ulong)),
+        ]
+
+    libnuma.numa_max_node.argtypes = []
+    libnuma.numa_max_node.restype = c_int
+
+    libnuma.numa_allocate_cpumask.argtypes = []
+    libnuma.numa_allocate_cpumask.restype = POINTER(bitmask_t)
+
+    libnuma.numa_node_to_cpus.argtypes = [c_int, POINTER(bitmask_t)]
+    libnuma.numa_node_to_cpus.restype = ctypes.c_int
+
+    libnuma.numa_bitmask_free.argtypes = [POINTER(bitmask_t)]
+    libnuma.numa_bitmask_free.restype = c_void_p
+
+    libnuma.numa_num_configured_cpus.argtypes = []
+    libnuma.numa_num_configured_cpus.restype = c_int
+
+    libnuma.numa_bitmask_isbitset.argtypes = [POINTER(bitmask_t), c_uint]
+    libnuma.numa_bitmask_isbitset.restype = c_int
+
 
 @contextmanager
 def configure_subprocess(server_args: ServerArgs, gpu_id: int):
@@ -147,23 +187,7 @@ def get_numa_node_if_available(server_args: ServerArgs, gpu_id: int) -> Optional
     return None
 
 
-def get_libnuma():
-    libnuma = None
-
-    for libnuma_so in ["libnuma.so", "libnuma.so.1"]:
-        try:
-            libnuma = ctypes.CDLL(libnuma_so)
-        except OSError as e:
-            logger.debug(f"{e}")
-            libnuma = None
-        if libnuma is not None:
-            break
-    return libnuma
-
-
 def numa_bind_to_node(node: int):
-    libnuma = get_libnuma()
-
     if libnuma is None or libnuma.numa_available() < 0:
         logger.warning("numa not available on this system, skip bind action")
         return
@@ -342,7 +366,6 @@ def _handle_numa_bind_failure(
 def _can_set_mempolicy() -> bool:
     """Check if the process has permission to use NUMA memory policy syscalls."""
     try:
-        libnuma = get_libnuma()
         if libnuma is None or libnuma.numa_available() < 0:
             return False
         mode = ctypes.c_int()
@@ -480,7 +503,6 @@ def _get_max_node():
 
     @rtype: C{int}
     """
-    libnuma = get_libnuma()
     return libnuma.numa_max_node()
 
 
@@ -493,7 +515,6 @@ def _node_to_cpus(node):
     """
 
     result = set()
-    libnuma = get_libnuma()
 
     if node < 0 or node > _get_max_node():
         raise ValueError(node)
