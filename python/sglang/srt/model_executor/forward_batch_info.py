@@ -692,8 +692,12 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         self.original_global_num_tokens_cpu = batch.global_num_tokens
         self.global_num_tokens_cpu = global_num_tokens
         # Pinned host buffers keep the non_blocking H2D async (spec critical path).
-        # Pinned host buffers keep the non_blocking H2D async (spec critical path).
-        pin_mem = is_pin_memory_available(device)
+        # Pinned host buffers keep the non_blocking H2D async (spec critical
+        # path). Plain True: the platform check (is_pin_memory_available) does
+        # not cover NPU, but torch_npu supports pinned memory. This is the
+        # per-rank token-count H2D under DP-attention ([dp_size] ints), which
+        # otherwise blocks the CPU on the preceding GPU work (~300ms).
+        pin_mem = True
         self.global_num_tokens_gpu = torch.tensor(
             global_num_tokens, dtype=torch.int64, pin_memory=pin_mem
         ).to(device, non_blocking=True)
