@@ -836,9 +836,11 @@ class EagleDraftWorker(EagleDraftWorkerBase):
 
         if N > 1:
             # Steps 1 .. N-1: each is full((b, K), i). Build them in one shot
-            # and drop the last step (parents_list[:-1] semantics).
+            # and drop the last step (parents_list[:-1] semantics). Explicit
+            # reshape shape (not -1): a DP-attention rank with an empty local
+            # batch (b == 0) would otherwise make -1 ambiguous.
             other = torch.arange(1, N, dtype=torch.long, device=self.device)
-            other = other.view(1, -1, 1).expand(b, -1, K).reshape(b, -1)
+            other = other.view(1, -1, 1).expand(b, -1, K).reshape(b, (N - 1) * K)
             # keep only steps 1 .. N-2
             parent_list = torch.cat([step0_parents, other[:, : (N - 2) * K]], dim=1)
         else:
