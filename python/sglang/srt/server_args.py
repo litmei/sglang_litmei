@@ -2253,6 +2253,16 @@ class ServerArgs:
         "Enable adaptive speculative decoding that dynamically adjusts num_steps based on acceptance rate.",
         NS("spec"),
     ] = False
+    # Spec V2 zero-bubble (EAGLE3): run the next round's draft right after this
+    # round's draft_extend and consume its per-step topk directly at the next
+    # decode entry. Usually set via the SGLANG_SPEC_V2_ZERO_BUBBLE env
+    # (translated to this field in _handle_environment_variables, since bare
+    # shell exports do not cross the scheduler subprocess spawn boundary).
+    enable_spec_v2_zero_bubble: A[
+        bool,
+        "Spec V2 zero-bubble: pre-run the next round's draft after draft_extend (EAGLE3, topk=1 only).",
+        NS("spec"),
+    ] = False
     speculative_adaptive_config: A[
         Optional[str],
         "Path to a JSON config file for adaptive speculative decoding tuning knobs.",
@@ -8029,6 +8039,15 @@ class ServerArgs:
     def _handle_environment_variables(self):
         self._handle_multimodal_feature_transport()
         envs.SGLANG_ENABLE_TORCH_COMPILE.set("1" if self.enable_torch_compile else "0")
+        # Spec V2 zero-bubble (SGLANG_SPEC_V2_ZERO_BUBBLE): scheduler subprocesses
+        # rebuild their environment during their own server-args handling, so a
+        # bare shell export does not survive the spawn boundary. Translate the
+        # opt-in env into the serialized ServerArgs field here: the parent sees
+        # the env and sets the field (carried to the child via the serialized
+        # ServerArgs); the child re-runs this with the env absent, keeping the
+        # serialized value. The worker reads the field in the spec worker.
+        if os.environ.get("SGLANG_SPEC_V2_ZERO_BUBBLE") is not None:
+            self.enable_spec_v2_zero_bubble = envs.SGLANG_SPEC_V2_ZERO_BUBBLE.get()
         if self.mamba_ssm_dtype is not None:
             envs.SGLANG_MAMBA_SSM_DTYPE.set(self.mamba_ssm_dtype)
         envs.SGLANG_DISABLE_OUTLINES_DISK_CACHE.set(

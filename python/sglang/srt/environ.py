@@ -409,6 +409,10 @@ class Envs:
     SGLANG_PROFILE_WITH_STACK = EnvBool(True)
     SGLANG_PROFILE_RECORD_SHAPES = EnvBool(True)
     SGLANG_PROFILE_V2 = EnvBool(False)
+    # torch_npu profiler export format ("Text" | "Db"). Only applied on NPU;
+    # torch_npu 2.10 ships just these two, so Text (MindStudio-friendly) stays
+    # the default and this env is an escape hatch for newer CANN versions.
+    SGLANG_PROFILE_EXPORT_TYPE = EnvStr("Text")
     SGLANG_ENABLE_NVTX_SCHEDULER = EnvBoolWithAlias(
         False, deprecated_name="SGLANG_ENABLE_NVTX"
     )
@@ -1128,6 +1132,12 @@ class Envs:
     # Saves the per-step draft forward, but the draft KV goes stale: an upshift
     # back to steps>0 starts from a cold draft state (low accept until it recovers).
     SGLANG_SPEC_SKIP_ZERO_STEP_DRAFT_EXTEND = EnvBool(False)
+    # Spec V2 zero-bubble (EAGLE3): run the next round's draft model right
+    # after this round's draft_extend ("Verify -> DraftExtend -> Draft"), and
+    # consume its per-step topk directly at the next decode entry (no draft
+    # model forward on the critical path). Mirrors the mtp_v2_push zerobubble
+    # design. Opt-in; only supports topk=1 (NPU constraint) and the eager path.
+    SGLANG_SPEC_V2_ZERO_BUBBLE = EnvBool(False)
     # Kill-switch for the draft-extend cuda graph. Draft extend then always runs
     # eager. Escape hatch for setups where the capture's memory pool costs more
     # than the graph saves (e.g. DeepEP MoE workspace captured at full dispatch
