@@ -950,26 +950,36 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                 self.speculative_num_steps,
             )
 
-            if can_run_decode_cuda_graph:
-                # v1 guard excludes the graph path (eager only); keep a loud
-                # failure instead of silently building a wrong tree.
-                raise RuntimeError(
-                    "spec_v2_zero_bubble requires the eager draft path "
-                    "(cuda_graph_runner is None); graph replay is not supported."
-                )
-
             with spec_stage_span("draft_zero_bubble"):
-                if (
-                    not forward_batch.forward_mode.is_idle()
-                    and self.speculative_num_steps > 1
-                ):
-                    # Mirrors the normal draft() path (skip init for 1-step
-                    # draft, which only samples).
-                    self.draft_attn_backend.init_forward_metadata(forward_batch)
-                    forward_batch.mark_forward_metadata_ready()
-                ret_topk_p, ret_topk_index = self.draft_forward_zero_bubble(
-                    forward_batch
-                )
+                if can_run_decode_cuda_graph:
+                    # Graph path: replay the draft graph. Its output
+                    # (parent_list, tsi, draft_tokens, draft_probs) is the same
+                    # organized chain the normal draft() produces; for topk=1
+                    # the chain is [input-seed, step0, .., stepN-2], so the
+                    # per-step outputs (to pre-concatenate with the
+                    # draft_extend seed) are draft_tokens[:, 1:]. Already in
+                    # target-id space (draft_forward remaps internally).
+                    _parent_list, _tsi, draft_tokens, _draft_probs = (
+                        self.cuda_graph_runner.execute(forward_batch)
+                    )
+                    ret_topk_index = draft_tokens[:, 1:]
+                    ret_topk_p = torch.ones_like(
+                        ret_topk_index, dtype=torch.float32
+                    )
+                else:
+                    if (
+                        not forward_batch.forward_mode.is_idle()
+                        and self.speculative_num_steps > 1
+                    ):
+                        # Mirrors the normal draft() path (skip init for 1-step
+                        # draft, which only samples).
+                        self.draft_attn_backend.init_forward_metadata(
+                            forward_batch
+                        )
+                        forward_batch.mark_forward_metadata_ready()
+                    ret_topk_p, ret_topk_index = self.draft_forward_zero_bubble(
+                        forward_batch
+                    )
 
             # Pre-concatenate the per-step topk into the next round's draft
             # input: draft_extend produced 1 candidate (at the accepted
@@ -1526,10 +1536,11 @@ class EAGLEWorkerV2(BaseSpecWorker):
             return False
         if self._draft_worker.seed_dsa_topk_from_draft_extend:
             return False
-        if self._draft_worker.cuda_graph_runner is not None:
-            # v1: eager draft path only (graph replay + static buffers are a
-            # later extension).
-            return False
+        # NOTE: no cuda_graph guard -- the zero-bubble path supports both
+        # eager and graph drafts (draft_zero_bubble replays the draft graph and
+        # extracts the per-step topk from its output). Keeping the guard set
+        # identical to the prefill-side pad condition (enable_spec_v2_zero_bubble)
+        # is what makes the feature orthogonal to --disable-cuda-graph.
         return True
 
     def _build_trivial_verify_input(self, batch: ScheduleBatch) -> EagleVerifyInput:
