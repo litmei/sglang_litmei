@@ -280,7 +280,8 @@ class SchedulerProfilerManager:
                     None
                     if not _is_npu
                     else torch_npu.profiler.tensorboard_trace_handler(
-                        str(self.torch_profiler_output_dir)
+                        str(self.torch_profiler_output_dir),
+                        worker_name=f"rank{self.ps.tp_rank}",
                     )
                 ),
                 experimental_config=(
