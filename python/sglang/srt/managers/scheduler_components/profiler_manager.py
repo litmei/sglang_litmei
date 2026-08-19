@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import gc
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +50,30 @@ elif _is_mps:
 
 logger = logging.getLogger(__name__)
 
+# torch_npu's profiler stop() performs the msprof trace export synchronously on
+# the calling (scheduler) thread. Give it a bounded window: a hang or exception
+# in the CANN/msprof finalize path must not wedge the scheduler event loop.
+PROFILER_STOP_TIMEOUT_S = 60
+
+
+def _resolve_npu_export_type():
+    """Resolve the torch_npu trace export format from SGLANG_PROFILE_EXPORT_TYPE.
+
+    torch_npu 2.10 ships only Text/Db; Text is the MindStudio-friendly default.
+    An unknown value logs a warning and falls back to Text instead of raising
+    on the scheduler thread.
+    """
+    export_name = envs.SGLANG_PROFILE_EXPORT_TYPE.get()
+    try:
+        return torch_npu.profiler.ExportType[export_name]
+    except (KeyError, TypeError):
+        if export_name:
+            logger.warning(
+                "Unknown SGLANG_PROFILE_EXPORT_TYPE=%r, falling back to Text.",
+                export_name,
+            )
+        return torch_npu.profiler.ExportType.Text
+
 
 @dataclass(kw_only=True)
 class SchedulerProfilerManager:
@@ -62,6 +88,9 @@ class SchedulerProfilerManager:
                 cpu_group=self.dp_tp_cpu_group,
             )
             return
+        # Best-effort flush at process exit: if the bench client finished before
+        # the profiler's target stop step, the trace would otherwise be lost.
+        atexit.register(self._atexit_stop_profile)
 
         self.torch_profiler = None
         self.torch_profiler_output_dir: Optional[Path] = None
@@ -129,6 +158,19 @@ class SchedulerProfilerManager:
             output_dir = os.getenv("SGLANG_TORCH_PROFILER_DIR", "/tmp")
         if activities is None:
             activities = ["CPU", "GPU"]
+
+        if _is_npu and with_stack:
+            # torch_npu 2.10.0.post4 (CANN 9.1.0): profiler.stop() segfaults in
+            # _stop_profiler() when with_stack=True (reproduced in isolation;
+            # "Incorrect schedule: Stop profiler while current state is RECORD"
+            # warning followed by SIGSEGV in the native stop). Kernel/step-span
+            # analysis (MindStudio) does not need python stack traces, so force
+            # stacks off on NPU.
+            logger.warning(
+                "torch_npu profiler segfaults on stop with with_stack=True; "
+                "disabling python stack traces for this profile on NPU."
+            )
+            with_stack = False
 
         self.torch_profiler_output_dir = Path(output_dir).expanduser()
         self.torch_profiler_with_stack = with_stack
@@ -245,7 +287,7 @@ class SchedulerProfilerManager:
                     None
                     if not _is_npu
                     else torch_npu.profiler._ExperimentalConfig(
-                        export_type=torch_npu.profiler.ExportType.Text,
+                        export_type=_resolve_npu_export_type(),
                         profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
                         msprof_tx=False,
                         aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
@@ -332,31 +374,77 @@ class SchedulerProfilerManager:
 
         stage_suffix = f"-{stage.name}" if stage else ""
         logger.info("Stop profiling" + stage_suffix + "...")
+        stop_error: Optional[BaseException] = None
         if self.torch_profiler is not None:
-            self.torch_profiler.stop()
-            if not _is_npu:
-                # Build filename with only non-zero ranks to maintain backward compatibility
-                filename_parts = [self.profile_id, f"TP-{self.ps.tp_rank}"]
+            if _is_npu:
+                # torch_npu's stop() exports the trace synchronously on this
+                # (scheduler) thread. Run it under a watchdog so neither an
+                # exception nor a hang in the CANN/msprof finalize path kills
+                # the scheduler event loop (which would leave the server wedged
+                # with a partial profile). Exceptions are logged and swallowed;
+                # a timeout leaves the export finalizing in the background.
+                stop_result: List[BaseException] = []
 
-                # Only add other ranks if parallelism is enabled (size > 1)
-                if self.ps.dp_size > 1:
-                    filename_parts.append(f"DP-{self.ps.dp_rank}")
-                if self.ps.pp_size > 1:
-                    filename_parts.append(f"PP-{self.ps.pp_rank}")
-                if self.ps.moe_ep_size > 1:
-                    filename_parts.append(f"EP-{self.ps.moe_ep_rank}")
+                def _npu_stop() -> None:
+                    try:
+                        self.torch_profiler.stop()
+                    except BaseException as e:  # noqa: BLE001
+                        stop_result.append(e)
 
-                filename = (
-                    stage_prefix
-                    + "-".join(filename_parts)
-                    + stage_suffix
-                    + ".trace.json.gz"
+                watchdog = threading.Thread(target=_npu_stop, daemon=True)
+                watchdog.start()
+                watchdog.join(timeout=PROFILER_STOP_TIMEOUT_S)
+                if watchdog.is_alive():
+                    logger.warning(
+                        "torch profiler stop() did not finish within %ss; "
+                        "letting it finalize in the background. The scheduler "
+                        "continues serving.",
+                        PROFILER_STOP_TIMEOUT_S,
+                    )
+                elif stop_result:
+                    stop_error = stop_result[0]
+                    logger.error(
+                        "Failed to stop the torch profiler (NPU):",
+                        exc_info=stop_error,
+                    )
+            else:
+                try:
+                    self.torch_profiler.stop()
+                    # Build filename with only non-zero ranks to maintain backward compatibility
+                    filename_parts = [self.profile_id, f"TP-{self.ps.tp_rank}"]
+
+                    # Only add other ranks if parallelism is enabled (size > 1)
+                    if self.ps.dp_size > 1:
+                        filename_parts.append(f"DP-{self.ps.dp_rank}")
+                    if self.ps.pp_size > 1:
+                        filename_parts.append(f"PP-{self.ps.pp_rank}")
+                    if self.ps.moe_ep_size > 1:
+                        filename_parts.append(f"EP-{self.ps.moe_ep_rank}")
+
+                    filename = (
+                        stage_prefix
+                        + "-".join(filename_parts)
+                        + stage_suffix
+                        + ".trace.json.gz"
+                    )
+
+                    self.torch_profiler.export_chrome_trace(
+                        os.path.join(self.torch_profiler_output_dir, filename)
+                    )
+                except Exception as e:  # noqa: BLE001
+                    stop_error = e
+                    logger.error(
+                        "Failed to stop the torch profiler:",
+                        exc_info=True,
+                    )
+            try:
+                torch.distributed.barrier(self.dp_tp_cpu_group)
+            except Exception as e:  # noqa: BLE001
+                stop_error = stop_error or e
+                logger.error(
+                    "torch.distributed.barrier after profile stop failed:",
+                    exc_info=True,
                 )
-
-                self.torch_profiler.export_chrome_trace(
-                    os.path.join(self.torch_profiler_output_dir, filename)
-                )
-            torch.distributed.barrier(self.dp_tp_cpu_group)
 
         if self.rpd_profiler is not None:
             self.rpd_profiler.rangePop()
@@ -403,7 +491,25 @@ class SchedulerProfilerManager:
         self.profiler_start_forward_ct = None
 
         self._apply_detailed_annotations(False)
+        if stop_error is not None:
+            return ProfileReqOutput(
+                success=False,
+                message=f"Profiling stopped with errors: {stop_error!s}",
+            )
         return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
+
+    def _atexit_stop_profile(self) -> None:
+        # Best-effort flush at process exit; see __post_init__. A profile left
+        # in progress (e.g. the bench client finished before the profiler's
+        # target stop step) would otherwise be lost without an end marker.
+        profiler = self.torch_profiler
+        if profiler is None or not self.profile_in_progress:
+            return
+        try:
+            logger.info("atexit: stopping the in-progress torch profiler...")
+            profiler.stop()
+        except Exception:  # noqa: BLE001
+            logger.warning("atexit profile stop failed", exc_info=True)
 
     def _profile_batch_predicate(self, batch: ScheduleBatch):
         if envs.SGLANG_PROFILE_V2.get():
