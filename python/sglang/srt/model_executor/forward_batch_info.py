@@ -691,12 +691,15 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         self.original_global_num_tokens_cpu = batch.global_num_tokens
         self.global_num_tokens_cpu = global_num_tokens
+        # Pinned host buffers keep the non_blocking H2D async (spec critical path).
+        # Pinned host buffers keep the non_blocking H2D async (spec critical path).
+        pin_mem = is_pin_memory_available(device)
         self.global_num_tokens_gpu = torch.tensor(
-            global_num_tokens, dtype=torch.int64
+            global_num_tokens, dtype=torch.int64, pin_memory=pin_mem
         ).to(device, non_blocking=True)
         self.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
         self.global_num_tokens_for_logprob_gpu = torch.tensor(
-            global_num_tokens_for_logprob, dtype=torch.int64
+            global_num_tokens_for_logprob, dtype=torch.int64, pin_memory=pin_mem
         ).to(device, non_blocking=True)
         self.can_run_dp_cuda_graph = batch.can_run_dp_cuda_graph
 
@@ -807,6 +810,18 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         ret._maybe_init_non_generation_fields(batch)
 
         device = model_runner.device
+        # Pinned host buffers make the .to(device, non_blocking=True) copies
+        # below truly asynchronous, so the CPU does not stall on the H2D
+        # (this is on the spec decode / draft-extend critical path: the
+        # metadata prep must not wait for the target forward to finish).
+        # Pinned host buffers make the .to(device, non_blocking=True) copies
+        # below truly asynchronous, so the CPU does not stall on the H2D
+        # (this is on the spec decode / draft-extend critical path: the
+        # metadata prep must not wait for the target forward to finish).
+        # NOTE: pinned async H2D is used on both eager and cuda-graph paths;
+        # a stream sync before the graph metadata use keeps the async copies
+        # settled (see draft_zero_bubble / prepare_for_draft_extend syncs).
+        pin_mem = True
 
         if envs.SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE.get():
             hashed = _hash_rids_to_tensor(
@@ -834,9 +849,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         num_tokens = len(batch.input_ids) if batch.input_ids is not None else 0
         if enable_num_token_non_padded():
-            ret.num_token_non_padded = torch.tensor(num_tokens, dtype=torch.int32).to(
-                device, non_blocking=True
-            )
+            ret.num_token_non_padded = torch.tensor(
+                num_tokens, dtype=torch.int32, pin_memory=pin_mem
+            ).to(device, non_blocking=True)
         ret.num_token_non_padded_cpu = num_tokens
 
         ret.init_mlp_sync_metadata(batch, device)
@@ -859,6 +874,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                     for i in range(block_offset, block_offset + block_size)
                 ],
                 dtype=positions_dtype,
+                pin_memory=pin_mem,
             ).to(device, non_blocking=True)
         elif (
             ret.spec_info is not None
@@ -873,12 +889,14 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         else:
             if isinstance(extend_seq_lens, list):
                 # Main path: H2D from host lists; populate *_cpu mirrors.
+                # Pinned so the non_blocking copy is async -- this is the
+                # draft-extend / verify metadata H2D on the spec critical path.
                 assert isinstance(extend_prefix_lens, list)
                 ret.extend_seq_lens = torch.tensor(
-                    extend_seq_lens, dtype=torch.int32
+                    extend_seq_lens, dtype=torch.int32, pin_memory=pin_mem
                 ).to(device, non_blocking=True)
                 ret.extend_prefix_lens = torch.tensor(
-                    extend_prefix_lens, dtype=torch.int32
+                    extend_prefix_lens, dtype=torch.int32, pin_memory=pin_mem
                 ).to(device, non_blocking=True)
                 ret.extend_prefix_lens_cpu = extend_prefix_lens
                 ret.extend_seq_lens_cpu = extend_seq_lens

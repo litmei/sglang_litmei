@@ -486,8 +486,11 @@ class AscendAttnBackend(AttentionBackend):
         if forward_batch.seq_lens is not None:
             self.forward_metadata.seq_lens = forward_batch.seq_lens.int()
         else:
+            # non_blocking: the source seq_lens_cpu is pinned (see
+            # prepare_for_draft_extend / ForwardBatch.init_new), so this H2D
+            # does not stall the CPU on the preceding GPU work.
             self.forward_metadata.seq_lens = forward_batch.seq_lens_cpu.to(
-                self.device
+                self.device, non_blocking=True
             ).int()
 
         self.forward_metadata.seq_lens_cpu_int = forward_batch.seq_lens_cpu.int()
