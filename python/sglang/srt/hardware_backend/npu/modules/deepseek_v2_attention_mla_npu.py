@@ -305,13 +305,32 @@ def forward_mla_core_npu(
     attn_output = attn_output.contiguous()
     # torch.ops.npu.batch_matmul_transpose is not numerically equivalent for
     # Kimi-K3, so use the numerically validated torch_npu implementation.
-    attn_bmm_output = torch_npu.npu_transpose_batchmatmul(
-        attn_output,
-        m.w_vc,
-        perm_x1=(1, 0, 2),
-        perm_x2=(0, 1, 2),
-        perm_y=(1, 0, 2),
-    )
+    # npu_transpose_batchmatmul requires batch * K < 65536 (workspace limit);
+    # DeepSeek MLA (128 heads x kv_lora_rank 512 = 65536) violates it, so chunk
+    # the head batch. The chunked result is bit-identical to a single call.
+    if m.num_local_heads * m.kv_lora_rank >= 65536:
+        head_chunk = 1 << (((65535 // m.kv_lora_rank)).bit_length() - 1)
+        attn_parts = []
+        for s in range(0, m.num_local_heads, head_chunk):
+            e = min(s + head_chunk, m.num_local_heads)
+            attn_parts.append(
+                torch_npu.npu_transpose_batchmatmul(
+                    attn_output[:, s:e],
+                    m.w_vc[s:e],
+                    perm_x1=(1, 0, 2),
+                    perm_x2=(0, 1, 2),
+                    perm_y=(1, 0, 2),
+                )
+            )
+        attn_bmm_output = torch.cat(attn_parts, dim=1)
+    else:
+        attn_bmm_output = torch_npu.npu_transpose_batchmatmul(
+            attn_output,
+            m.w_vc,
+            perm_x1=(1, 0, 2),
+            perm_x2=(0, 1, 2),
+            perm_y=(1, 0, 2),
+        )
 
     attn_bmm_output = attn_bmm_output.reshape(-1, m.num_local_heads * m.v_head_dim)
     output, _ = m.o_proj(attn_bmm_output)
