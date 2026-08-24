@@ -13,6 +13,7 @@ from sglang.srt.layers.amx_utils import (
 )
 from sglang.srt.layers.moe import MoeRunner, MoeRunnerBackend, MoeRunnerConfig
 from sglang.srt.layers.moe.moe_runner.triton import TritonMoeQuantInfo
+from sglang.srt.layers.moe.utils import get_moe_runner_backend
 from sglang.srt.layers.parameter import ChannelQuantScaleParameter, ModelWeightParameter
 from sglang.srt.layers.quantization.base_config import (
     FusedMoEMethodBase,
@@ -41,7 +42,6 @@ _is_cuda = is_cuda()
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _is_cpu_arm64 = is_host_cpu_arm64()
-_is_npu = is_npu()
 
 if _is_cuda:
     from sgl_kernel import int8_scaled_mm
@@ -59,10 +59,17 @@ if _is_cuda:
         M = mat_a.shape[-2]
         N = mat_b.shape[-1]
         return mat_a.new_empty((M, N), dtype=out_dtype)
-elif _is_npu:
-    from sgl_kernel_npu.gemm import int8_scaled_mm, per_token_quant_int8
+elif is_npu():
+    from sgl_kernel_npu.gemm.int8_scaled_mm import (
+        int8_scaled_mm,
+        per_token_quant_int8,
+    )
+    from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
+        NPUW8A8Int8MoEMethod,
+    )
 else:
     from sglang.kernels.ops.quantization.int8_kernel import per_token_quant_int8
+
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +260,11 @@ class W8A8Int8MoEMethod(FusedMoEMethodBase):
 
     def __init__(self, quant_config: W8A8Int8Config):
         self.quant_config = quant_config
+        if is_npu():
+            # NPU runs MoE through the Ascend runner core backed by the
+            # NPU-specific int8 grouped-matmul kernels.
+            self.w13_kernel = NPUW8A8Int8MoEMethod()
+            self.w2_kernel = NPUW8A8Int8MoEMethod()
 
     def create_weights(
         self,
@@ -319,6 +331,13 @@ class W8A8Int8MoEMethod(FusedMoEMethodBase):
         layer.register_parameter("w2_input_scale", w2_input_scale)
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+        if is_npu():
+            # NPU kernels take ownership of the weights/scales: they squeeze the
+            # per-channel scale to bf16, transpose + format-cast the int8 weight,
+            # and configure the dispatcher to output int8 activations.
+            self.w13_kernel.process_weights_after_loading(layer, "w13")
+            self.w2_kernel.process_weights_after_loading(layer, "w2")
+            return
         if _is_cpu_amx_available:
             _amx_process_weight_after_loading(layer, ["w13_weight", "w2_weight"])
         else:
@@ -335,7 +354,16 @@ class W8A8Int8MoEMethod(FusedMoEMethodBase):
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
     ):
         self.moe_runner_config = moe_runner_config
-        self.runner = MoeRunner(MoeRunnerBackend.TRITON, moe_runner_config)
+        if is_npu():
+            layer.w13_kernel = self.w13_kernel
+            layer.w2_kernel = self.w2_kernel
+            moe_runner_config.layer = layer
+            backend = get_moe_runner_backend()
+            if backend.is_auto():
+                backend = MoeRunnerBackend.ASCEND
+            self.runner = MoeRunner(backend, moe_runner_config)
+        else:
+            self.runner = MoeRunner(MoeRunnerBackend.TRITON, moe_runner_config)
 
     def get_triton_quant_info(self, layer: torch.nn.Module) -> TritonMoeQuantInfo:
         return TritonMoeQuantInfo(
@@ -354,6 +382,23 @@ class W8A8Int8MoEMethod(FusedMoEMethodBase):
         layer: torch.nn.Module,
         dispatch_output: StandardDispatchOutput,
     ) -> torch.Tensor:
+        if is_npu():
+            from sglang.srt.layers.moe.moe_runner.ascend import AscendQuantInfo
+
+            quant_info = AscendQuantInfo(
+                w13_weight=layer.w13_weight,
+                w2_weight=layer.w2_weight,
+                w13_weight_scale=layer.w13_weight_scale,
+                w2_weight_scale=layer.w2_weight_scale,
+                w13_weight_offset=getattr(layer, "w13_weight_offset", None),
+                w2_weight_offset=getattr(layer, "w2_weight_offset", None),
+                w13_weight_bias=getattr(layer, "w13_weight_bias", None),
+                w2_weight_bias=getattr(layer, "w2_weight_bias", None),
+                w13_scale_bias=getattr(layer, "w13_scale_bias", None),
+                w2_scale_bias=getattr(layer, "w2_scale_bias", None),
+            )
+            return self.runner.run(dispatch_output, quant_info)
+
         from sglang.srt.layers.moe.token_dispatcher import StandardCombineInput
 
         x = dispatch_output.hidden_states
