@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, cast
 import torch
 from torch.nn.parameter import Parameter
 
-from sglang.kernels.ops.quantization.int8_kernel import per_token_quant_int8
 from sglang.srt.layers.amx_utils import (
     CPUQuantMethod,
     _amx_process_weight_after_loading,
@@ -29,6 +28,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_host_cpu_arm64,
+    is_npu,
     set_weight_attrs,
     use_intel_amx_backend,
 )
@@ -41,9 +41,11 @@ _is_cuda = is_cuda()
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _is_cpu_arm64 = is_host_cpu_arm64()
+_is_npu = is_npu()
 
 if _is_cuda:
     from sgl_kernel import int8_scaled_mm
+    from sglang.kernels.ops.quantization.int8_kernel import per_token_quant_int8
 
     @register_fake_if_exists("sgl_kernel::int8_scaled_mm")
     def _int8_scaled_mm_abstract(
@@ -57,7 +59,10 @@ if _is_cuda:
         M = mat_a.shape[-2]
         N = mat_b.shape[-1]
         return mat_a.new_empty((M, N), dtype=out_dtype)
-
+elif _is_npu:
+    from sgl_kernel_npu.gemm import int8_scaled_mm, per_token_quant_int8
+else:
+    from sglang.kernels.ops.quantization.int8_kernel import per_token_quant_int8
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +213,7 @@ class W8A8Int8LinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
     ):
-        if use_intel_amx_backend(layer) or _is_cpu_arm64:
+        if _is_cpu and (use_intel_amx_backend(layer) or _is_cpu_arm64):
             return torch.ops.sgl_kernel.int8_scaled_mm_with_quant(
                 x,
                 layer.weight,
@@ -354,7 +359,7 @@ class W8A8Int8MoEMethod(FusedMoEMethodBase):
         x = dispatch_output.hidden_states
         topk_output = dispatch_output.topk_output
 
-        if use_intel_amx_backend(layer) or _is_cpu_arm64:
+        if _is_cpu and (use_intel_amx_backend(layer) or _is_cpu_arm64):
             from sglang.srt.layers.moe.topk import apply_topk_weights_cpu
 
             topk_weights, topk_ids, _ = topk_output
