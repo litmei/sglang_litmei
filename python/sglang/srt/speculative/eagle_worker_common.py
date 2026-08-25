@@ -185,7 +185,9 @@ def prepare_for_draft_extend(
     # slots); mutation stays on forward_batch to preserve SB.seq_lens.
     forward_batch.seq_lens = forward_batch.seq_lens + num_draft_tokens
     if not gpu_only:
-        forward_batch.seq_lens_cpu = forward_batch.seq_lens_cpu + num_draft_tokens
+        forward_batch.seq_lens_cpu = (
+            forward_batch.seq_lens_cpu + num_draft_tokens
+        ).pin_memory()
         forward_batch.seq_lens_sum = int(forward_batch.seq_lens_cpu.sum())
     else:
         # Supply CPU mirror (extend_seq_lens are all num_window_tokens) so

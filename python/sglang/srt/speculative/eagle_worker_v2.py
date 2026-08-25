@@ -874,8 +874,16 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         )
         try:
             batch.forward_mode = ForwardMode.DECODE
-            batch.seq_lens = new_seq_lens
-            batch.seq_lens_cpu = batch.seq_lens_cpu + accept_lens_cpu.to(torch.int64)
+            # A request that accepted up to (or past) its output limit is already
+            # finished and will be trimmed next round; its speculative pre-run
+            # must not advance past the draft model's context length, or the
+            # draft graph's fixed-size block_tables buffer overflows on replay
+            # (aclnnInplaceCopy EZ1007: src width > captured buffer width).
+            max_context_len = self.draft_runner.model_config.context_len
+            batch.seq_lens = new_seq_lens.clamp(max=max_context_len)
+            batch.seq_lens_cpu = (
+                batch.seq_lens_cpu + accept_lens_cpu.to(torch.int64)
+            ).clamp_max(max_context_len)
             batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
             batch.spec_info = next_draft_input
             batch.input_ids = torch.zeros(bs, dtype=torch.int64, device=batch.device)
