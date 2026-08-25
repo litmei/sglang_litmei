@@ -478,6 +478,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     is_extend_in_batch: bool = False
     can_run_dp_cuda_graph: bool = False
     can_run_dp_breakable_cuda_graph: bool = False
+    dsa_seed_ready: bool = True
     global_forward_mode: Optional[ForwardMode] = None
 
     # For two-batch overlap
@@ -835,6 +836,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 is_extend_in_batch=batch.is_extend_in_batch,
                 can_run_dp_cuda_graph=batch.can_run_dp_cuda_graph,
                 can_run_dp_breakable_cuda_graph=batch.can_run_dp_breakable_cuda_graph,
+                dsa_seed_ready=batch.dsa_seed_ready,
                 global_forward_mode=batch.global_forward_mode,
                 is_prefill_only=batch.is_prefill_only,
                 spec_algorithm=batch.spec_algorithm,

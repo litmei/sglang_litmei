@@ -74,23 +74,15 @@ class EAGLEDraftNpuGraphRunner(EAGLEDraftCudaGraphRunner):
         # Under attention DP, seed availability is request-local: a real rank can
         # miss the PD seed while idle ranks have no request at all. All ranks must
         # nevertheless choose the same graph/eager path because the draft forward
-        # contains TP/EP collectives. Reduce the final decision across the model TP
-        # group, which contains all attention-DP ranks for this pipeline stage.
-        spec_info = forward_batch.spec_info
-        seed_ready = forward_batch.forward_mode.is_idle() or (
-            spec_info is not None and spec_info.dsa_topk_indices is not None
-        )
-        decision = torch.tensor(
-            int(can_run_graph and seed_ready),
-            dtype=torch.int32,
-            device="cpu",
-        )
-        torch.distributed.all_reduce(
-            decision,
-            op=torch.distributed.ReduceOp.MIN,
-            group=self.model_runner.tp_group.cpu_group,
-        )
-        return bool(decision.item())
+        # contains TP/EP collectives.
+        #
+        # The cross-rank decision is reduced once, at the scheduler's MLP-sync
+        # all-gather (MLPSyncBatchInfo.dsa_seed_ready), where every attention-DP
+        # rank participates via the idle-batch fallback. Doing a collective here
+        # instead deadlocks: idle ranks skip the draft forward and never enter the
+        # all_reduce, while active ranks stay blocked waiting on ranks that have
+        # already advanced to the next scheduler sync / recv.
+        return can_run_graph and forward_batch.dsa_seed_ready
 
     def _replay_graph(self, shape_key, forward_batch):
         hf_config = self.model_runner.model_config.hf_config

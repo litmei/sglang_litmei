@@ -89,6 +89,7 @@ class MLPSyncBatchInfo:
     is_extend_in_batch: bool
     local_can_run_tbo: bool
     local_forward_mode: int
+    dsa_seed_ready: bool
 
     # some gathered elements
     tp0_info_cpu: torch.Tensor = None
@@ -108,6 +109,7 @@ class MLPSyncBatchInfo:
                 int(self.local_can_run_tbo),
                 self.local_forward_mode,
                 int(self.can_run_prefill_cuda_graph),
+                int(self.dsa_seed_ready),
             ],
             device=device,
             dtype=dtype,
@@ -123,6 +125,7 @@ class MLPSyncBatchInfo:
                 1,  # local_can_run_tbo
                 ForwardMode.IDLE.value,  # local_forward_mode
                 0,  # can_run_prefill_cuda_graph
+                1,  # dsa_seed_ready (idle/inactive ranks don't force eager)
             ],
             device=device,
             dtype=dtype,
@@ -190,6 +193,7 @@ class MLPSyncBatchInfo:
         self.can_run_decode_cuda_graph = bool(tp0_info_cpu[:, 2].min())
         self.is_extend_in_batch = bool(tp0_info_cpu[:, 3].max())
         self.can_run_prefill_cuda_graph = bool(tp0_info_cpu[:, 6].min())
+        self.dsa_seed_ready = bool(tp0_info_cpu[:, 7].min())
         if _ENABLE_METRICS_DP_ATTENTION:
             self.dp_cooperation_info = DPCooperationInfo.create(
                 tp0_info_cpu[:, 5].tolist()
@@ -219,6 +223,7 @@ def _update_gather_batch(
     # Check forward mode for cuda graph
     batch.can_run_dp_cuda_graph = mlp_sync_info.can_run_decode_cuda_graph
     batch.can_run_dp_breakable_cuda_graph = mlp_sync_info.can_run_prefill_cuda_graph
+    batch.dsa_seed_ready = mlp_sync_info.dsa_seed_ready
 
 
 def prepare_mlp_sync_batch_raw(
@@ -318,6 +323,18 @@ def prepare_mlp_sync_batch_raw(
         device = "cpu"
 
     local_can_run_tbo, local_forward_mode = tbo_preparer.prepare_all_gather(local_batch)
+    # Whether the DSA index-share seed is available for the draft on this rank.
+    # Idle ranks / no-running-batch ranks have no draft and report "ready" so they
+    # don't force other ranks onto the eager path. Mirrors the draft-side
+    # seed_ready check (EAGLEDraftNpuGraphRunner.can_run_graph).
+    dsa_seed_ready = (
+        local_batch is None
+        or local_batch.forward_mode.is_idle()
+        or (
+            local_batch.spec_info is not None
+            and getattr(local_batch.spec_info, "dsa_topk_indices", None) is not None
+        )
+    )
     if use_world_group:
         dp_size = _resolve_elastic_world_dp_size(
             dp_size,
@@ -337,6 +354,7 @@ def prepare_mlp_sync_batch_raw(
         is_extend_in_batch=is_extend_in_batch,
         local_can_run_tbo=local_can_run_tbo,
         local_forward_mode=local_forward_mode,
+        dsa_seed_ready=dsa_seed_ready,
     )
 
     if not skip_all_gather:
