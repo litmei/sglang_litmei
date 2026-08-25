@@ -876,26 +876,34 @@ class EagleDraftWorker(EagleDraftWorkerBase):
             # pre-concatenation (nothing to seed). Mirrors the non-zero-bubble
             # draft() idle path.
             print(f"[ZB-DBG] rank={_zb_rank} idle -> participate (collective)", flush=True)
-            forward_batch, can_run_decode_cuda_graph = prepare_for_draft(
-                next_draft_input,
-                self.req_to_token_pool,
-                batch,
-                self.cuda_graph_runner,
-                self.draft_runner,
-                self.topk,
-                self.speculative_num_steps,
-            )
-            with spec_stage_span("draft_zero_bubble"):
-                if can_run_decode_cuda_graph:
-                    self.cuda_graph_runner.execute(forward_batch)
-                else:
-                    if (
-                        not forward_batch.forward_mode.is_idle()
-                        and self.speculative_num_steps > 1
-                    ):
-                        self.draft_attn_backend.init_forward_metadata(forward_batch)
-                        forward_batch.mark_forward_metadata_ready()
-                    self.draft_forward(forward_batch)
+            # prepare_for_draft adopts batch.spec_info as forward_batch.spec_info,
+            # but _draft_extend_for_decode left an EagleDraftExtendInput there;
+            # draft_forward needs the EagleDraftInput (next_draft_input) instead.
+            saved_spec_info = batch.spec_info
+            batch.spec_info = next_draft_input
+            try:
+                forward_batch, can_run_decode_cuda_graph = prepare_for_draft(
+                    next_draft_input,
+                    self.req_to_token_pool,
+                    batch,
+                    self.cuda_graph_runner,
+                    self.draft_runner,
+                    self.topk,
+                    self.speculative_num_steps,
+                )
+                with spec_stage_span("draft_zero_bubble"):
+                    if can_run_decode_cuda_graph:
+                        self.cuda_graph_runner.execute(forward_batch)
+                    else:
+                        if (
+                            not forward_batch.forward_mode.is_idle()
+                            and self.speculative_num_steps > 1
+                        ):
+                            self.draft_attn_backend.init_forward_metadata(forward_batch)
+                            forward_batch.mark_forward_metadata_ready()
+                        self.draft_forward(forward_batch)
+            finally:
+                batch.spec_info = saved_spec_info
             return
 
         bs = batch.seq_lens.shape[0]
