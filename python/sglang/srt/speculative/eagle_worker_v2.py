@@ -843,6 +843,21 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         per-round alloc_for_spec_decode stays valid through the next round (no
         mid-stream free), so prepare_for_draft's assign reads valid slots.
         """
+        # ---- TEMP DEBUG (zero-bubble deadlock localization) ----
+        try:
+            _zb_rank = torch.distributed.get_rank()
+        except Exception:
+            _zb_rank = -1
+        print(
+            f"[ZB-DBG] rank={_zb_rank} enter draft_zero_bubble "
+            f"steps={self.speculative_num_steps} "
+            f"idle={batch.forward_mode.is_idle()} "
+            f"next_di_none={batch_output.next_draft_input is None} "
+            f"new_sl_none={batch_output.new_seq_lens is None} "
+            f"slcpu_none={batch.seq_lens_cpu is None} "
+            f"fwd_mode={batch.forward_mode}",
+            flush=True,
+        )
         if self.speculative_num_steps <= 1:
             return
         if batch.forward_mode.is_idle():
@@ -903,13 +918,26 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                 self.topk,
                 self.speculative_num_steps,
             )
+            print(
+                f"[ZB-DBG] rank={_zb_rank} after prepare_for_draft "
+                f"can_graph={can_run_decode_cuda_graph} "
+                f"fb_idle={forward_batch.forward_mode.is_idle()} "
+                f"bs={forward_batch.batch_size} "
+                f"dsa_seed_ready={forward_batch.dsa_seed_ready}",
+                flush=True,
+            )
 
             with spec_stage_span("draft_zero_bubble"):
                 if can_run_decode_cuda_graph:
+                    print(f"[ZB-DBG] rank={_zb_rank} -> GRAPH execute", flush=True)
                     _parent_list, _tsi, draft_tokens, _draft_probs = (
                         self.cuda_graph_runner.execute(forward_batch)
                     )
                 else:
+                    print(
+                        f"[ZB-DBG] rank={_zb_rank} -> EAGER path (init_forward_metadata next)",
+                        flush=True,
+                    )
                     if (
                         not forward_batch.forward_mode.is_idle()
                         and self.speculative_num_steps > 1
