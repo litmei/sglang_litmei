@@ -1477,17 +1477,6 @@ class EAGLEWorkerV2(BaseSpecWorker):
             return False
         if self.topk != 1 or self.speculative_num_steps <= 0:
             return False
-        if self.adaptive_controller is not None:
-            return False
-        if get_spec().speculative_use_rejection_sampling:
-            return False
-        if self._draft_worker.seed_dsa_topk_from_draft_extend:
-            return False
-        # NOTE: no cuda_graph guard -- the zero-bubble path supports both
-        # eager and graph drafts (draft_zero_bubble replays the draft graph and
-        # extracts the per-step topk from its output). Keeping the guard set
-        # identical to the prefill-side pad condition (enable_spec_v2_zero_bubble)
-        # is what makes the feature orthogonal to --disable-cuda-graph.
         return True
 
     def _build_trivial_verify_input(self, batch: ScheduleBatch) -> EagleVerifyInput:
