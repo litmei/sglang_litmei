@@ -860,13 +860,42 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         )
         if self.speculative_num_steps <= 1:
             return
-        if batch.forward_mode.is_idle():
-            return
         next_draft_input = batch_output.next_draft_input
         new_seq_lens = batch_output.new_seq_lens
         if next_draft_input is None or new_seq_lens is None:
             return
         if batch.seq_lens_cpu is None:
+            return
+
+        if batch.forward_mode.is_idle():
+            # Idle attention-DP rank. The active rank's draft_zero_bubble runs a
+            # draft-decode forward below whose MoE/MLP-sync collectives span DP
+            # ranks; an idle rank that early-returns here leaves those
+            # collectives waiting forever (deadlock). Run the same draft forward
+            # with an idle batch instead -- no batch-state advance, no topk
+            # pre-concatenation (nothing to seed). Mirrors the non-zero-bubble
+            # draft() idle path.
+            print(f"[ZB-DBG] rank={_zb_rank} idle -> participate (collective)", flush=True)
+            forward_batch, can_run_decode_cuda_graph = prepare_for_draft(
+                next_draft_input,
+                self.req_to_token_pool,
+                batch,
+                self.cuda_graph_runner,
+                self.draft_runner,
+                self.topk,
+                self.speculative_num_steps,
+            )
+            with spec_stage_span("draft_zero_bubble"):
+                if can_run_decode_cuda_graph:
+                    self.cuda_graph_runner.execute(forward_batch)
+                else:
+                    if (
+                        not forward_batch.forward_mode.is_idle()
+                        and self.speculative_num_steps > 1
+                    ):
+                        self.draft_attn_backend.init_forward_metadata(forward_batch)
+                        forward_batch.mark_forward_metadata_ready()
+                    self.draft_forward(forward_batch)
             return
 
         bs = batch.seq_lens.shape[0]
