@@ -44,7 +44,7 @@ def _is_cpu_available() -> bool:
 
 
 def _is_npu_available() -> bool:
-    return torch.npu.is_available()
+    return hasattr(torch, "npu") and torch.npu.is_available()
 
 
 def _is_xpu_available() -> bool:

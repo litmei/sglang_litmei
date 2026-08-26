@@ -15,6 +15,7 @@ from sglang.srt.model_executor.forward_batch_info import (
     ForwardBatch,
     ForwardMode,
 )
+from sglang.srt.platforms import current_platform
 from sglang.srt.speculative.eagle_info import EagleDraftInput, EagleVerifyInput
 from sglang.srt.speculative.eagle_utils import (
     TreeMaskMode,
@@ -192,7 +193,9 @@ def prepare_for_draft_extend(
     if not gpu_only:
         forward_batch.seq_lens_cpu = (
             forward_batch.seq_lens_cpu + num_draft_tokens
-        ).pin_memory()
+        )
+        if current_platform.is_pin_memory_available():
+            forward_batch.seq_lens_cpu = forward_batch.seq_lens_cpu.pin_memory()
         forward_batch.seq_lens_sum = int(forward_batch.seq_lens_cpu.sum())
     else:
         # Supply CPU mirror (extend_seq_lens are all num_window_tokens) so

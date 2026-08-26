@@ -817,7 +817,7 @@ class EagleDraftWorker(EagleDraftWorkerBase):
             parent_list,
             top_scores_index,
             draft_tokens,
-            None,  # zero-bubble v1: rejection sampling excluded by guard
+            None,
             target_worker=self.target_worker,
             topk=self.topk,
             num_steps=self.speculative_num_steps,
@@ -831,7 +831,6 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         self,
         batch: ScheduleBatch,
         batch_output: GenerationBatchResult,
-        accept_lens_cpu: torch.Tensor,
     ) -> None:
         """Zero-bubble: pre-run the next round's draft right after this round's
         draft_extend, and pre-concatenate its per-step topk into
@@ -849,7 +848,7 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         new_seq_lens = batch_output.new_seq_lens
         if next_draft_input is None or new_seq_lens is None:
             return
-        if batch.seq_lens_cpu is None:
+        if batch.seq_lens_cpu is None or batch_output.accept_lens is None:
             return
 
         if batch.forward_mode.is_idle():
@@ -895,8 +894,9 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         # Temporarily advance the batch to the next round's state so the draft
         # chain consumes exactly what the next round's draft() would: the
         # post-verify seq lens and the just-built next_draft_input. The CPU
-        # mirror is derived arithmetically (seq_lens_cpu + accept) -- no D2H
-        # sync on the critical path.
+        # mirror comes from a blocking accept_lens D2H below -- enqueued after
+        # draft_extend on the forward stream, so the host wait overlaps its
+        # GPU execution instead of adding a bubble.
         saved_state = (
             batch.forward_mode,
             batch.seq_lens,
@@ -917,6 +917,12 @@ class EagleDraftWorker(EagleDraftWorkerBase):
             # (aclnnInplaceCopy EZ1007: src width > captured buffer width).
             max_context_len = self.draft_runner.model_config.context_len
             batch.seq_lens = new_seq_lens.clamp(max=max_context_len)
+            # Blocking D2H on the forward stream, enqueued after draft_extend:
+            # the host wait overlaps draft_extend's GPU execution, and the
+            # values are guaranteed materialized before the CPU arithmetic
+            # below (an async copy into pageable memory has no such
+            # guarantee).
+            accept_lens_cpu = batch_output.accept_lens.to("cpu")
             batch.seq_lens_cpu = (
                 batch.seq_lens_cpu + accept_lens_cpu.to(torch.int64)
             ).clamp_max(max_context_len)
@@ -1472,13 +1478,6 @@ class EAGLEWorkerV2(BaseSpecWorker):
             # Publish before draft_extend so the fence is at verify-end.
             if on_publish is not None:
                 on_publish(batch_output.new_seq_lens)
-            # Zero-bubble: kick off the async accept_lens D2H now so it overlaps
-            # draft_extend below; draft_zero_bubble needs it right after.
-            accept_lens_cpu = None
-            if zero_bubble and batch_output.accept_lens is not None:
-                accept_lens_cpu = batch_output.accept_lens.to(
-                    "cpu", non_blocking=True
-                )
             if (
                 self.speculative_num_steps == 0
                 and envs.SGLANG_SPEC_SKIP_ZERO_STEP_DRAFT_EXTEND.get()
@@ -1497,10 +1496,8 @@ class EAGLEWorkerV2(BaseSpecWorker):
 
             # Zero-bubble: pre-run the next round's draft right after
             # draft_extend, back-to-back on the forward stream.
-            if zero_bubble and accept_lens_cpu is not None:
-                self.draft_worker.draft_zero_bubble(
-                    batch, batch_output, accept_lens_cpu
-                )
+            if zero_bubble:
+                self.draft_worker.draft_zero_bubble(batch, batch_output)
 
             return batch_output
 
@@ -1512,6 +1509,10 @@ class EAGLEWorkerV2(BaseSpecWorker):
         if not self.draft_worker.enable_spec_v2_zero_bubble:
             return False
         if self.topk != 1 or self.speculative_num_steps <= 0:
+            return False
+        if self.adaptive_controller is not None:
+            return False
+        if get_spec().speculative_use_rejection_sampling:
             return False
         return True
 
