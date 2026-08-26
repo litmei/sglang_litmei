@@ -737,7 +737,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         self.original_global_num_tokens_cpu = batch.global_num_tokens
         self.global_num_tokens_cpu = global_num_tokens
-        pin_mem = current_platform.is_pin_memory_available() or _is_npu # todo
+        pin_mem = current_platform.is_pin_memory_available() or _is_npu
         self.global_num_tokens_gpu = torch.tensor(
             global_num_tokens, dtype=torch.int64, pin_memory=pin_mem
         ).to(device, non_blocking=True)
@@ -857,7 +857,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             ret._maybe_init_non_generation_fields(batch)
 
         device = model_runner.device
-        pin_mem = current_platform.is_pin_memory_available() or _is_npu # todo
+        pin_mem = current_platform.is_pin_memory_available() or _is_npu
 
         if envs.SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE.get():
             hashed = _hash_rids_to_tensor(
