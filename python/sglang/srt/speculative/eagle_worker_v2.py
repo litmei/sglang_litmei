@@ -878,12 +878,9 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                     if can_run_decode_cuda_graph:
                         self.cuda_graph_runner.execute(forward_batch)
                     else:
-                        if (
-                            not forward_batch.forward_mode.is_idle()
-                            and self.speculative_num_steps > 1
-                        ):
-                            self.draft_attn_backend.init_forward_metadata(forward_batch)
-                            forward_batch.mark_forward_metadata_ready()
+                        # Always idle here: batch.forward_mode propagates
+                        # unchanged through prepare_for_draft, so no metadata
+                        # init is needed (same as draft()'s idle path).
                         self.draft_forward(forward_batch)
             finally:
                 batch.spec_info = saved_spec_info
@@ -952,17 +949,16 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                         self.cuda_graph_runner.execute(forward_batch)
                     )
                 else:
-                    if (
-                        not forward_batch.forward_mode.is_idle()
-                        and self.speculative_num_steps > 1
-                    ):
-                        self.draft_attn_backend.init_forward_metadata(forward_batch)
-                        forward_batch.mark_forward_metadata_ready()
+                    # Always a non-idle DECODE batch here (set above, and
+                    # num_steps > 1 is guaranteed by the early return).
+                    self.draft_attn_backend.init_forward_metadata(forward_batch)
+                    forward_batch.mark_forward_metadata_ready()
                     _parent_list, _tsi, draft_tokens, _draft_probs = (
                         self.draft_forward(forward_batch)
                     )
 
-                # topk=1: draft_tokens = [seed, t1, ..., t(N-1)]，链上输出是 [:, 1:]
+                # topk=1: draft_tokens = [seed, t1, ..., t(N-1)]; the chain
+                # output is [:, 1:]
                 ret_topk_index = draft_tokens[:, 1:]
                 ret_topk_p = torch.ones_like(ret_topk_index, dtype=torch.float32)
 
