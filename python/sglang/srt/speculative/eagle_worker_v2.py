@@ -157,11 +157,7 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         self.speculative_algorithm = SpeculativeAlgorithm.from_string(
             server_args.speculative_algorithm
         )
-        # Spec V2 zero-bubble: pre-run the next round's draft right after
-        # draft_extend and consume its per-step topk directly at the next decode
-        # entry. Carried via the serialized ServerArgs field (see
-        # server_args._handle_environment_variables), mirroring mtp_v2_push.
-        self.enable_spec_v2_zero_bubble = server_args.enable_spec_v2_zero_bubble
+        self.enable_spec_v2_zero_bubble = get_spec().enable_spec_v2_zero_bubble
 
         self._rebuild_topk1_chain_buffers()
 
@@ -744,6 +740,7 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         Also normalizes the prefill seed to the TARGET id space (the
         concatenated zero-bubble buffer is uniformly target-id).
         """
+        # [bs, topk] -> [bs, num_steps * topk]  (topk=1: [bs,1] -> [bs,N])
         if self.enable_spec_v2_zero_bubble and self.speculative_num_steps > 1:
             if self.hot_token_id is not None:
                 topk_index = self.hot_token_id[topk_index]
@@ -757,31 +754,18 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                 )
         return topk_p, topk_index
 
-    def draft_forward_for_prepare(self, spec_info: EagleDraftInput):
-        """Zero-bubble decode entry: organize the pre-concatenated per-step
-        topk into a tree WITHOUT running the draft model.
-
-        topk=1 (the only supported case): the tree is a plain chain -- the
-        parents are arithmetic ([-1, 0, .., N-2]) and the global topk over the
-        concatenated scores picks every candidate, so this is exactly the tree
-        the normal path would build.
-        """
-        topk_p = spec_info.topk_p
-        # NOTE: no hot_token_id remap here. The zero-bubble pre-concatenation
-        # (draft_zero_bubble) normalizes every candidate to the TARGET id
-        # space (draft chain output is already remapped; the draft_extend seed
-        # is remapped at concat time; prefill seeds are remapped in
-        # _pad_topk_for_zero_bubble), so a remap here would double-map the
-        # chain candidates (draft_id -> target_id applied to target ids).
-        topk_index = spec_info.topk_index
+    def prepare_verify_fully_async_decoding(self, batch: ScheduleBatch) -> EagleVerifyInput:
+        """Zero-bubble decode entry: build the EagleVerifyInput from the
+        pre-concatenated topk without running the draft model. The draft GPU
+        work already happened inside the previous round's draft_zero_bubble."""
+        draft_input: EagleDraftInput = batch.spec_info
+        topk_p = draft_input.topk_p
+        topk_index = draft_input.topk_index
 
         b = topk_p.shape[0]
         N = self.speculative_num_steps
 
         if N > 1:
-            # topk=1 chain parents: [-1, 0, 1, ..., N-2] (N columns), matching
-            # the normal path's _topk1_parents_prealloc. repeat (not expand):
-            # the tree kernel reads these as contiguous.
             parent_list = torch.arange(
                 -1, N - 1, dtype=torch.long, device=self.device
             ).repeat(b, 1)
@@ -799,25 +783,13 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         )
         draft_tokens = torch.gather(topk_index, index=top_scores_index, dim=1)
 
-        return parent_list, top_scores_index, draft_tokens
-
-    def prepare_verify_fully_async_decoding(
-        self, batch: ScheduleBatch
-    ) -> EagleVerifyInput:
-        """Zero-bubble decode entry: build the EagleVerifyInput from the
-        pre-concatenated topk without running the draft model. The draft GPU
-        work already happened inside the previous round's draft_zero_bubble."""
-        draft_input: EagleDraftInput = batch.spec_info
-        parent_list, top_scores_index, draft_tokens = self.draft_forward_for_prepare(
-            draft_input
-        )
-        verify_input = build_eagle_verify_input(
+        return build_eagle_verify_input(
             batch,
             draft_input,
             parent_list,
             top_scores_index,
             draft_tokens,
-            None,
+            None,  # zero-bubble: rejection sampling excluded by guard
             target_worker=self.target_worker,
             topk=self.topk,
             num_steps=self.speculative_num_steps,
@@ -825,7 +797,6 @@ class EagleDraftWorker(EagleDraftWorkerBase):
             tree_mask_mode=self.tree_mask_mode,
             device=self.device,
         )
-        return verify_input
 
     def draft_zero_bubble(
         self,
@@ -851,49 +822,7 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         if batch.seq_lens_cpu is None or batch_output.accept_lens is None:
             return
 
-        if batch.forward_mode.is_idle():
-            # Idle attention-DP rank. The active rank's draft_zero_bubble runs a
-            # draft-decode forward below whose MoE/MLP-sync collectives span DP
-            # ranks; an idle rank that early-returns here leaves those
-            # collectives waiting forever (deadlock). Run the same draft forward
-            # with an idle batch instead -- no batch-state advance, no topk
-            # pre-concatenation (nothing to seed). Mirrors the non-zero-bubble
-            # draft() idle path.
-            # prepare_for_draft adopts batch.spec_info as forward_batch.spec_info,
-            # but _draft_extend_for_decode left an EagleDraftExtendInput there;
-            # draft_forward needs the EagleDraftInput (next_draft_input) instead.
-            saved_spec_info = batch.spec_info
-            batch.spec_info = next_draft_input
-            try:
-                forward_batch, can_run_decode_cuda_graph = prepare_for_draft(
-                    next_draft_input,
-                    self.req_to_token_pool,
-                    batch,
-                    self.cuda_graph_runner,
-                    self.draft_runner,
-                    self.topk,
-                    self.speculative_num_steps,
-                )
-                with spec_stage_span("draft_zero_bubble"):
-                    if can_run_decode_cuda_graph:
-                        self.cuda_graph_runner.execute(forward_batch)
-                    else:
-                        # Always idle here: batch.forward_mode propagates
-                        # unchanged through prepare_for_draft, so no metadata
-                        # init is needed (same as draft()'s idle path).
-                        self.draft_forward(forward_batch)
-            finally:
-                batch.spec_info = saved_spec_info
-            return
-
         bs = batch.seq_lens.shape[0]
-
-        # Temporarily advance the batch to the next round's state so the draft
-        # chain consumes exactly what the next round's draft() would: the
-        # post-verify seq lens and the just-built next_draft_input. The CPU
-        # mirror comes from a blocking accept_lens D2H below -- enqueued after
-        # draft_extend on the forward stream, so the host wait overlaps its
-        # GPU execution instead of adding a bubble.
         saved_state = (
             batch.forward_mode,
             batch.seq_lens,
@@ -906,32 +835,17 @@ class EagleDraftWorker(EagleDraftWorkerBase):
             batch.extend_num_tokens,
         )
         try:
-            batch.forward_mode = ForwardMode.DECODE
-            # A request that accepted up to (or past) its output limit is already
-            # finished and will be trimmed next round; its speculative pre-run
-            # must not advance past the draft model's context length, or the
-            # draft graph's fixed-size block_tables buffer overflows on replay
-            # (aclnnInplaceCopy EZ1007: src width > captured buffer width).
-            max_context_len = self.draft_runner.model_config.context_len
-            batch.seq_lens = new_seq_lens.clamp(max=max_context_len)
-            # Blocking D2H on the forward stream, enqueued after draft_extend:
-            # the host wait overlaps draft_extend's GPU execution, and the
-            # values are guaranteed materialized before the CPU arithmetic
-            # below (an async copy into pageable memory has no such
-            # guarantee).
-            accept_lens_cpu = batch_output.accept_lens.to("cpu", non_blocking=True)
-            batch.seq_lens_cpu = (
-                batch.seq_lens_cpu + accept_lens_cpu.to(torch.int64)
-            ).clamp_max(max_context_len)
-            batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
             batch.spec_info = next_draft_input
-            batch.input_ids = torch.zeros(bs, dtype=torch.int64, device=batch.device)
-            # prepare_for_draft_extend left extend-mode fields on the batch
-            # (prefix_lens / extend_lens / extend_num_tokens); the draft-decode
-            # metadata must not see them.
-            batch.prefix_lens = None
-            batch.extend_lens = None
-            batch.extend_num_tokens = None
+            if not batch.forward_mode.is_idle():
+                batch.forward_mode = ForwardMode.DECODE
+                batch.seq_lens = new_seq_lens
+                if not get_spec().skip_spec_v2_zero_bubble_seq_lens_cpu_sync:
+                    batch.seq_lens_cpu = new_seq_lens.to("cpu")
+                batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
+                batch.input_ids = torch.zeros(bs, dtype=torch.int64, device=batch.device)
+                batch.prefix_lens = None
+                batch.extend_lens = None
+                batch.extend_num_tokens = None
 
             forward_batch, can_run_decode_cuda_graph = prepare_for_draft(
                 next_draft_input,
@@ -945,41 +859,28 @@ class EagleDraftWorker(EagleDraftWorkerBase):
 
             with spec_stage_span("draft_zero_bubble"):
                 if can_run_decode_cuda_graph:
-                    _parent_list, _tsi, draft_tokens, _draft_probs = (
-                        self.cuda_graph_runner.execute(forward_batch)
-                    )
+                    _parent_list, _tsi, draft_tokens, _draft_probs = self.cuda_graph_runner.execute(forward_batch)
                 else:
-                    # Always a non-idle DECODE batch here (set above, and
-                    # num_steps > 1 is guaranteed by the early return).
-                    self.draft_attn_backend.init_forward_metadata(forward_batch)
-                    forward_batch.mark_forward_metadata_ready()
-                    _parent_list, _tsi, draft_tokens, _draft_probs = (
-                        self.draft_forward(forward_batch)
-                    )
+                    if not batch.forward_mode.is_idle():
+                        self.draft_attn_backend.init_forward_metadata(forward_batch)
+                        forward_batch.mark_forward_metadata_ready()
+                    _parent_list, _tsi, draft_tokens, _draft_probs = self.draft_forward(forward_batch)
 
-                # topk=1: draft_tokens = [seed, t1, ..., t(N-1)]; the chain
-                # output is [:, 1:]
+            if not batch.forward_mode.is_idle():
+                # topk=1: draft_tokens = [seed, t1, ..., t(N-1)]; the chain output is [:, 1:]
                 ret_topk_index = draft_tokens[:, 1:]
                 ret_topk_p = torch.ones_like(ret_topk_index, dtype=torch.float32)
 
-            # Pre-concatenate the per-step topk into the next round's draft
-            # input: draft_extend produced 1 candidate (at the accepted
-            # position); the chain produced num_steps-1 more. clone() keeps the
-            # values detached from the forward batch's transient buffers.
-            # Normalize the extend seed to the TARGET id space (the chain
-            # output is already remapped by draft_forward), so the concatenated
-            # buffer is uniformly in target-id space and the decode-entry
-            # organizer performs no further remap.
-            if self.hot_token_id is not None:
-                next_draft_input.topk_index = self.hot_token_id[
-                    next_draft_input.topk_index
-                ]
-            next_draft_input.topk_p = torch.cat(
-                [next_draft_input.topk_p, ret_topk_p.reshape(bs, -1)], dim=1
-            ).clone()
-            next_draft_input.topk_index = torch.cat(
-                [next_draft_input.topk_index, ret_topk_index.reshape(bs, -1)], dim=1
-            ).clone()
+                if self.hot_token_id is not None:
+                    next_draft_input.topk_index = self.hot_token_id[
+                        next_draft_input.topk_index
+                    ]
+                next_draft_input.topk_p = torch.cat(
+                    [next_draft_input.topk_p, ret_topk_p.reshape(bs, -1)], dim=1
+                ).clone()
+                next_draft_input.topk_index = torch.cat(
+                    [next_draft_input.topk_index, ret_topk_index.reshape(bs, -1)], dim=1
+                ).clone()
         finally:
             (
                 batch.forward_mode,
@@ -1319,6 +1220,8 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 config_path=server_args.speculative_adaptive_config,
             )
 
+        self.enable_spec_v2_zero_bubble = get_spec().enable_spec_v2_zero_bubble
+
         # Some dummy tensors
         self.num_new_pages_per_topk = torch.empty(
             (), dtype=torch.int64, device=self.device
@@ -1416,12 +1319,6 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 return batch_output
         else:
             self.activate_step_by_batch(batch.seq_lens.shape[0])
-            # Spec V2 zero-bubble: pre-run the next round's draft after this
-            # round's draft_extend and consume it directly at the next decode
-            # entry (no draft model forward on the critical path). The guard is
-            # startup-stable (batch-independent): every decode round either
-            # uses zero-bubble or the normal path, never a mix.
-            zero_bubble = self._zero_bubble_eligible()
 
             if batch.spec_info is None:
                 capture_mode = (
@@ -1439,7 +1336,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
                     # Zero-bubble pre-concatenates the per-step topk along the
                     # candidate axis: the input width is steps * topk.
                     topk=self.topk
-                    * (self.speculative_num_steps if zero_bubble else 1),
+                    * (self.speculative_num_steps if self.enable_spec_v2_zero_bubble else 1),
                     capture_hidden_mode=capture_mode,
                     vocab_size=self.target_worker.model_config.vocab_size,
                 )
@@ -1456,9 +1353,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
                     speculative_moe_a2a_backend_context(),
                     spec_stage_span("draft"),
                 ):
-                    if zero_bubble:
-                        # No draft model forward: the per-step topk was already
-                        # pre-computed by the previous round's draft_zero_bubble.
+                    if self.enable_spec_v2_zero_bubble:
                         verify_input: EagleVerifyInput = (
                             self.draft_worker.prepare_verify_fully_async_decoding(
                                 batch
@@ -1492,25 +1387,10 @@ class EAGLEWorkerV2(BaseSpecWorker):
 
             # Zero-bubble: pre-run the next round's draft right after
             # draft_extend, back-to-back on the forward stream.
-            if zero_bubble:
+            if self.enable_spec_v2_zero_bubble:
                 self.draft_worker.draft_zero_bubble(batch, batch_output)
 
             return batch_output
-
-    def _zero_bubble_eligible(self) -> bool:
-        """Startup-stable guard for the spec-v2 zero-bubble path (topk=1 only,
-        eager only). Batch-dependent conditions are handled inside
-        prepare_verify_fully_async_decoding / draft_zero_bubble (idle etc.).
-        """
-        if not self.draft_worker.enable_spec_v2_zero_bubble:
-            return False
-        if self.topk != 1 or self.speculative_num_steps <= 0:
-            return False
-        if self.adaptive_controller is not None:
-            return False
-        if get_spec().speculative_use_rejection_sampling:
-            return False
-        return True
 
     def _build_trivial_verify_input(self, batch: ScheduleBatch) -> EagleVerifyInput:
         """Build a 1-node EagleVerifyInput rooted at the previous bonus token.

@@ -1438,8 +1438,13 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         # padding
         self._pad_inputs_to_size(model_runner, num_tokens, bs)
         self.global_num_tokens_cpu = global_num_tokens
-        global_num_tokens_pinned = torch.tensor(global_num_tokens, pin_memory=True)
-        self.global_num_tokens_gpu.copy_(global_num_tokens_pinned, non_blocking=True)
+        pin_mem = current_platform.is_pin_memory_available()
+        global_num_tokens_pinned = torch.tensor(
+            global_num_tokens, pin_memory=pin_mem
+        )
+        self.global_num_tokens_gpu.copy_(
+            global_num_tokens_pinned, non_blocking=pin_mem
+        )
 
         TboForwardBatchPreparer.prepare(
             batch=self, is_draft_worker=model_runner.is_draft_worker
