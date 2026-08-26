@@ -756,8 +756,6 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         capture_hidden_mode: Optional[CaptureHiddenMode] = None,
         return_hidden_states_before_norm: bool,
     ):
-        from sglang.srt.speculative.spec_utils import spec_stage_span
-
         # init_new must not mutate the input ScheduleBatch; per-forward
         # overrides go through explicit keyword arguments.
 
@@ -805,56 +803,55 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         if batch.seq_lens_sum is None and seq_lens_cpu is not None:
             batch.seq_lens_sum = int(seq_lens_cpu.sum())
 
-        with spec_stage_span("fb_init_core"):
-            ret = cls(
-                # Required core inputs
-                forward_mode=batch.forward_mode,
-                batch_size=len(batch.seq_lens),
-                input_ids=batch.input_ids,
-                req_pool_indices=batch.req_pool_indices,
-                seq_lens=batch.seq_lens,
-                out_cache_loc=batch.out_cache_loc,
-                seq_lens_sum=batch.seq_lens_sum,
-                # Inputs aliased by reference from ScheduleBatch
-                seq_lens_cpu=seq_lens_cpu,
-                orig_seq_lens=batch.orig_seq_lens,
-                out_cache_loc_dsv4=batch.out_cache_loc_dsv4,
-                mamba_track_indices=batch.mamba_track_indices,
-                mamba_track_mask=batch.mamba_track_mask,
-                mamba_track_seqlens=batch.mamba_track_seqlens,
-                mamba_cow_src_indices=batch.mamba_cow_src_indices,
-                mamba_cow_dst_indices=batch.mamba_cow_dst_indices,
-                mamba_clear_indices=batch.mamba_clear_indices,
-                encoder_lens=batch.encoder_lens,
-                encoder_out_cache_loc=batch.encoder_out_cache_loc,
-                input_embeds=batch.input_embeds,
-                replace_embeds=batch.replace_embeds,
-                replace_positions=batch.replace_positions,
-                # Scalar config / flags
-                return_logprob=batch.return_logprob,
-                is_extend_in_batch=batch.is_extend_in_batch,
-                can_run_dp_cuda_graph=batch.can_run_dp_cuda_graph,
-                can_run_dp_breakable_cuda_graph=batch.can_run_dp_breakable_cuda_graph,
-                global_forward_mode=batch.global_forward_mode,
-                is_prefill_only=batch.is_prefill_only,
-                spec_algorithm=batch.spec_algorithm,
-                capture_hidden_mode=capture_hidden_mode,
-                return_hidden_states_before_norm=return_hidden_states_before_norm,
-                tbo_split_seq_index=batch.tbo_split_seq_index,
-                # Host-side metadata
-                top_logprobs_nums=batch.top_logprobs_nums,
-                token_ids_logprobs=batch.token_ids_logprobs,
-                mm_inputs=batch.multimodal_inputs,
-                encoder_cached=batch.encoder_cached,
-                encoder_lens_cpu=batch.encoder_lens_cpu,
-                lora_ids=[req.lora_id for req in batch.reqs],
-                rids=[req.rid for req in batch.reqs],
-                # Compound (carry their own device tensors)
-                sampling_info=batch.sampling_info,
-                spec_info=batch.spec_info,
-            )
+        ret = cls(
+            # Required core inputs
+            forward_mode=batch.forward_mode,
+            batch_size=len(batch.seq_lens),
+            input_ids=batch.input_ids,
+            req_pool_indices=batch.req_pool_indices,
+            seq_lens=batch.seq_lens,
+            out_cache_loc=batch.out_cache_loc,
+            seq_lens_sum=batch.seq_lens_sum,
+            # Inputs aliased by reference from ScheduleBatch
+            seq_lens_cpu=seq_lens_cpu,
+            orig_seq_lens=batch.orig_seq_lens,
+            out_cache_loc_dsv4=batch.out_cache_loc_dsv4,
+            mamba_track_indices=batch.mamba_track_indices,
+            mamba_track_mask=batch.mamba_track_mask,
+            mamba_track_seqlens=batch.mamba_track_seqlens,
+            mamba_cow_src_indices=batch.mamba_cow_src_indices,
+            mamba_cow_dst_indices=batch.mamba_cow_dst_indices,
+            mamba_clear_indices=batch.mamba_clear_indices,
+            encoder_lens=batch.encoder_lens,
+            encoder_out_cache_loc=batch.encoder_out_cache_loc,
+            input_embeds=batch.input_embeds,
+            replace_embeds=batch.replace_embeds,
+            replace_positions=batch.replace_positions,
+            # Scalar config / flags
+            return_logprob=batch.return_logprob,
+            is_extend_in_batch=batch.is_extend_in_batch,
+            can_run_dp_cuda_graph=batch.can_run_dp_cuda_graph,
+            can_run_dp_breakable_cuda_graph=batch.can_run_dp_breakable_cuda_graph,
+            global_forward_mode=batch.global_forward_mode,
+            is_prefill_only=batch.is_prefill_only,
+            spec_algorithm=batch.spec_algorithm,
+            capture_hidden_mode=capture_hidden_mode,
+            return_hidden_states_before_norm=return_hidden_states_before_norm,
+            tbo_split_seq_index=batch.tbo_split_seq_index,
+            # Host-side metadata
+            top_logprobs_nums=batch.top_logprobs_nums,
+            token_ids_logprobs=batch.token_ids_logprobs,
+            mm_inputs=batch.multimodal_inputs,
+            encoder_cached=batch.encoder_cached,
+            encoder_lens_cpu=batch.encoder_lens_cpu,
+            lora_ids=[req.lora_id for req in batch.reqs],
+            rids=[req.rid for req in batch.reqs],
+            # Compound (carry their own device tensors)
+            sampling_info=batch.sampling_info,
+            spec_info=batch.spec_info,
+        )
 
-            ret._maybe_init_non_generation_fields(batch)
+        ret._maybe_init_non_generation_fields(batch)
 
         device = model_runner.device
         pin_mem = current_platform.is_pin_memory_available() or _is_npu
@@ -890,8 +887,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             ).to(device, non_blocking=True)
         ret.num_token_non_padded_cpu = num_tokens
 
-        with spec_stage_span("fb_init_mlp_sync"):
-            ret.init_mlp_sync_metadata(batch, device)
+        ret.init_mlp_sync_metadata(batch, device)
 
         if ret.forward_mode.is_idle():
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
@@ -899,99 +895,97 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 model_runner.lora_manager.reset_lora_batch()
             return ret
 
-        with spec_stage_span("fb_init_positions"):
-            # Override the positions with diffusion LLM or spec_info
-            if batch.dllm_config is not None:
-                block_size = batch.dllm_config.block_size
-                # Use int64 for AMD rotary embedding kernel compatibility
-                positions_dtype = torch.int64 if is_hip() or _is_npu else torch.int32
-                ret.positions = torch.tensor(
-                    [
-                        i
-                        for block_offset in (
-                            req.dllm_block_offset for req in batch.reqs
-                        )
-                        for i in range(block_offset, block_offset + block_size)
-                    ],
-                    dtype=positions_dtype,
-                    pin_memory=pin_mem,
+        # Override the positions with diffusion LLM or spec_info
+        if batch.dllm_config is not None:
+            block_size = batch.dllm_config.block_size
+            # Use int64 for AMD rotary embedding kernel compatibility
+            positions_dtype = torch.int64 if is_hip() or _is_npu else torch.int32
+            ret.positions = torch.tensor(
+                [
+                    i
+                    for block_offset in (
+                        req.dllm_block_offset for req in batch.reqs
+                    )
+                    for i in range(block_offset, block_offset + block_size)
+                ],
+                dtype=positions_dtype,
+                pin_memory=pin_mem,
+            ).to(device, non_blocking=True)
+        elif (
+            ret.spec_info is not None
+            and getattr(ret.spec_info, "positions", None) is not None
+        ):
+            ret.positions = ret.spec_info.positions
+
+        # Init position information
+        if ret.forward_mode.is_decode() or ret.forward_mode.is_target_verify():
+            if ret.positions is None:
+                ret.positions = clamp_position(batch.seq_lens)
+        else:
+            if isinstance(extend_seq_lens, list):
+                # Main path: H2D from host lists; populate *_cpu mirrors.
+                assert isinstance(extend_prefix_lens, list)
+                ret.extend_seq_lens = torch.tensor(
+                    extend_seq_lens, dtype=torch.int32, pin_memory=pin_mem
                 ).to(device, non_blocking=True)
-            elif (
+                ret.extend_prefix_lens = torch.tensor(
+                    extend_prefix_lens, dtype=torch.int32, pin_memory=pin_mem
+                ).to(device, non_blocking=True)
+                ret.extend_prefix_lens_cpu = extend_prefix_lens
+                ret.extend_seq_lens_cpu = extend_seq_lens
+            else:
+                # gpu_only: device tensors handed in directly; leave *_cpu unset.
+                assert isinstance(extend_seq_lens, torch.Tensor)
+                ret.extend_seq_lens = extend_seq_lens
+                ret.extend_prefix_lens = extend_prefix_lens
+            ret.extend_num_tokens = batch.extend_num_tokens
+            positions, ret.extend_start_loc = compute_position(
+                model_runner.prefill_attention_backend_str,
+                ret.extend_prefix_lens,
+                ret.extend_seq_lens,
+                ret.extend_num_tokens,
+            )
+            if ret.positions is None:
+                ret.positions = positions
+            ret.extend_logprob_start_lens_cpu = extend_logprob_start_lens
+
+        if model_runner.ngram_embedding_manager.enabled:
+            ret._init_ngram_embedding_info(batch, device)
+
+        if model_runner.model_config.model_is_mrope:
+            if (
                 ret.spec_info is not None
                 and getattr(ret.spec_info, "positions", None) is not None
             ):
-                ret.positions = ret.spec_info.positions
-
-            # Init position information
-            if ret.forward_mode.is_decode() or ret.forward_mode.is_target_verify():
-                if ret.positions is None:
-                    ret.positions = clamp_position(batch.seq_lens)
+                ret.compute_spec_mrope_positions(model_runner, batch)
+            elif ret.forward_mode.is_draft_extend_v2():
+                # Draft-extend tokens are uniform text continuation; reuse the
+                # spec mrope path with the input-consistent `ret.positions` rather
+                # than the per-request rebuild (which mis-sizes mm requests).
+                ret.compute_spec_mrope_positions(
+                    model_runner, batch, seq_positions=ret.positions
+                )
             else:
-                if isinstance(extend_seq_lens, list):
-                    # Main path: H2D from host lists; populate *_cpu mirrors.
-                    assert isinstance(extend_prefix_lens, list)
-                    ret.extend_seq_lens = torch.tensor(
-                        extend_seq_lens, dtype=torch.int32, pin_memory=pin_mem
-                    ).to(device, non_blocking=True)
-                    ret.extend_prefix_lens = torch.tensor(
-                        extend_prefix_lens, dtype=torch.int32, pin_memory=pin_mem
-                    ).to(device, non_blocking=True)
-                    ret.extend_prefix_lens_cpu = extend_prefix_lens
-                    ret.extend_seq_lens_cpu = extend_seq_lens
-                else:
-                    # gpu_only: device tensors handed in directly; leave *_cpu unset.
-                    assert isinstance(extend_seq_lens, torch.Tensor)
-                    ret.extend_seq_lens = extend_seq_lens
-                    ret.extend_prefix_lens = extend_prefix_lens
-                ret.extend_num_tokens = batch.extend_num_tokens
-                positions, ret.extend_start_loc = compute_position(
-                    model_runner.prefill_attention_backend_str,
-                    ret.extend_prefix_lens,
-                    ret.extend_seq_lens,
-                    ret.extend_num_tokens,
-                )
-                if ret.positions is None:
-                    ret.positions = positions
-                ret.extend_logprob_start_lens_cpu = extend_logprob_start_lens
+                ret._compute_mrope_positions(model_runner, batch)
 
-        with spec_stage_span("fb_init_other"):
-            if model_runner.ngram_embedding_manager.enabled:
-                ret._init_ngram_embedding_info(batch, device)
+        # Init lora information
+        if model_runner.server_args.enable_lora:
+            # In the non-LoRA overlap loading case, we fetch LoRA adapters into the memory pool
+            # as a batch, right before running the batch
+            if not model_runner.server_args.enable_lora_overlap_loading:
+                model_runner.lora_manager.fetch_new_loras(set(ret.lora_ids))
 
-            if model_runner.model_config.model_is_mrope:
-                if (
-                    ret.spec_info is not None
-                    and getattr(ret.spec_info, "positions", None) is not None
-                ):
-                    ret.compute_spec_mrope_positions(model_runner, batch)
-                elif ret.forward_mode.is_draft_extend_v2():
-                    # Draft-extend tokens are uniform text continuation; reuse the
-                    # spec mrope path with the input-consistent `ret.positions` rather
-                    # than the per-request rebuild (which mis-sizes mm requests).
-                    ret.compute_spec_mrope_positions(
-                        model_runner, batch, seq_positions=ret.positions
-                    )
-                else:
-                    ret._compute_mrope_positions(model_runner, batch)
+            model_runner.lora_manager.prepare_lora_batch(ret)
 
-            # Init lora information
-            if model_runner.server_args.enable_lora:
-                # In the non-LoRA overlap loading case, we fetch LoRA adapters into the memory pool
-                # as a batch, right before running the batch
-                if not model_runner.server_args.enable_lora_overlap_loading:
-                    model_runner.lora_manager.fetch_new_loras(set(ret.lora_ids))
-
-                model_runner.lora_manager.prepare_lora_batch(ret)
-
-            if (
-                model_runner.ps.attn_dcp_size > 1
-                and ret.out_cache_loc is not None
-                and is_hip()
-            ):
-                ret.dcp_kv_mask = (
-                    ret.positions % model_runner.ps.attn_dcp_size
-                    == model_runner.ps.attn_dcp_rank
-                )
+        if (
+            model_runner.ps.attn_dcp_size > 1
+            and ret.out_cache_loc is not None
+            and is_hip()
+        ):
+            ret.dcp_kv_mask = (
+                ret.positions % model_runner.ps.attn_dcp_size
+                == model_runner.ps.attn_dcp_rank
+            )
 
         return ret
 
