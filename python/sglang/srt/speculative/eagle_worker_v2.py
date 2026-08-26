@@ -919,7 +919,7 @@ class EagleDraftWorker(EagleDraftWorkerBase):
             # values are guaranteed materialized before the CPU arithmetic
             # below (an async copy into pageable memory has no such
             # guarantee).
-            accept_lens_cpu = batch_output.accept_lens.to("cpu")
+            accept_lens_cpu = batch_output.accept_lens.to("cpu", non_blocking=True)
             batch.seq_lens_cpu = (
                 batch.seq_lens_cpu + accept_lens_cpu.to(torch.int64)
             ).clamp_max(max_context_len)
