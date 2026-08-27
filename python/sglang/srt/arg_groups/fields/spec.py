@@ -245,6 +245,11 @@ class Spec(msgspec.Struct):
         Optional[str],
         "Path to a JSON config file for adaptive speculative decoding tuning knobs.",
     ] = None
+    enable_draft_prefetch: A[
+        bool,
+        "pre-run the next round's draft after draft_extend (EAGLE family, "
+        "topk = 1, num_steps > 1 only).",
+    ] = False
     spec_trace_dir: A[
         Optional[str], "Directory to write decoupled speculative decoding trace files."
     ] = None
