@@ -841,10 +841,7 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                 batch.seq_lens = new_seq_lens
                 if not get_spec().skip_spec_v2_zero_bubble_seq_lens_cpu_sync:
                     batch.seq_lens_cpu = new_seq_lens.to("cpu")
-                    batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
-                else:
-                    batch.seq_lens_cpu = None
-                    batch.seq_lens_sum = None
+                batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
                 batch.input_ids = torch.zeros(bs, dtype=torch.int64, device=batch.device)
                 batch.prefix_lens = None
                 batch.extend_lens = None
