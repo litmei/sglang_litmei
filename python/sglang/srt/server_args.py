@@ -9071,7 +9071,6 @@ class ServerArgs:
             assert (
                 not self.enable_mixed_chunk
             ), "enable_mixed_chunk is required for speculative decoding"
-        self.check_speculative_compatibility()
 
         # Check chunked prefill
         # Skip validation if chunked prefill is disabled (i.e., size <= 0).
@@ -9353,34 +9352,6 @@ class ServerArgs:
             assert (
                 self.lora_drain_wait_threshold >= 0.0
             ), "--lora-drain-wait-threshold must be non-negative."
-
-    def check_speculative_compatibility(self):
-        if self.enable_spec_v2_zero_bubble:
-            if self.speculative_algorithm not in ("EAGLE3", "NEXTN"):
-                raise ValueError(
-                    "--enable-spec-v2-zero-bubble only supports EAGLE3/NEXTN "
-                    f"speculative algorithms, got {self.speculative_algorithm}."
-                )
-            if self.speculative_eagle_topk != 1:
-                raise ValueError(
-                    "--enable-spec-v2-zero-bubble requires "
-                    "--speculative-eagle-topk == 1: the pre-concatenated "
-                    "candidate chain assumes a single chain, got "
-                    f"{self.speculative_eagle_topk}."
-                )
-            if self.speculative_adaptive:
-                raise ValueError(
-                    "--enable-spec-v2-zero-bubble is incompatible with "
-                    "--speculative-adaptive: adaptive runtime changes "
-                    "speculative_num_steps, which the pre-run draft cannot "
-                    "follow."
-                )
-            if self.speculative_use_rejection_sampling:
-                raise ValueError(
-                    "--enable-spec-v2-zero-bubble is incompatible with "
-                    "--speculative-use-rejection-sampling: the zero-bubble "
-                    "verify input does not carry draft_probs."
-                )
 
     def validate_buckets_rule(self, arg_name: str, buckets_rule: List[str]):
         if not buckets_rule:

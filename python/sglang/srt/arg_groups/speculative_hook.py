@@ -143,6 +143,46 @@ def handle_speculative_decoding(server_args: ServerArgs) -> None:
     if algo is not None:
         algo.handle_server_args(server_args)
 
+    _check_spec_v2_zero_bubble(server_args)
+
+
+def _check_spec_v2_zero_bubble(server_args: ServerArgs) -> None:
+    """Validate --enable-spec-v2-zero-bubble.
+
+    Runs at the end of handle_speculative_decoding, after the per-algo
+    handlers applied the spec defaults (auto-chosen topk, adaptive
+    auto-disable), so it checks the final config. NEXTN has already been
+    resolved to "EAGLE" by _resolve_speculative_algorithm_alias, which the
+    accepted set covers.
+    """
+    if not server_args.enable_spec_v2_zero_bubble:
+        return
+    if server_args.speculative_algorithm not in ("EAGLE3", "EAGLE", "NEXTN"):
+        raise ValueError(
+            "--enable-spec-v2-zero-bubble only supports EAGLE/EAGLE3/NEXTN "
+            f"speculative algorithms, got {server_args.speculative_algorithm}."
+        )
+    if server_args.speculative_eagle_topk != 1:
+        raise ValueError(
+            "--enable-spec-v2-zero-bubble requires "
+            "--speculative-eagle-topk == 1: the pre-concatenated "
+            "candidate chain assumes a single chain, got "
+            f"{server_args.speculative_eagle_topk}."
+        )
+    if server_args.speculative_adaptive:
+        raise ValueError(
+            "--enable-spec-v2-zero-bubble is incompatible with "
+            "--speculative-adaptive: adaptive runtime changes "
+            "speculative_num_steps, which the pre-run draft cannot "
+            "follow."
+        )
+    if server_args.speculative_use_rejection_sampling:
+        raise ValueError(
+            "--enable-spec-v2-zero-bubble is incompatible with "
+            "--speculative-use-rejection-sampling: the zero-bubble "
+            "verify input does not carry draft_probs."
+        )
+
 
 def _handle_dflash(server_args: ServerArgs) -> None:
     from sglang.srt.arg_groups.overrides import resolved_view
