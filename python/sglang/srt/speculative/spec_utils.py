@@ -263,8 +263,6 @@ def spec_need_hidden_states() -> bool:
     spec = get_spec()
     if spec.speculative_algorithm in ("STANDALONE", "DFLASH", "DSPARK"):
         return False
-    if spec.enable_spec_v2_zero_bubble:
-        return False
     return not spec.enable_multi_layer_eagle
 
 
