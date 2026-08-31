@@ -110,6 +110,7 @@ class RequestFuncOutput:
     cached_tokens: int = 0
     cached_tokens_details: Optional[Dict[str, Any]] = None
     spec_accept_length: float = 0.0
+    spec_accept_rate: float = 0.0
     spec_cap_length: float = 0.0
     spec_block_accept_length: float = 0.0
     spec_cap_lens_histogram: List[int] = field(default_factory=list)
@@ -146,6 +147,85 @@ def _combine_openai_chat_content(message: Dict[str, Any]) -> str:
     # twice on servers that expose aliases.
     reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
     return reasoning + (message.get("content") or "")
+
+
+def _serialize_prompt(prompt: Any) -> Any:
+    """Convert a prompt (str / list[str] / list[int] / list[dict]) into a
+    JSON-safe value so it can be dumped to the request-details file."""
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, (list, tuple)):
+        return [_serialize_prompt(p) for p in prompt]
+    if isinstance(prompt, (int, float, bool)) or prompt is None:
+        return prompt
+    return str(prompt)
+
+
+def _row_attr(row: Any, name: str, default: Any = None) -> Any:
+    """Read a field from a DatasetRow or a plain dict (mooncake rows)."""
+    if isinstance(row, dict):
+        return row.get(name, default)
+    return getattr(row, name, default)
+
+
+def _make_request_record(
+    req: DatasetRow, out: RequestFuncOutput, turn: Optional[int] = None
+) -> Dict[str, Any]:
+    """Build one JSON-safe record joining a request input with its output.
+
+    Includes the raw prompt text, generated output text, and the MTP
+    speculative-decode stats (accept length / rate / cap length).
+    """
+    record: Dict[str, Any] = {
+        "prompt": _serialize_prompt(_row_attr(req, "prompt")),
+        "prompt_len": _row_attr(req, "prompt_len", 0),
+        "output_len": _row_attr(req, "output_len", 0),
+        "image_count": len(_row_attr(req, "image_data") or [])
+        if _row_attr(req, "image_data")
+        else 0,
+        "success": out.success,
+        "generated_text": out.generated_text,
+        "latency": out.latency,
+        "ttft": out.ttft,
+        "itl": out.itl,
+        "spec_accept_length": float(out.spec_accept_length or 0.0),
+        "spec_accept_rate": float(out.spec_accept_rate or 0.0),
+        "spec_cap_length": float(out.spec_cap_length or 0.0),
+        "spec_block_accept_length": float(out.spec_block_accept_length or 0.0),
+        "spec_cap_lens_histogram": list(out.spec_cap_lens_histogram or []),
+        "error": out.error,
+    }
+    if turn is not None:
+        record["turn"] = turn
+    return record
+
+
+def _build_request_records(
+    input_requests: List[DatasetRow],
+    outputs: List[RequestFuncOutput],
+    is_multi_turn: bool,
+) -> List[Dict[str, Any]]:
+    """One record per output, joining the request input with its output.
+
+    Single-turn: 1:1 with ``input_requests``. Multi-turn: ``outputs`` are
+    flattened per-input in turn order, so each input contributes
+    ``len(prompt)`` outputs.
+    """
+    records: List[Dict[str, Any]] = []
+    if is_multi_turn:
+        o_idx = 0
+        for req in input_requests:
+            prompt = _row_attr(req, "prompt")
+            n_turns = len(prompt) if isinstance(prompt, list) else 1
+            for turn in range(n_turns):
+                if o_idx >= len(outputs):
+                    break
+                records.append(_make_request_record(req, outputs[o_idx], turn=turn))
+                o_idx += 1
+    else:
+        for req, out in zip(input_requests, outputs):
+            records.append(_make_request_record(req, out))
+    return records
 
 
 def wait_for_endpoint(url: str, timeout_sec: int = 60) -> bool:
@@ -327,6 +407,28 @@ async def async_request_openai_completions(
                         else:
                             data = json.loads(chunk)
 
+                            # MTP / speculative-decode metrics from the last chunk
+                            _meta_info = (
+                                data.get("meta_info")
+                                or ((data.get("choices") or [{}])[0].get("meta_info") or {})
+                            )
+                            if _meta_info.get("spec_accept_length") is not None:
+                                output.spec_accept_length = _meta_info[
+                                    "spec_accept_length"
+                                ]
+                            if _meta_info.get("spec_accept_rate") is not None:
+                                output.spec_accept_rate = _meta_info["spec_accept_rate"]
+                            if _meta_info.get("spec_cap_length") is not None:
+                                output.spec_cap_length = _meta_info["spec_cap_length"]
+                            if _meta_info.get("spec_block_accept_length") is not None:
+                                output.spec_block_accept_length = _meta_info[
+                                    "spec_block_accept_length"
+                                ]
+                            if _meta_info.get("spec_cap_lens_histogram") is not None:
+                                output.spec_cap_lens_histogram = _meta_info[
+                                    "spec_cap_lens_histogram"
+                                ]
+
                             if getattr(args, "cache_report", False):
                                 _extract_cache_from_sglext(data, output)
 
@@ -487,6 +589,9 @@ async def async_request_openai_chat_completions(
                         output.spec_accept_length = (
                             _meta_info.get("spec_accept_length", 0.0) or 0.0
                         )
+                        output.spec_accept_rate = (
+                            _meta_info.get("spec_accept_rate", 0.0) or 0.0
+                        )
                         output.spec_cap_length = (
                             _meta_info.get("spec_cap_length", 0.0) or 0.0
                         )
@@ -516,6 +621,35 @@ async def async_request_openai_chat_completions(
                                 output_len = (data.get("usage") or {}).get(
                                     "completion_tokens", output_len
                                 )
+
+                                # MTP / speculative-decode metrics from the last chunk
+                                _meta_info = (
+                                    data.get("meta_info")
+                                    or (
+                                        (data.get("choices") or [{}])[0].get(
+                                            "meta_info"
+                                        )
+                                        or {}
+                                    )
+                                )
+                                if _meta_info.get("spec_accept_length") is not None:
+                                    output.spec_accept_length = _meta_info[
+                                        "spec_accept_length"
+                                    ]
+                                if _meta_info.get("spec_accept_rate") is not None:
+                                    output.spec_accept_rate = _meta_info[
+                                        "spec_accept_rate"
+                                    ]
+                                if _meta_info.get("spec_cap_length") is not None:
+                                    output.spec_cap_length = _meta_info["spec_cap_length"]
+                                if _meta_info.get("spec_block_accept_length") is not None:
+                                    output.spec_block_accept_length = _meta_info[
+                                        "spec_block_accept_length"
+                                    ]
+                                if _meta_info.get("spec_cap_lens_histogram") is not None:
+                                    output.spec_cap_lens_histogram = _meta_info[
+                                        "spec_cap_lens_histogram"
+                                    ]
 
                                 if getattr(args, "cache_report", False):
                                     _extract_cache_from_sglext(data, output)
@@ -728,6 +862,18 @@ async def async_request_sglang_generate(
                             if _meta_info.get("spec_accept_length") is not None:
                                 output.spec_accept_length = _meta_info[
                                     "spec_accept_length"
+                                ]
+                            if _meta_info.get("spec_accept_rate") is not None:
+                                output.spec_accept_rate = _meta_info["spec_accept_rate"]
+                            if _meta_info.get("spec_cap_length") is not None:
+                                output.spec_cap_length = _meta_info["spec_cap_length"]
+                            if _meta_info.get("spec_block_accept_length") is not None:
+                                output.spec_block_accept_length = _meta_info[
+                                    "spec_block_accept_length"
+                                ]
+                            if _meta_info.get("spec_cap_lens_histogram") is not None:
+                                output.spec_cap_lens_histogram = _meta_info[
+                                    "spec_cap_lens_histogram"
                                 ]
 
                             # NOTE: Some completion API might have a last
@@ -1871,6 +2017,16 @@ async def benchmark(
                 f"{args.backend}_{now}_{args.num_prompts}_{args.dataset_name}.jsonl"
             )
 
+    # One record per request: inputs (prompt text etc.) + outputs (generated
+    # text, MTP accept length / rate, ...). Always dumped to a dedicated
+    # JSONL file for post-hoc per-request analysis.
+    request_records = _build_request_records(input_requests, outputs, is_multi_turn)
+    requests_file_name = output_file_name + ".requests.jsonl"
+    with open(requests_file_name, "a") as file:
+        for rec in request_records:
+            file.write(orjson.dumps(rec).decode("utf-8") + "\n")
+    print(f"Per-request records saved to {requests_file_name}")
+
     result_details = {
         "input_lens": [output.prompt_len for output in outputs],
         "output_lens": output_lens,
@@ -1878,6 +2034,13 @@ async def benchmark(
         "itls": [output.itl for output in outputs],
         "generated_texts": [output.generated_text for output in outputs],
         "errors": [output.error for output in outputs],
+        "prompts": [rec["prompt"] for rec in request_records],
+        "spec_accept_lengths": [output.spec_accept_length for output in outputs],
+        "spec_accept_rates": [output.spec_accept_rate for output in outputs],
+        "spec_cap_lengths": [output.spec_cap_length for output in outputs],
+        "spec_block_accept_lengths": [
+            output.spec_block_accept_length for output in outputs
+        ],
     }
 
     if args.cache_report:
