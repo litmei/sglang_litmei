@@ -13,6 +13,7 @@ from sglang.srt.runtime_context import (
     get_spec,
 )
 from sglang.srt.utils import is_cuda, is_hip, is_npu
+from sglang.srt.utils.common import keepalive_pinned
 
 if TYPE_CHECKING:
     from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
@@ -91,7 +92,14 @@ def resolve_forward_inputs(batch: ScheduleBatch, future_map: FutureMap) -> None:
     - Decode/spec_v2: gather from FutureMap (last iter's sampled token).
     """
     if batch.prefill_input_ids_cpu is not None:
-        prefill_gpu = batch.prefill_input_ids_cpu.to(batch.device, non_blocking=True)
+        # The pinned staging tensor is the DMA source of a non-blocking H2D
+        # enqueued on forward_stream. With overlap the CPU runs ahead, so
+        # dropping the last reference below would let the host caching
+        # allocator recycle (or unmap) the block while the copy is still
+        # queued. Keep it alive until the ring evicts it long after the DMA.
+        prefill_src = batch.prefill_input_ids_cpu
+        keepalive_pinned(prefill_src)
+        prefill_gpu = prefill_src.to(batch.device, non_blocking=True)
         if batch.mix_running_indices is not None:
             if batch.enable_overlap and not batch.spec_algorithm.is_none():
                 future_map.resolve_mixed_spec_tails(batch)
