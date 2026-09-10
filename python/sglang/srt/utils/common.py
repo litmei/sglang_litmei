@@ -587,6 +587,19 @@ def pinned_h2d(data, device, dtype=torch.int64) -> torch.Tensor:
     return out
 
 
+def keepalive_pinned(*tensors: torch.Tensor) -> None:
+    """Park function-scoped pinned CPU tensors in the keep-alive ring.
+
+    Same recycled-host-block race as `pinned_h2d`, but for pinned CPU mirrors
+    whose async H2D copies were enqueued via `.to(device, non_blocking=True)`
+    and which are dropped at function return (e.g. allocation.py's
+    prefix/extend/req_pool index mirrors): the freed block can be handed to
+    the next same-size pinned allocation and rewritten while the queued H2D
+    has not executed yet.
+    """
+    _pinned_h2d_keepalive.extend(tensors)
+
+
 def get_dispatch_device_backend():
     if is_cuda_alike():
         dispatch_key = "CUDA"

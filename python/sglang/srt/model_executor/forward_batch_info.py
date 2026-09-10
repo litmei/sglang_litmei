@@ -852,7 +852,6 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         ret._maybe_init_non_generation_fields(batch)
 
         device = model_runner.device
-        pin_memory = is_pin_memory_available(device)
 
         model_runner.kv_index_translator.rebind_write_loc(ret)
 
@@ -882,11 +881,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         num_tokens = len(batch.input_ids) if batch.input_ids is not None else 0
         if enable_num_token_non_padded():
-            ret.global_num_token_non_padded = torch.tensor(
-                num_tokens,
-                dtype=torch.int32,
-                pin_memory=pin_memory,
-            ).to(device, non_blocking=True)
+            ret.global_num_token_non_padded = pinned_h2d(
+                num_tokens, device, dtype=torch.int32
+            )
         ret.global_num_token_non_padded_cpu = num_tokens
 
         ret.init_mlp_sync_metadata(batch, device)
@@ -924,13 +921,18 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         else:
             if isinstance(extend_seq_lens, list):
                 # Main path: H2D from host lists; populate *_cpu mirrors.
+                # pinned_h2d keeps both staging tensors alive: the two
+                # same-size back-to-back copies below would otherwise race on
+                # a recycled host block on NPU (extend_prefix_lens reusing the
+                # block extend_seq_lens just freed while its H2D is still
+                # queued, corrupting the attention length metadata).
                 assert isinstance(extend_prefix_lens, list)
-                ret.extend_seq_lens = torch.tensor(
-                    extend_seq_lens, dtype=torch.int32, pin_memory=pin_memory
-                ).to(device, non_blocking=True)
-                ret.extend_prefix_lens = torch.tensor(
-                    extend_prefix_lens, dtype=torch.int32, pin_memory=pin_memory
-                ).to(device, non_blocking=True)
+                ret.extend_seq_lens = pinned_h2d(
+                    extend_seq_lens, device, dtype=torch.int32
+                )
+                ret.extend_prefix_lens = pinned_h2d(
+                    extend_prefix_lens, device, dtype=torch.int32
+                )
                 ret.extend_prefix_lens_cpu = extend_prefix_lens
                 ret.extend_seq_lens_cpu = extend_seq_lens
             else:

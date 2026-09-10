@@ -317,6 +317,12 @@ def alloc_for_extend(
         req_pool_indices, dtype=torch.int64, pin_memory=pin_memory
     )
     req_pool_indices_device = req_pool_indices_cpu.to(batch.device, non_blocking=True)
+    # The three pinned CPU mirrors above are freed at function return while
+    # their async H2D copies may still be queued on the scheduler's stream
+    # (overlap scheduling runs the CPU ahead); torch_npu's host caching
+    # allocator can hand the recycled blocks to the next same-size pinned
+    # allocation. Keep them alive past the copy window.
+    keepalive_pinned(prefix_lens_cpu, extend_lens_cpu, req_pool_indices_cpu)
 
     # Allocate KV cache (throws exception on failure)
     alloc_page_size = _alloc_page_size(batch)
