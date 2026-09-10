@@ -216,16 +216,19 @@ class EagerRunner(BaseRunner):
         import os
 
         if os.getenv("SGLANG_DEBUG_DP_HANG", "0") == "1":
-            from sglang.srt.distributed import get_tensor_model_parallel_rank
+            try:
+                from sglang.srt.distributed import get_tensor_model_parallel_rank
 
-            print(
-                f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
-                f"EAGER iter={getattr(forward_batch, 'forward_iter', '?')} "
-                f"mode={forward_batch.forward_mode.name} "
-                f"bs={forward_batch.batch_size} "
-                f"nt={forward_batch.input_ids.shape[0] if forward_batch.input_ids is not None else None}",
-                flush=True,
-            )
+                print(
+                    f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
+                    f"EAGER iter={getattr(forward_batch, 'forward_iter', '?')} "
+                    f"mode={forward_batch.forward_mode.name} "
+                    f"bs={forward_batch.batch_size} "
+                    f"nt={forward_batch.input_ids.shape[0] if forward_batch.input_ids is not None else None}",
+                    flush=True,
+                )
+            except Exception:
+                pass
         mode = forward_batch.forward_mode
         if mode.is_mixed() and not is_npu() and get_cp_strategy() is None:
             # A mixed batch is extend-shaped (decode tails are 1-token

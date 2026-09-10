@@ -4237,16 +4237,19 @@ class Scheduler(
                 import os
 
                 if os.getenv("SGLANG_DEBUG_DP_HANG", "0") == "1":
-                    print(
-                        f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
-                        f"RUN iter={batch.forward_iter} "
-                        f"mode={batch.forward_mode.name} "
-                        f"local_bs={len(batch.reqs)} "
-                        f"gnt={batch.global_num_tokens} "
-                        f"extend_in_batch={batch.is_extend_in_batch} "
-                        f"can_graph={batch.can_run_decode_cuda_graph}",
-                        flush=True,
-                    )
+                    try:
+                        print(
+                            f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
+                            f"RUN iter={batch.forward_iter} "
+                            f"mode={batch.forward_mode.name} "
+                            f"local_bs={len(batch.reqs)} "
+                            f"gnt={batch.global_num_tokens} "
+                            f"extend_in_batch={batch.is_extend_in_batch} "
+                            f"can_graph={batch.can_run_decode_cuda_graph}",
+                            flush=True,
+                        )
+                    except Exception:
+                        pass
                 with self.forward_stream_ctx:
                     self.forward_stream.wait_stream(self.schedule_stream)
                     # resolve consumes SB staging (prefill_input_ids_cpu /

@@ -214,15 +214,19 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
         import os
 
         if os.getenv("SGLANG_DEBUG_DP_HANG", "0") == "1":
-            from sglang.srt.distributed import get_tensor_model_parallel_rank
+            try:
+                from sglang.srt.distributed import get_tensor_model_parallel_rank
 
-            print(
-                f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
-                f"GRAPH iter={getattr(forward_batch, 'forward_iter', '?')} "
-                f"mode={forward_batch.forward_mode.name} "
-                f"bs={forward_batch.batch_size} padded_bs={self.bs}",
-                flush=True,
-            )
+                print(
+                    f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
+                    f"GRAPH iter={getattr(forward_batch, 'forward_iter', '?')} "
+                    f"mode={forward_batch.forward_mode.name} "
+                    f"bs={forward_batch.batch_size} "
+                    f"padded_bs={getattr(self, 'bs', '?')}",
+                    flush=True,
+                )
+            except Exception:
+                pass
         if forward_batch.needs_forward_metadata_init():
             self.load_batch(forward_batch, pp_proxy_tensors)
         else:
