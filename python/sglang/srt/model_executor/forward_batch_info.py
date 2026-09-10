@@ -735,16 +735,13 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         self.original_global_num_tokens_cpu = batch.global_num_tokens
         self.global_num_tokens_cpu = global_num_tokens
-        pin_memory = is_pin_memory_available(device)
-        self.global_num_tokens_gpu = torch.tensor(
-            global_num_tokens, dtype=torch.int64, pin_memory=pin_memory
-        ).to(device, non_blocking=True)
+        # pinned_h2d keeps the pinned staging tensor alive: the two same-size
+        # copies below would otherwise race on a recycled host block on NPU.
+        self.global_num_tokens_gpu = pinned_h2d(global_num_tokens, device)
         self.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
-        self.global_num_tokens_for_logprob_gpu = torch.tensor(
-            global_num_tokens_for_logprob,
-            dtype=torch.int64,
-            pin_memory=pin_memory,
-        ).to(device, non_blocking=True)
+        self.global_num_tokens_for_logprob_gpu = pinned_h2d(
+            global_num_tokens_for_logprob, device
+        )
         self.can_run_decode_cuda_graph = batch.can_run_decode_cuda_graph
 
     @classmethod
@@ -905,15 +902,15 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             block_size = batch.dllm_config.block_size
             # Use int64 for AMD rotary embedding kernel compatibility
             positions_dtype = torch.int64 if is_hip() or _is_npu else torch.int32
-            ret.positions = torch.tensor(
+            ret.positions = pinned_h2d(
                 [
                     i
                     for block_offset in (req.dllm_block_offset for req in batch.reqs)
                     for i in range(block_offset, block_offset + block_size)
                 ],
+                device,
                 dtype=positions_dtype,
-                pin_memory=pin_memory,
-            ).to(device, non_blocking=True)
+            )
         elif (
             ret.spec_info is not None
             and getattr(ret.spec_info, "positions", None) is not None
@@ -1029,11 +1026,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             r.token_type_ids for r in batch.reqs if r.token_type_ids is not None
         ]
         if token_type_ids:
-            self.token_type_ids = torch.tensor(
-                sum(token_type_ids, []),
-                dtype=torch.int64,
-                pin_memory=is_pin_memory_available(batch.device),
-            ).to(batch.device, non_blocking=True)
+            self.token_type_ids = pinned_h2d(
+                sum(token_type_ids, []), batch.device, dtype=torch.int64
+            )
 
     def set_local_num_token_non_padded(self, *, sharded: bool) -> None:
         """Derive the LOCAL num_token_non_padded from the invariant GLOBAL scalar.
@@ -1519,12 +1514,14 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         # padding
         self._pad_inputs_to_size(model_runner, num_tokens, bs)
         self.global_num_tokens_cpu = global_num_tokens
-        pin_memory = is_pin_memory_available(model_runner.device)
-        global_num_tokens_pinned = torch.tensor(
-            global_num_tokens, pin_memory=pin_memory
-        )
+        # Refresh the persistent device tensor via a keep-alive pinned staging
+        # copy (pinned_h2d) + D2D copy_: a bare temp pinned tensor would be
+        # freed right after copy_ returns, and torch_npu's host caching
+        # allocator can recycle the block before the queued H2D executes
+        # (the overlap scheduler runs the CPU ahead of forward_stream).
         self.global_num_tokens_gpu.copy_(
-            global_num_tokens_pinned, non_blocking=pin_memory
+            pinned_h2d(global_num_tokens, self.global_num_tokens_gpu.device),
+            non_blocking=True,
         )
 
         TboForwardBatchPreparer.prepare(

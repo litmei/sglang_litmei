@@ -60,7 +60,7 @@ from sglang.srt.sampling.sampling_observer import DeviceAuxiliaryOutput
 from sglang.srt.utils.common import (
     is_cpu,
     is_npu,
-    is_pin_memory_available,
+    pinned_h2d,
     use_intel_amx_backend,
 )
 
@@ -692,17 +692,13 @@ class LogitsProcessor(nn.Module):
                 )
 
             # Build the index tensors via pinned host memory + non-blocking H2D
-            # so the small copy doesn't drain the stream.
-            sample_indices = torch.tensor(
-                sample_indices,
-                dtype=torch.int64,
-                pin_memory=is_pin_memory_available(),
-            ).to(pruned_states.device, non_blocking=True)
-            input_logprob_indices = torch.tensor(
-                input_logprob_indices,
-                dtype=torch.int64,
-                pin_memory=is_pin_memory_available(),
-            ).to(pruned_states.device, non_blocking=True)
+            # so the small copy doesn't drain the stream. pinned_h2d keeps the
+            # staging tensors alive: the two same-size copies below would
+            # otherwise race on a recycled host block on NPU.
+            sample_indices = pinned_h2d(sample_indices, pruned_states.device)
+            input_logprob_indices = pinned_h2d(
+                input_logprob_indices, pruned_states.device
+            )
 
         return (
             pruned_states,

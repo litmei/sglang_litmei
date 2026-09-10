@@ -81,8 +81,8 @@ from sglang.srt.utils import (
     is_cuda,
     is_cuda_alike,
     is_npu,
-    is_pin_memory_available,
 )
+from sglang.srt.utils.common import pinned_h2d
 
 logger = logging.getLogger(__name__)
 
@@ -564,13 +564,8 @@ class DSparkWorkerV2(BaseSpecWorker):
         # Must inject before prefill returns: the scheduler may update radix
         # afterward, invalidating out_cache_loc.
         device = next_token_ids.device
-        pin_memory = is_pin_memory_available(device)
-        ctx_lens = torch.tensor(
-            batch.extend_lens, dtype=torch.int32, pin_memory=pin_memory
-        ).to(device, non_blocking=True)
-        draft_seq_lens = torch.tensor(
-            batch.prefix_lens, dtype=torch.int32, pin_memory=pin_memory
-        ).to(device, non_blocking=True)
+        ctx_lens = pinned_h2d(batch.extend_lens, device, dtype=torch.int32)
+        draft_seq_lens = pinned_h2d(batch.prefix_lens, device, dtype=torch.int32)
         positions, _ = compute_position(
             self.model_runner.prefill_attention_backend_str,
             draft_seq_lens,

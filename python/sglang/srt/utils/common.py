@@ -49,7 +49,7 @@ import types
 import uuid
 import warnings
 from array import array
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
@@ -549,6 +549,42 @@ def get_available_gpu_memory(
 
 def is_pin_memory_available(device=None) -> bool:
     return current_platform.is_pin_memory_available(device)
+
+
+# Bounded keep-alive ring for the pinned H2D staging tensors created by
+# `pinned_h2d`. Depth must comfortably exceed the scheduler's overlap window
+# (a handful of forwards); 64 leaves a wide margin while bounding memory.
+_PINNED_H2D_KEEPALIVE_DEPTH = 64
+_pinned_h2d_keepalive: deque = deque(maxlen=_PINNED_H2D_KEEPALIVE_DEPTH)
+
+
+def pinned_h2d(data, device, dtype=torch.int64) -> torch.Tensor:
+    """Async H2D copy of small host metadata without the free/reuse race.
+
+    A temp `torch.tensor(..., pin_memory=True).to(device, non_blocking=True)`
+    is unsafe on NPU: the staging tensor is freed right after `.to()` returns,
+    and torch_npu's host caching allocator (unlike CUDA's recordEvent scheme on
+    the copy path) hands the block straight back to the next same-size
+    allocation. With overlap scheduling the CPU runs ahead of the stream, so
+    the recycled block can be rewritten before the queued H2D executes,
+    silently corrupting device-side metadata (e.g. DP-attention
+    global_num_tokens, whose corruption deadlocks mismatched collectives).
+
+    Falling back to a pageable source is not an option either: pageable H2D on
+    NPU synchronizes the stream first, serializing the scheduler behind the
+    in-flight forward (severe hostbound).
+
+    Keeping recent staging tensors referenced guarantees the DMA source
+    outlives the copy while the H2D stays pinned and non-blocking. Only use
+    this for small per-step metadata; large transfers should use dedicated
+    persistent buffers.
+    """
+    if not is_pin_memory_available(device):
+        return torch.tensor(data, dtype=dtype).to(device, non_blocking=True)
+    staging = torch.tensor(data, dtype=dtype, pin_memory=True)
+    out = staging.to(device, non_blocking=True)
+    _pinned_h2d_keepalive.append(staging)
+    return out
 
 
 def get_dispatch_device_backend():

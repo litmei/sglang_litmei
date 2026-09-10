@@ -16,7 +16,7 @@ from sglang.srt.runtime_context import get_exec
 from sglang.srt.sampling.custom_logit_processor import CustomLogitProcessor
 from sglang.srt.sampling.penaltylib.repetition_penalty import apply_scaling_penalties
 from sglang.srt.sampling.sampling_params import TOP_K_ALL
-from sglang.srt.utils.common import is_pin_memory_available
+from sglang.srt.utils.common import pinned_h2d
 
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import ScheduleBatch
@@ -89,33 +89,26 @@ class SamplingBatchInfo:
 
         reqs = batch.reqs
         device = batch.device
-        _pin = is_pin_memory_available(device)
-        temperatures = (
-            torch.tensor(
-                [r.sampling_params.temperature for r in reqs],
-                dtype=torch.float,
-                pin_memory=_pin,
-            )
-            .to(device, non_blocking=True)
-            .view(-1, 1)
+        # pinned_h2d keeps each staging tensor alive: these back-to-back
+        # same-size temp pinned copies would otherwise race on recycled host
+        # blocks on NPU (e.g. top_ps reusing the block temperatures just
+        # freed while its H2D is still queued).
+        temperatures = pinned_h2d(
+            [r.sampling_params.temperature for r in reqs],
+            device,
+            dtype=torch.float,
+        ).view(-1, 1)
+        top_ps = pinned_h2d(
+            [r.sampling_params.top_p for r in reqs], device, dtype=torch.float
         )
-        top_ps = torch.tensor(
-            [r.sampling_params.top_p for r in reqs],
-            dtype=torch.float,
-            pin_memory=_pin,
-        ).to(device, non_blocking=True)
-        top_ks = torch.tensor(
-            [r.sampling_params.top_k for r in reqs],
-            dtype=torch.int32,
-            pin_memory=_pin,
-        ).to(device, non_blocking=True)
-        min_ps = torch.tensor(
-            [r.sampling_params.min_p for r in reqs],
-            dtype=torch.float,
-            pin_memory=_pin,
-        ).to(device, non_blocking=True)
+        top_ks = pinned_h2d(
+            [r.sampling_params.top_k for r in reqs], device, dtype=torch.int32
+        )
+        min_ps = pinned_h2d(
+            [r.sampling_params.min_p for r in reqs], device, dtype=torch.float
+        )
         sampling_seed = (
-            torch.tensor(
+            pinned_h2d(
                 [
                     (
                         r.sampling_params.sampling_seed
@@ -124,9 +117,8 @@ class SamplingBatchInfo:
                     )
                     for r in reqs
                 ],
-                dtype=torch.int64,
-                pin_memory=_pin,
-            ).to(device, non_blocking=True)
+                device,
+            )
             if enable_deterministic
             else None
         )
