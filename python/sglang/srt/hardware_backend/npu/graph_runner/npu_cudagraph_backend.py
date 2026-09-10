@@ -12,6 +12,7 @@ non-NPU hosts.
 
 from __future__ import annotations
 
+import threading
 from contextlib import AbstractContextManager, contextmanager
 from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
@@ -149,8 +150,8 @@ class NPUCudaGraphBackend(BaseCudaGraphBackend):
         attr_type: Any = None,
         cpu_update_input: list = None,
     ) -> Any:
-        """Rebind seq_lens on the recorded NPU graph, then replay. Used
-        when the model is not deepseek-nsa.
+        """Rebind seq_lens on the recorded NPU graph in a background
+        thread, then replay. Used when the model is not deepseek-nsa.
 
         Two calling conventions:
         1. (legacy) seq_lens + attr_name + attr_type:
@@ -165,22 +166,14 @@ class NPUCudaGraphBackend(BaseCudaGraphBackend):
 
         graph = self._graphs[shape_key]
 
-        # The input update must be fully ordered before the replay: the
-        # captured kernels read actual_seq_lengths_kv / context_lens while
-        # the graph executes. The previous version ran graph.update() on a
-        # background thread (whose H2D copies land on that thread's
-        # default stream) concurrently with graph.replay() on the forward
-        # stream, with only a host-side thread.join() AFTER the replay was
-        # already enqueued -- no stream/event ordering at all. The replayed
-        # graph could then consume half-updated seq_lens and stall the
-        # stream (device-side hang with all engines idle). Official
-        # torch_npu graph-update examples order update vs. replay with
-        # explicit events; until we replicate that with a dedicated
-        # update_stream, keep the update strictly synchronous and on the
-        # caller's stream.
-        self._device_module.set_device(self._device_id)
-        graph.update(cpu_update_input=cpu_update_input)
+        def _update():
+            self._device_module.set_device(self._device_id)
+            graph.update(cpu_update_input=cpu_update_input)
+
+        thread = threading.Thread(target=_update)
+        thread.start()
         graph.replay()
+        thread.join()
         return self._outputs[shape_key]
 
     def cleanup(self) -> None:
