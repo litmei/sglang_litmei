@@ -64,7 +64,7 @@ from sglang.srt.utils import (
     is_npu,
     support_triton,
 )
-from sglang.srt.utils.common import ceil_align, is_pin_memory_available
+from sglang.srt.utils.common import ceil_align, is_pin_memory_available, pinned_h2d
 
 if TYPE_CHECKING:
     from sglang.srt.layers.cp.base import BaseContextParallelMetadata
