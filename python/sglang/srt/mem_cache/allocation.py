@@ -35,7 +35,7 @@ from sglang.srt.utils import (
     next_power_of_2,
     support_triton,
 )
-from sglang.srt.utils.common import is_pin_memory_available
+from sglang.srt.utils.common import is_pin_memory_available, keepalive_pinned
 
 _is_hip = is_hip()
 _is_npu = is_npu()
