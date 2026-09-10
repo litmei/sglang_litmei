@@ -600,6 +600,34 @@ def keepalive_pinned(*tensors: torch.Tensor) -> None:
     _pinned_h2d_keepalive.extend(tensors)
 
 
+# SGLANG_DEBUG_DP_HANG=1 instrumentation: read once at import, so the
+# disabled path costs one boolean check per call site.
+_DBG_DP_HANG = os.getenv("SGLANG_DEBUG_DP_HANG", "0") == "1"
+
+
+def dbg_dp_log(msg: str) -> None:
+    """SGLANG_DEBUG_DP_HANG=1: append one debug line to /tmp/dpdbg_rank{N}.log.
+
+    One file per TP rank so the two DP ranks' forward/collective sequences
+    can be diffed after a hang, independent of how the launcher redirects
+    stdout (multiprocessing children usually share the parent's stdout).
+    Never raises; no-op unless the env flag is set.
+    """
+    if not _DBG_DP_HANG:
+        return
+    try:
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+
+        rank = get_tensor_model_parallel_rank()
+    except Exception:
+        rank = "?"
+    try:
+        with open(f"/tmp/dpdbg_rank{rank}.log", "a") as f:
+            f.write(f"[DPDBG] rank={rank} {msg}\n")
+    except Exception:
+        pass
+
+
 def get_dispatch_device_backend():
     if is_cuda_alike():
         dispatch_key = "CUDA"

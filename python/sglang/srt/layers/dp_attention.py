@@ -43,6 +43,7 @@ from sglang.srt.runtime_context import (
     get_stream,
 )
 from sglang.srt.utils import get_bool_env_var, is_cpu, is_hip
+from sglang.srt.utils.common import _DBG_DP_HANG, dbg_dp_log
 
 if TYPE_CHECKING:
     from sglang.srt.configs.model_config import ModelConfig
@@ -526,18 +527,15 @@ def memcpy(dst, src, dim, offset, sz, offset_src):
 def _dbg_dp_collective(tag: str, global_tokens, local_tokens, forward_batch):
     """SGLANG_DEBUG_DP_HANG=1: log every DP collective's shape decision.
 
-    At hang time, diff the last lines of both ranks' logs: a mismatch in
-    branch (all_reduce vs all_gather vs gatherv), buffer shape, or per-rank
-    token counts is the collective-mismatch deadlock root cause.
+    At hang time, diff the last lines of both ranks' /tmp/dpdbg_rank{N}.log:
+    a mismatch in branch (all_reduce vs all_gather vs gatherv), buffer shape,
+    or per-rank token counts is the collective-mismatch deadlock root cause.
     """
-    import os
-
-    if os.getenv("SGLANG_DEBUG_DP_HANG", "0") != "1":
+    if not _DBG_DP_HANG:
         return
     try:
         fb = forward_batch
-        print(
-            f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
+        dbg_dp_log(
             f"iter={getattr(fb, 'forward_iter', '?')} "
             f"mode={getattr(getattr(fb, 'forward_mode', None), 'name', None)} "
             f"extend={get_is_extend_in_batch()} "
@@ -546,8 +544,7 @@ def _dbg_dp_collective(tag: str, global_tokens, local_tokens, forward_batch):
             f"orig={getattr(fb, 'original_global_num_tokens_cpu', None)} "
             f"logprob_gnt={getattr(fb, 'global_num_tokens_for_logprob_cpu', None)} "
             f"{tag} global={tuple(global_tokens.shape)} "
-            f"local={tuple(local_tokens.shape) if local_tokens is not None else None}",
-            flush=True,
+            f"local={tuple(local_tokens.shape) if local_tokens is not None else None}"
         )
     except Exception:
         pass

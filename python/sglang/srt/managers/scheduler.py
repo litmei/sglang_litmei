@@ -97,11 +97,7 @@ from sglang.srt.disaggregation.utils import (
     prepare_abort,
     unified_memory_disagg_move_gate,
 )
-from sglang.srt.distributed import (
-    get_pp_group,
-    get_tensor_model_parallel_rank,
-    get_world_group,
-)
+from sglang.srt.distributed import get_pp_group, get_world_group
 from sglang.srt.distributed.parallel_state import get_tp_group
 from sglang.srt.distributed.parallel_state_wrapper import ParallelState
 from sglang.srt.dllm.mixin.scheduler import SchedulerDllmMixin
@@ -344,7 +340,7 @@ from sglang.srt.utils import (
     suppress_other_loggers,
     triton_load_watch,
 )
-from sglang.srt.utils.common import is_npu
+from sglang.srt.utils.common import dbg_dp_log, is_npu
 from sglang.srt.utils.hf_transformers_utils import (
     get_processor,
     get_tokenizer,
@@ -4234,22 +4230,14 @@ class Scheduler(
                 if self._confidence_budget_prepare is not None:
                     self._confidence_budget_prepare(batch, self.future_map)
 
-                import os
-
-                if os.getenv("SGLANG_DEBUG_DP_HANG", "0") == "1":
-                    try:
-                        print(
-                            f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
-                            f"RUN iter={batch.forward_iter} "
-                            f"mode={batch.forward_mode.name} "
-                            f"local_bs={len(batch.reqs)} "
-                            f"gnt={batch.global_num_tokens} "
-                            f"extend_in_batch={batch.is_extend_in_batch} "
-                            f"can_graph={batch.can_run_decode_cuda_graph}",
-                            flush=True,
-                        )
-                    except Exception:
-                        pass
+                dbg_dp_log(
+                    f"RUN iter={batch.forward_iter} "
+                    f"mode={batch.forward_mode.name} "
+                    f"local_bs={len(batch.reqs)} "
+                    f"gnt={batch.global_num_tokens} "
+                    f"extend_in_batch={batch.is_extend_in_batch} "
+                    f"can_graph={batch.can_run_decode_cuda_graph}"
+                )
                 with self.forward_stream_ctx:
                     self.forward_stream.wait_stream(self.schedule_stream)
                     # resolve consumes SB staging (prefill_input_ids_cpu /

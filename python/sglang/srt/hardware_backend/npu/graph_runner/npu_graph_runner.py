@@ -49,6 +49,7 @@ from sglang.srt.utils import (
     get_compiler_backend,
     is_npu,
 )
+from sglang.srt.utils.common import dbg_dp_log
 
 is_npu = is_npu()
 
@@ -211,22 +212,12 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
         forward_batch: ForwardBatch,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> Union[LogitsProcessorOutput, PPProxyTensors]:
-        import os
-
-        if os.getenv("SGLANG_DEBUG_DP_HANG", "0") == "1":
-            try:
-                from sglang.srt.distributed import get_tensor_model_parallel_rank
-
-                print(
-                    f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
-                    f"GRAPH iter={getattr(forward_batch, 'forward_iter', '?')} "
-                    f"mode={forward_batch.forward_mode.name} "
-                    f"bs={forward_batch.batch_size} "
-                    f"padded_bs={getattr(self, 'bs', '?')}",
-                    flush=True,
-                )
-            except Exception:
-                pass
+        dbg_dp_log(
+            f"GRAPH iter={getattr(forward_batch, 'forward_iter', '?')} "
+            f"mode={forward_batch.forward_mode.name} "
+            f"bs={forward_batch.batch_size} "
+            f"padded_bs={getattr(self, 'bs', '?')}"
+        )
         if forward_batch.needs_forward_metadata_init():
             self.load_batch(forward_batch, pp_proxy_tensors)
         else:
