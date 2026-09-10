@@ -166,6 +166,21 @@ class NPUCudaGraphBackend(BaseCudaGraphBackend):
 
         graph = self._graphs[shape_key]
 
+        if get_bool_env_var("SGLANG_NPU_GRAPH_UPDATE_SYNC"):
+            update_done = self._device_module.Event()
+
+            def _update_ordered():
+                self._device_module.set_device(self._device_id)
+                graph.update(cpu_update_input=cpu_update_input)
+                update_done.record()
+
+            thread = threading.Thread(target=_update_ordered)
+            thread.start()
+            thread.join()
+            self._device_module.current_stream().wait_event(update_done)
+            graph.replay()
+            return self._outputs[shape_key]
+
         def _update():
             self._device_module.set_device(self._device_id)
             graph.update(cpu_update_input=cpu_update_input)
