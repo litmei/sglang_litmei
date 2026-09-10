@@ -523,6 +523,36 @@ def memcpy(dst, src, dim, offset, sz, offset_src):
     memcpy_func(dst, src, dim, offset, sz, offset_src)
 
 
+def _dbg_dp_collective(tag: str, global_tokens, local_tokens, forward_batch):
+    """SGLANG_DEBUG_DP_HANG=1: log every DP collective's shape decision.
+
+    At hang time, diff the last lines of both ranks' logs: a mismatch in
+    branch (all_reduce vs all_gather vs gatherv), buffer shape, or per-rank
+    token counts is the collective-mismatch deadlock root cause.
+    """
+    import os
+
+    if os.getenv("SGLANG_DEBUG_DP_HANG", "0") != "1":
+        return
+    try:
+        fb = forward_batch
+        print(
+            f"[DPDBG] rank={get_tensor_model_parallel_rank()} "
+            f"iter={getattr(fb, 'forward_iter', '?')} "
+            f"mode={getattr(getattr(fb, 'forward_mode', None), 'name', None)} "
+            f"extend={get_is_extend_in_batch()} "
+            f"pad={getattr(fb, 'dp_padding_mode', None)} "
+            f"gnt={getattr(fb, 'global_num_tokens_cpu', None)} "
+            f"orig={getattr(fb, 'original_global_num_tokens_cpu', None)} "
+            f"logprob_gnt={getattr(fb, 'global_num_tokens_for_logprob_cpu', None)} "
+            f"{tag} global={tuple(global_tokens.shape)} "
+            f"local={tuple(local_tokens.shape) if local_tokens is not None else None}",
+            flush=True,
+        )
+    except Exception:
+        pass
+
+
 def _dp_gather_via_all_reduce(
     global_tokens: torch.Tensor,
     local_tokens: torch.Tensor,
@@ -539,11 +569,12 @@ def _dp_gather_via_all_reduce(
         is_partial or get_attn_tensor_model_parallel_rank() == 0
     ):
         assert local_tokens.untyped_storage() is not global_tokens.untyped_storage(), (
-            "aliasing between global_tokens and local_tokens not allowed"
+            "aliasing between local_tokens and global_tokens not allowed"
         )
 
         memcpy(global_tokens, local_tokens, 0, local_start_pos, local_num_tokens, False)
 
+    _dbg_dp_collective("all_reduce", global_tokens, local_tokens, forward_batch)
     # Input IDs are in int 32. We should use inplace_all_reduce for local case because of custom all reduce.
     if world_dp_gather_enabled():
         torch.distributed.all_reduce(
@@ -845,6 +876,12 @@ def _dp_gather(
         if _gatherv_sizes is None or sum(_gatherv_sizes) != global_tokens.shape[0]:
             _gatherv_sizes = _dp_gatherv_sizes(forward_batch)
         if _gatherv_sizes is not None and sum(_gatherv_sizes) == global_tokens.shape[0]:
+            _dbg_dp_collective(
+                f"gatherv sizes={_gatherv_sizes}",
+                global_tokens,
+                local_tokens,
+                forward_batch,
+            )
             _dp_gather_via_all_gatherv(
                 global_tokens, local_tokens, forward_batch, is_partial, _gatherv_sizes
             )
@@ -899,6 +936,7 @@ def dp_scatter(
 
 
 def dp_reduce_scatter_tensor(output: torch.Tensor, input: torch.Tensor):
+    _dbg_dp_collective("reduce_scatter", input, output, None)
     if is_dp_gatherv_active():
         # Variable-length combine matching all_gatherv dispatch: scatter the
         # global (sum_len) tensor back to per-rank token counts. Fall through to
