@@ -406,7 +406,15 @@ class DraftBlockProposer:
             draft_seq_lens_cpu = batch.seq_lens_cpu + query_token_num
             draft_seq_lens_sum = int(draft_seq_lens_cpu.sum())
         elif draft_input.nxt_kv_lens_cpu is not None:
-            draft_seq_lens_cpu = draft_input.nxt_kv_lens_cpu
+            # GPU-only overlap path (needs_cpu_seq_lens=False): the host
+            # mirror was dropped, so don't fabricate one from the
+            # page-aligned allocation lens (an upper bound, not the exact KV
+            # lengths the draft attention must read). Leave seq_lens_cpu
+            # None; the Ascend backend derives device-side KV lengths from
+            # ForwardBatch.seq_lens and folds the query tokens in itself.
+            # The allocation-lens sum is a safe upper bound for the
+            # host-side budgeting that consumes seq_lens_sum.
+            draft_seq_lens_cpu = None
             draft_seq_lens_sum = int(draft_input.nxt_kv_lens_sum)
         else:
             raise RuntimeError("DSpark decode expected batch.seq_lens_cpu, got None")

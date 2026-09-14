@@ -269,7 +269,11 @@ class TargetVerifyExecutor:
                 batch.seq_lens_cpu = seq_lens_cpu_backup + verify_w
                 batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
             elif draft_input.nxt_kv_lens_cpu is not None:
-                batch.seq_lens_cpu = draft_input.nxt_kv_lens_cpu
+                # GPU-only overlap path (needs_cpu_seq_lens=False): no host
+                # mirror to expand. Leave seq_lens_cpu None -- the Ascend
+                # backend derives device-side KV lengths from batch.seq_lens
+                # and folds the verify tokens in itself. The allocation-lens
+                # sum is a safe upper bound for host-side budgeting.
                 batch.seq_lens_sum = int(draft_input.nxt_kv_lens_sum)
 
         result = self._forward_prepared_verify(

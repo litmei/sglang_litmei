@@ -10,7 +10,11 @@ from sgl_kernel_npu.attention.sinks_attention import (
     attention_sinks_triton,
 )
 
-from sglang.srt.configs.model_config import AttentionArch, is_deepseek_dsa
+from sglang.srt.configs.model_config import (
+    AttentionArch,
+    is_deepseek_dsa,
+    is_kimi_k3,
+)
 from sglang.srt.dllm.config import DllmConfig
 from sglang.srt.environ import envs
 from sglang.srt.hardware_backend.npu.attention.ascend_torch_native_backend import (
@@ -388,12 +392,16 @@ class AscendAttnBackend(AttentionBackend):
         # attention (npu_sparse_flash_attention / npu_lightning_indexer)
         # consumes per-request KV lengths from the device-side seq_lens
         # buffer, so graph-replay and eager metadata run without the host
-        # mirror. V4 keeps the legacy path: its graph-replay metadata asserts
-        # seq_lens_cpu (DeepseekV4AscendAttnBackend). Hybrid-SWA models stay
-        # on the legacy path because their replay metadata is sized from the
-        # host mirror (see _apply_cuda_graph_metadata).
-        self.needs_cpu_seq_lens = self.is_hybrid_swa or not is_deepseek_dsa(
-            model_runner.model_config.hf_config
+        # mirror. Kimi-K3 (KDA hybrid) follows the same GPU-only contract:
+        # its MLA layers take tensor-form actual_seq_lengths_kv and the KDA
+        # linear-attention side never reads the host mirror. V4 keeps the
+        # legacy path: its graph-replay metadata asserts seq_lens_cpu
+        # (DeepseekV4AscendAttnBackend). Hybrid-SWA models stay on the
+        # legacy path because their replay metadata is sized from the host
+        # mirror (see _apply_cuda_graph_metadata).
+        self.needs_cpu_seq_lens = self.is_hybrid_swa or not (
+            is_deepseek_dsa(model_runner.model_config.hf_config)
+            or is_kimi_k3(model_runner.model_config.hf_config)
         )
 
         # head num padding
@@ -538,7 +546,17 @@ class AscendAttnBackend(AttentionBackend):
 
         if forward_batch.forward_mode.is_target_verify():
             spec_algorithm = forward_batch.spec_algorithm
-            if spec_algorithm is None or not spec_algorithm.is_dspark():
+            if (
+                spec_algorithm is None
+                or not spec_algorithm.is_dspark()
+                or forward_batch.seq_lens_cpu is None
+            ):
+                # Non-DSpark callers pass seq_lens_cpu without the verify
+                # query tokens and rely on this add. DSpark's host path folds
+                # them in on the host (dspark_draft/dspark_verify), but the
+                # GPU-only path (needs_cpu_seq_lens=False) has no host mirror
+                # -- seq_lens_cpu_int falls back to the device seq_lens, which
+                # also excludes the query tokens, so fold them in here.
                 self.forward_metadata.seq_lens_cpu_int += spec_tokens_per_req
         elif (
             forward_batch.forward_mode.is_decode_or_idle()
