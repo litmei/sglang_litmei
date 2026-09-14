@@ -12,8 +12,6 @@ from sgl_kernel_npu.attention.sinks_attention import (
 
 from sglang.srt.configs.model_config import (
     AttentionArch,
-    is_deepseek_dsa,
-    is_kimi_k3,
 )
 from sglang.srt.dllm.config import DllmConfig
 from sglang.srt.environ import envs
@@ -399,10 +397,12 @@ class AscendAttnBackend(AttentionBackend):
         # (DeepseekV4AscendAttnBackend). Hybrid-SWA models stay on the
         # legacy path because their replay metadata is sized from the host
         # mirror (see _apply_cuda_graph_metadata).
-        self.needs_cpu_seq_lens = self.is_hybrid_swa or not (
-            is_deepseek_dsa(model_runner.model_config.hf_config)
-            or is_kimi_k3(model_runner.model_config.hf_config)
+        self.needs_cpu_seq_lens = (
+            False  # self.is_hybrid_swa or not (  # todo debug here
         )
+        #     is_deepseek_dsa(model_runner.model_config.hf_config)
+        #     or is_kimi_k3(model_runner.model_config.hf_config)
+        # )
 
         # head num padding
         self.padding_size_list = [1, 2, 4, 8, 16, 32, 64, 128]

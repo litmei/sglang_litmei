@@ -27,7 +27,7 @@ class AscendMambaAttnBackendBase(MambaAttnBackendBase):
     def __init__(self, model_runner: ModelRunner):
         super().__init__(model_runner)
         self.state_indices_list_gdn = []
-        self.needs_cpu_seq_lens = False  # for debug now
+        self.needs_cpu_seq_lens = False  # todo for debug now
 
     def init_cuda_graph_state(self, max_bs: int, max_num_tokens: int):
         assert (
