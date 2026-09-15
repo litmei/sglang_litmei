@@ -10,7 +10,7 @@ from sgl_kernel_npu.attention.sinks_attention import (
     attention_sinks_triton,
 )
 
-from sglang.srt.configs.model_config import AttentionArch, is_deepseek_dsa
+from sglang.srt.configs.model_config import AttentionArch, is_deepseek_dsa, is_kimi_k3
 from sglang.srt.dllm.config import DllmConfig
 from sglang.srt.environ import envs
 from sglang.srt.hardware_backend.npu.attention.ascend_torch_native_backend import (
@@ -392,8 +392,10 @@ class AscendAttnBackend(AttentionBackend):
         # seq_lens_cpu (DeepseekV4AscendAttnBackend). Hybrid-SWA models stay
         # on the legacy path because their replay metadata is sized from the
         # host mirror (see _apply_cuda_graph_metadata).
-        self.needs_cpu_seq_lens = self.is_hybrid_swa or not is_deepseek_dsa(
-            model_runner.model_config.hf_config
+        self.needs_cpu_seq_lens = self.is_hybrid_swa or not (
+            is_deepseek_dsa(model_runner.model_config.hf_config)
+            # todo to be precise, what's supported here is the Kimi-K3 with the DSA architecture.
+            or is_kimi_k3(model_runner.model_config.hf_config)
         )
 
         # head num padding

@@ -7,6 +7,7 @@ from sgl_kernel_npu.mamba.mamba_state_update_triton import (
     move_intermediate_cache,
 )
 
+from sglang.srt.configs.model_config import is_kimi_k3
 from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
 from sglang.srt.layers.attention.hybrid_linear_attn_backend import (
     HybridLinearAttnBackend,
@@ -27,6 +28,7 @@ class AscendMambaAttnBackendBase(MambaAttnBackendBase):
     def __init__(self, model_runner: ModelRunner):
         super().__init__(model_runner)
         self.state_indices_list_gdn = []
+        self.needs_cpu_seq_lens = not is_kimi_k3(model_runner.model_config.hf_config)
 
     def init_cuda_graph_state(self, max_bs: int, max_num_tokens: int):
         assert (
