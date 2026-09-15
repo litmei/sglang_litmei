@@ -392,11 +392,7 @@ class AscendAttnBackend(AttentionBackend):
         # seq_lens_cpu (DeepseekV4AscendAttnBackend). Hybrid-SWA models stay
         # on the legacy path because their replay metadata is sized from the
         # host mirror (see _apply_cuda_graph_metadata).
-        self.needs_cpu_seq_lens = self.is_hybrid_swa or not (
-            is_deepseek_dsa(model_runner.model_config.hf_config)
-            # todo to be precise, what's supported here is the Kimi-K3 with the DSA architecture.
-            or is_kimi_k3(model_runner.model_config.hf_config)
-        )
+        self.needs_cpu_seq_lens = False
 
         # head num padding
         self.padding_size_list = [1, 2, 4, 8, 16, 32, 64, 128]
