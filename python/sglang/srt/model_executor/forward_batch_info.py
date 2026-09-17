@@ -31,10 +31,11 @@ import hashlib
 import logging
 import os
 import warnings
+from collections import deque
 from dataclasses import dataclass
 from enum import IntEnum, auto
 from functools import total_ordering
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Deque, Dict, List, Optional, Set, Tuple, Union
 
 import torch
 
@@ -97,6 +98,38 @@ _PIN_REUSE_LOG_LIMIT = 10
 # Warn-once flag for the value-level check (see verify_pinned_h2d).
 _pin_race_value_check_warned = False
 
+# Keepalive for pinned H2D staging blocks.
+#
+# A staging temporary is dropped as soon as the statement that created it ends,
+# but its non_blocking H2D is stream-ordered behind the in-flight forward and
+# stays queued for a whole iteration. The host caching allocator then hands the
+# same block to the next same-size staging (observed gap=1) and the DMA reads the
+# new contents. Hold every staged block until its own copy has drained.
+_PINNED_STAGE_KEEPALIVE = 256
+_pinned_stage_ring: Deque[Tuple[torch.Tensor, torch.Tensor]] = deque()
+_pinned_stage_pending: Optional[torch.Tensor] = None
+
+
+def _release_drained_pinned_stages() -> None:
+    # Non-blocking: only the overflow path ever actually waits.
+    while len(_pinned_stage_ring) > _PINNED_STAGE_KEEPALIVE:
+        _, event = _pinned_stage_ring.popleft()
+        if not event.query():
+            event.synchronize()
+
+
+def _fence_pending_pinned_stage() -> None:
+    # Callers stage then copy, so by the time the next staging call runs the
+    # previous copy is already enqueued: an event recorded now bounds the
+    # lifetime of its source block.
+    global _pinned_stage_pending
+    if _pinned_stage_pending is not None:
+        event = torch.get_device_module().Event()
+        event.record()
+        _pinned_stage_ring.append((_pinned_stage_pending, event))
+        _pinned_stage_pending = None
+    _release_drained_pinned_stages()
+
 
 def _debug_rank_info() -> str:
     try:
@@ -115,19 +148,25 @@ def stage_pinned_h2d(
 ) -> torch.Tensor:
     """Build the host staging tensor for a non-blocking H2D, and probe block reuse.
 
+    When pinned, the block is pinned alive until its own copy drains (see
+    _fence_pending_pinned_stage), so the host caching allocator cannot recycle it
+    while the DMA that reads it is still queued.
+
     The probe is host-only: it records the ``data_ptr`` of every pinned staging
     temporary and logs when the host caching allocator hands the same block out
-    again. A REUSE line with a small ``gap`` means a fresh temporary landed on a
-    block whose earlier non-blocking copy may still be queued -- the copy is
-    stream-ordered behind the in-flight forward, so the source can be overwritten
-    before the DMA reads it.
+    again. With the keepalive in place, such REUSE lines should disappear.
 
     Deliberately never touches the device stream, so unlike verify_pinned_h2d it
     does not mask the race it is looking for. Gated by
     SGLANG_NPU_PIN_RACE_CHECK.
     """
-    global _pin_stage_seq
+    global _pin_stage_seq, _pinned_stage_pending
+    if pin_memory:
+        # Bound the previous staged block before this one can take its place.
+        _fence_pending_pinned_stage()
     staged = torch.tensor(host_values, dtype=dtype, pin_memory=pin_memory)
+    if pin_memory:
+        _pinned_stage_pending = staged
     if pin_memory and envs.SGLANG_NPU_PIN_RACE_CHECK.get():
         _pin_stage_seq += 1
         ptr = staged.data_ptr()
