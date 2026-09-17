@@ -228,6 +228,21 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
         forward_batch: ForwardBatch,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> Union[LogitsProcessorOutput, PPProxyTensors]:
+        from sglang.srt.distributed.coll_trace import record_dp_geometry
+
+        record_dp_geometry(
+            "graph.replay",
+            mode=forward_batch.forward_mode.name,
+            bs=getattr(self, "bs", None),
+            raw_num_token=getattr(self, "raw_num_token", None),
+            buffer_len=forward_batch.global_dp_buffer_len,
+            pad=(
+                forward_batch.dp_padding_mode.name
+                if forward_batch.dp_padding_mode is not None
+                else None
+            ),
+            gnt=forward_batch.global_num_tokens_cpu,
+        )
         if forward_batch.needs_forward_metadata_init():
             self.load_batch(forward_batch, pp_proxy_tensors)
         else:

@@ -1559,6 +1559,22 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         )
         set_is_extend_in_batch(self.is_extend_in_batch)
 
+        # Record the geometry the DP collectives will be built from. The eager
+        # path and the CUDA-graph replay path must agree on it, or the
+        # gather/combine split sizes mismatch across ranks.
+        from sglang.srt.distributed.coll_trace import record_dp_geometry
+
+        record_dp_geometry(
+            "eager",
+            mode=self.forward_mode.name,
+            dp_rank=get_parallel().attn_dp_rank,
+            num_tokens=num_tokens,
+            buffer_len=buffer_len,
+            pad=dp_padding_mode.name,
+            bs=self.batch_size,
+            gnt=global_num_tokens,
+        )
+
         bs = self.batch_size
 
         if (

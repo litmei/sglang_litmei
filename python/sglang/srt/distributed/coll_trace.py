@@ -22,6 +22,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import sys
 from collections import deque
 from typing import Any, Callable, List, Optional, Tuple
 
@@ -36,6 +37,18 @@ _TRACE_DEPTH = 96
 _installed = False
 _seq = 0
 _recent: deque = deque(maxlen=_TRACE_DEPTH)
+# Signature -> issuing call site, computed once per unique signature so the hot
+# path never pays for frame introspection.
+_seen_sigs: dict = {}
+
+
+def _caller() -> str:
+    # _record <- wrapper <- the code that issued the collective.
+    try:
+        frame = sys._getframe(3)
+        return f"{os.path.basename(frame.f_code.co_filename)}:{frame.f_lineno}"
+    except Exception:
+        return "?"
 
 
 def _rank_str() -> str:
@@ -78,14 +91,34 @@ def _record(op: str, group: Any, in_sig: str, out_sig: Optional[str]) -> None:
         group_size = group.size()
     except Exception:
         group_size = "?"
+    key = f"{op} {in_sig} -> {out_sig}"
+    origin = _seen_sigs.get(key)
+    if origin is None:
+        origin = _caller()
+        _seen_sigs[key] = origin
     _recent.append(
         f"seq={_seq} op={op} group_size={group_size} in={in_sig} out={out_sig}"
+        f" @{origin}"
     )
 
 
 def recent_collectives() -> List[str]:
     """Last few collective enqueues, oldest first."""
     return list(_recent)
+
+
+def record_dp_geometry(tag: str, **fields: Any) -> None:
+    """Record the DP communication geometry decided for one forward.
+
+    Interleaved with the collective entries, so the watchdog dump shows per step
+    which geometry each rank used. The CUDA-graph replay bucket and the eager
+    MAX_LEN padding must agree: the DP gather/combine split sizes are derived
+    from them, and all_gather_into_tensor / reduce_scatter require every rank to
+    split identically.
+    """
+    if not envs.SGLANG_NPU_COLL_TRACE.get():
+        return
+    _recent.append(f"GEOM {tag} " + " ".join(f"{k}={v}" for k, v in fields.items()))
 
 
 def _make_wrapper(name: str, fn: Callable, sig_builder: Callable) -> Callable:

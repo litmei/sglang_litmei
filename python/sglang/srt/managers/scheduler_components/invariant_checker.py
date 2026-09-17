@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import (
@@ -492,15 +493,16 @@ class SchedulerInvariantChecker:
 def _stream_drain_state(scheduler: Scheduler) -> str:
     """Report which of the scheduler's streams still has queued work.
 
-    A hang dump must not block, so every probe is a non-blocking Event.query()
-    recorded against an explicitly named stream: drained=False names the stream
-    the scheduler is actually stuck behind (its own vs the async forward's).
+    An event recorded and queried back-to-back reports False even on an idle
+    stream, so leave a short grace period before querying. A hang dump may take
+    seconds already, so the sleep is free, and it is the only way to tell a
+    drained stream from the one the scheduler is actually stuck behind.
     """
     try:
         device_module = torch.get_device_module()
     except Exception as exc:
         return f"streams: unavailable ({type(exc).__name__})"
-    parts = []
+    probes = []
     for name in ("schedule_stream", "forward_stream", "copy_stream"):
         stream = getattr(scheduler, name, None)
         if stream is None:
@@ -508,10 +510,22 @@ def _stream_drain_state(scheduler: Scheduler) -> str:
         try:
             event = device_module.Event()
             event.record(stream)
-            parts.append(f"{name}.drained={bool(event.query())}")
+            probes.append((name, event))
         except Exception as exc:
-            parts.append(f"{name}.probe_error={type(exc).__name__}")
-    return " ".join(parts) if parts else "streams: none"
+            probes.append((name, f"probe_error={type(exc).__name__}"))
+    if not probes:
+        return "streams: none"
+    time.sleep(0.2)
+    parts = []
+    for name, probe in probes:
+        if isinstance(probe, str):
+            parts.append(f"{name}.{probe}")
+        else:
+            try:
+                parts.append(f"{name}.drained={bool(probe.query())}")
+            except Exception as exc:
+                parts.append(f"{name}.probe_error={type(exc).__name__}")
+    return " ".join(parts)
 
 
 def _step_state(scheduler: Scheduler) -> str:
