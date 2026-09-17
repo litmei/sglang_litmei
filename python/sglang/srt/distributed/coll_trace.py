@@ -109,6 +109,32 @@ def recent_collectives() -> List[str]:
     return list(_recent)
 
 
+def record_pin_keepalive(
+    current_ct: int, evicted_iter: Optional[int], forward_done: Any
+) -> None:
+    """Detect a batch_record_buf pin released while its forward is in flight.
+
+    batch_record_buf is a 2-slot ring, so a batch's tensors are pinned for
+    exactly two iterations. If the scheduler host runs further ahead than that
+    -- which needs no per-step host<->device sync: with overlap the decode path
+    takes no D2H at all, and the gloo scheduler barrier only synchronises the
+    two hosts, not host against device -- the pin is dropped while the forward
+    stream still reads those tensors and the allocator is free to recycle them
+    under the in-flight graph replay. A False query here is that failure.
+    """
+    if not envs.SGLANG_NPU_COLL_TRACE.get():
+        return
+    if forward_done is None:
+        return
+    try:
+        done = bool(forward_done.query())
+    except Exception:
+        return
+    _recent.append(
+        f"PIN ct={current_ct} evicted_iter={evicted_iter} forward_done={done}"
+    )
+
+
 def record_dp_geometry(tag: str, **fields: Any) -> None:
     """Record the DP communication geometry decided for one forward.
 
