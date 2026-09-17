@@ -971,9 +971,12 @@ class Envs:
     SGLANG_NPU_ATTN_BACKEND_NEEDS_CPU_SEQ_LENS = EnvBool(True)
     # Enable pin_memory=True to reduce free bubbles caused by host to device transfer.
     SGLANG_NPU_ENABLE_PIN_MEMORY = EnvBool(False)
-    # Debug aid: verify that temporaries staged through pinned H2D landed intact.
-    # Adds a blocking D2H per checked tensor; keep off in normal runs.
+    # Debug aid: probe reuse of pinned H2D staging blocks (host-side only, no
+    # device sync, so it does not mask the race). Keep off in normal runs.
     SGLANG_NPU_PIN_RACE_CHECK = EnvBool(False)
+    # Debug aid: value-level check of the same staging. WARNING: its blocking D2H
+    # drains the stream and masks the race; use SGLANG_NPU_PIN_RACE_CHECK instead.
+    SGLANG_NPU_PIN_RACE_VALUE_CHECK = EnvBool(False)
 
     # ===================================================================
     # MUSA

@@ -88,7 +88,14 @@ _is_cpu = is_cpu()
 
 logger = logging.getLogger(__name__)
 
-_pin_race_check_warned = False
+# Zero-sync pinned-staging probe state (see stage_pinned_h2d).
+_pin_stage_seq = 0
+_pin_stage_owner: Dict[int, Tuple[str, int]] = {}
+_pin_reuse_logged: Dict[Tuple[str, str], int] = {}
+_PIN_REUSE_LOG_LIMIT = 10
+
+# Warn-once flag for the value-level check (see verify_pinned_h2d).
+_pin_race_value_check_warned = False
 
 
 def _debug_rank_info() -> str:
@@ -100,13 +107,60 @@ def _debug_rank_info() -> str:
         return "dp?"
 
 
+def stage_pinned_h2d(
+    name: str,
+    host_values: List[int],
+    dtype: torch.dtype,
+    pin_memory: bool,
+) -> torch.Tensor:
+    """Build the host staging tensor for a non-blocking H2D, and probe block reuse.
+
+    The probe is host-only: it records the ``data_ptr`` of every pinned staging
+    temporary and logs when the host caching allocator hands the same block out
+    again. A REUSE line with a small ``gap`` means a fresh temporary landed on a
+    block whose earlier non-blocking copy may still be queued -- the copy is
+    stream-ordered behind the in-flight forward, so the source can be overwritten
+    before the DMA reads it.
+
+    Deliberately never touches the device stream, so unlike verify_pinned_h2d it
+    does not mask the race it is looking for. Gated by
+    SGLANG_NPU_PIN_RACE_CHECK.
+    """
+    global _pin_stage_seq
+    staged = torch.tensor(host_values, dtype=dtype, pin_memory=pin_memory)
+    if pin_memory and envs.SGLANG_NPU_PIN_RACE_CHECK.get():
+        _pin_stage_seq += 1
+        ptr = staged.data_ptr()
+        prev = _pin_stage_owner.get(ptr)
+        if prev is not None:
+            prev_name, prev_seq = prev
+            key = (prev_name, name)
+            seen = _pin_reuse_logged.get(key, 0)
+            if seen < _PIN_REUSE_LOG_LIMIT:
+                _pin_reuse_logged[key] = seen + 1
+                logger.error(
+                    "[pinned-h2d-ptr] %s pid=%d rank=%s REUSE ptr=0x%x seq=%d "
+                    "prev_owner=%s prev_seq=%d gap=%d",
+                    name,
+                    os.getpid(),
+                    _debug_rank_info(),
+                    ptr,
+                    _pin_stage_seq,
+                    prev_name,
+                    prev_seq,
+                    _pin_stage_seq - prev_seq,
+                )
+        _pin_stage_owner[ptr] = (name, _pin_stage_seq)
+    return staged
+
+
 def verify_pinned_h2d(
     name: str,
     got: torch.Tensor,
     expected: List[int],
     sibling: Optional[List[int]] = None,
 ) -> None:
-    """Debug aid for the NPU pinned-H2D source-clobber race.
+    """Value-level check for the NPU pinned-H2D source-clobber race.
 
     ``got`` is the device tensor staged from the host list ``expected`` through a
     temporary ``pin_memory=True`` tensor. A later same-size temporary allocation
@@ -115,16 +169,17 @@ def verify_pinned_h2d(
     the immediately following same-size temporary, which makes the clobber
     signature explicit in the log.
 
-    Gated by SGLANG_NPU_PIN_RACE_CHECK; performs a blocking D2H, so keep it off
-    in normal runs.
+    WARNING: the blocking D2H below drains the stream and therefore masks the
+    very race it detects. Prefer stage_pinned_h2d, which is sync-free. Gated by
+    SGLANG_NPU_PIN_RACE_VALUE_CHECK.
     """
-    if not envs.SGLANG_NPU_PIN_RACE_CHECK.get():
+    if not envs.SGLANG_NPU_PIN_RACE_VALUE_CHECK.get():
         return
-    global _pin_race_check_warned
-    if not _pin_race_check_warned:
-        _pin_race_check_warned = True
+    global _pin_race_value_check_warned
+    if not _pin_race_value_check_warned:
+        _pin_race_value_check_warned = True
         logger.warning(
-            "[pinned-h2d-check] active; adds a blocking D2H per checked tensor"
+            "[pinned-h2d-value] active; the blocking D2H MASKS the race it checks"
         )
     got_cpu = got.detach().cpu().tolist()
     expected_cpu = list(expected)
@@ -132,7 +187,7 @@ def verify_pinned_h2d(
     if got_cpu == expected_cpu:
         return
     logger.error(
-        "[pinned-h2d-check] %s pid=%d rank=%s MISMATCH got=%s expected=%s "
+        "[pinned-h2d-value] %s pid=%d rank=%s MISMATCH got=%s expected=%s "
         "clobbered_by_sibling=%s sibling=%s",
         name,
         os.getpid(),
@@ -808,14 +863,15 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         self.original_global_num_tokens_cpu = batch.global_num_tokens
         self.global_num_tokens_cpu = global_num_tokens
         pin_memory = is_pin_memory_available(device)
-        self.global_num_tokens_gpu = torch.tensor(
-            global_num_tokens, dtype=torch.int64, pin_memory=pin_memory
+        self.global_num_tokens_gpu = stage_pinned_h2d(
+            "global_num_tokens_gpu", global_num_tokens, torch.int64, pin_memory
         ).to(device, non_blocking=True)
         self.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
-        self.global_num_tokens_for_logprob_gpu = torch.tensor(
+        self.global_num_tokens_for_logprob_gpu = stage_pinned_h2d(
+            "global_num_tokens_for_logprob_gpu",
             global_num_tokens_for_logprob,
-            dtype=torch.int64,
-            pin_memory=pin_memory,
+            torch.int64,
+            pin_memory,
         ).to(device, non_blocking=True)
         verify_pinned_h2d(
             "global_num_tokens_gpu",
@@ -1010,11 +1066,11 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 # Main path: H2D from host lists; populate *_cpu mirrors.
                 assert isinstance(extend_prefix_lens, list)
                 pin_memory = is_pin_memory_available(device)
-                ret.extend_seq_lens = torch.tensor(
-                    extend_seq_lens, dtype=torch.int32, pin_memory=pin_memory
+                ret.extend_seq_lens = stage_pinned_h2d(
+                    "extend_seq_lens", extend_seq_lens, torch.int32, pin_memory
                 ).to(device, non_blocking=True)
-                ret.extend_prefix_lens = torch.tensor(
-                    extend_prefix_lens, dtype=torch.int32, pin_memory=pin_memory
+                ret.extend_prefix_lens = stage_pinned_h2d(
+                    "extend_prefix_lens", extend_prefix_lens, torch.int32, pin_memory
                 ).to(device, non_blocking=True)
                 verify_pinned_h2d(
                     "extend_seq_lens",
@@ -1647,8 +1703,11 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         self._pad_inputs_to_size(model_runner, num_tokens, bs)
         self.global_num_tokens_cpu = global_num_tokens
         self.use_pin_memory = not _is_cpu
-        global_num_tokens_pinned = torch.tensor(
-            global_num_tokens, pin_memory=self.use_pin_memory
+        global_num_tokens_pinned = stage_pinned_h2d(
+            "prepare_mlp_sync_batch.global_num_tokens_gpu",
+            global_num_tokens,
+            torch.int64,
+            self.use_pin_memory,
         )
         self.global_num_tokens_gpu.copy_(
             global_num_tokens_pinned, non_blocking=self.use_pin_memory
