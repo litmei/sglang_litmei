@@ -49,7 +49,7 @@ import types
 import uuid
 import warnings
 from array import array
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
@@ -556,6 +556,88 @@ def get_available_gpu_memory(
 
 def is_pin_memory_available(device=None) -> bool:
     return current_platform.is_pin_memory_available(device)
+
+
+# Keepalive for pinned H2D staging blocks.
+#
+# A staging temporary is dropped as soon as the statement that created it ends,
+# but its non_blocking H2D is stream-ordered behind the in-flight forward and
+# stays queued for a whole iteration. The host caching allocator then hands the
+# same block to the next same-size staging and the DMA reads the new contents.
+# Register every pinned staging tensor here so its block is held until its own
+# copy drains.
+_PINNED_STAGE_KEEPALIVE = 256
+_pinned_stage_ring: deque = deque()
+_pinned_stage_pending: Optional[torch.Tensor] = None
+
+# Zero-sync reuse probe, gated by SGLANG_NPU_PIN_RACE_CHECK.
+_pin_stage_seq = 0
+_pin_stage_owner: Dict[int, Tuple[str, int]] = {}
+_pin_reuse_logged: Dict[Tuple[str, str], int] = {}
+_PIN_REUSE_LOG_LIMIT = 10
+
+
+def _release_drained_pinned_stages() -> None:
+    # Non-blocking: only the overflow path ever actually waits.
+    while len(_pinned_stage_ring) > _PINNED_STAGE_KEEPALIVE:
+        _, event = _pinned_stage_ring.popleft()
+        if not event.query():
+            event.synchronize()
+
+
+def _fence_pending_pinned_stage() -> None:
+    # Callers stage then copy, so by the time the next staging call runs the
+    # previous copy is already enqueued: an event recorded now bounds the
+    # lifetime of its source block.
+    global _pinned_stage_pending
+    if _pinned_stage_pending is not None:
+        event = torch.get_device_module().Event()
+        event.record()
+        _pinned_stage_ring.append((_pinned_stage_pending, event))
+        _pinned_stage_pending = None
+    _release_drained_pinned_stages()
+
+
+def keep_pinned_stage(host_tensor: torch.Tensor, name: str) -> torch.Tensor:
+    """Register a pinned host staging tensor whose non-blocking copy follows.
+
+    Returns ``host_tensor``. The block is held until its own copy has drained,
+    so the host caching allocator cannot recycle it while the DMA that reads it
+    is still queued -- the failure mode that corrupts the device tensor.
+
+    Also probes block reuse (host-side ``data_ptr`` bookkeeping only, no device
+    sync) when SGLANG_NPU_PIN_RACE_CHECK is set. With the keepalive in place,
+    same-block REUSE lines should only show a large ``gap`` (ring evictions).
+    """
+    global _pin_stage_seq, _pinned_stage_pending
+    if not host_tensor.is_pinned():
+        # Pageable staging already synchronizes on the way out; nothing to hold.
+        return host_tensor
+    _fence_pending_pinned_stage()
+    _pinned_stage_pending = host_tensor
+    if envs.SGLANG_NPU_PIN_RACE_CHECK.get():
+        _pin_stage_seq += 1
+        ptr = host_tensor.data_ptr()
+        prev = _pin_stage_owner.get(ptr)
+        if prev is not None:
+            prev_name, prev_seq = prev
+            key = (prev_name, name)
+            seen = _pin_reuse_logged.get(key, 0)
+            if seen < _PIN_REUSE_LOG_LIMIT:
+                _pin_reuse_logged[key] = seen + 1
+                logger.error(
+                    "[pinned-h2d-ptr] %s pid=%d REUSE ptr=0x%x seq=%d "
+                    "prev_owner=%s prev_seq=%d gap=%d",
+                    name,
+                    os.getpid(),
+                    ptr,
+                    _pin_stage_seq,
+                    prev_name,
+                    prev_seq,
+                    _pin_stage_seq - prev_seq,
+                )
+        _pin_stage_owner[ptr] = (name, _pin_stage_seq)
+    return host_tensor
 
 
 def get_dispatch_device_backend():

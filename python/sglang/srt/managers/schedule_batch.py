@@ -18,6 +18,7 @@ from sglang.srt.utils.common import (
     ceil_align,
     flatten_arrays_to_pinned_cpu,
     is_pin_memory_available,
+    keep_pinned_stage,
 )
 from sglang.srt.utils.weight_versions import (
     WeightVersionEvent,
@@ -2658,12 +2659,13 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         # Stay on pinned CPU; H2D is deferred to forward stream via
         # resolve_forward_inputs.
         pinned_input_ids = flatten_arrays_to_pinned_cpu(input_ids, _pin)
-        seq_lens_tensor = torch.tensor(seq_lens, dtype=torch.int64, pin_memory=_pin).to(
-            self.device, non_blocking=True
-        )
+        seq_lens_tensor = keep_pinned_stage(
+            torch.tensor(seq_lens, dtype=torch.int64, pin_memory=_pin), "seq_lens"
+        ).to(self.device, non_blocking=True)
         seq_lens_cpu = torch.tensor(seq_lens, dtype=torch.int64)
-        orig_seq_lens_tensor = torch.tensor(
-            orig_seq_lens, dtype=torch.int32, pin_memory=_pin
+        orig_seq_lens_tensor = keep_pinned_stage(
+            torch.tensor(orig_seq_lens, dtype=torch.int32, pin_memory=_pin),
+            "orig_seq_lens",
         ).to(self.device, non_blocking=True)
 
         # Set batch fields needed by alloc_for_extend
