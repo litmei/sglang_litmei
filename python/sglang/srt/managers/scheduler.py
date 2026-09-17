@@ -1674,10 +1674,11 @@ class Scheduler(
 
         self.batch_record_buf = [None] * 2
         self.batch_record_ct = 0
-        # Debug only (SGLANG_NPU_COLL_TRACE): forward-launch events keyed by the
-        # batch's forward_iter, so a pin slot overwritten while its forward is
-        # still in flight can be detected. See record_batch_in_overlap.
-        self._dbg_fwd_done = {}
+        # Forward-launch events keyed by forward_iter. The pin ring is only two
+        # slots wide, so once the host runs ahead of the device it starts
+        # evicting batches whose forward has not drained; these events let the
+        # eviction fence itself. See record_batch_in_overlap.
+        self._forward_done_events = {}
 
     def maybe_init_ngram_embedding(self):
         self.ngram_embedding_manager = (
@@ -4210,21 +4211,26 @@ class Scheduler(
             getattr(batch, f.name, None) for f in dataclasses.fields(batch)
         ]
         self.batch_record_ct = (self.batch_record_ct + 1) % 2
-        # Debug only: the slot about to be overwritten still holds a batch whose
-        # forward may not have drained yet. batch_record_buf is a 2-slot ring, so
-        # this fires only once the host has run ahead of the device by more than
-        # two iterations.
-        if envs.SGLANG_NPU_COLL_TRACE.get():
-            from sglang.srt.distributed.coll_trace import record_pin_keepalive
+        # Fence the eviction: the snapshot's GPU tensors are read by the forward
+        # stream, so dropping the pin before that forward drains lets the caching
+        # allocator recycle them under the in-flight graph replay. The ring holds
+        # only two batches, so this fires exactly when the host has run ahead of
+        # the device -- a state that needs no host<->device sync to reach, since
+        # the overlap decode path takes no D2H and the scheduler's DP barrier
+        # synchronises the two hosts rather than host against device. In the
+        # steady state the event has long completed and query() is free.
+        prev = self.batch_record_buf[self.batch_record_ct]
+        if prev is not None:
+            prev_iter = getattr(prev[0], "forward_iter", None)
+            prev_done = self._forward_done_events.pop(prev_iter, None)
+            if prev_done is not None and not prev_done.query():
+                if envs.SGLANG_NPU_COLL_TRACE.get():
+                    from sglang.srt.distributed.coll_trace import (
+                        record_pin_keepalive,
+                    )
 
-            evicted = self.batch_record_buf[self.batch_record_ct]
-            evicted_batch = evicted[0] if evicted else None
-            evicted_iter = getattr(evicted_batch, "forward_iter", None)
-            record_pin_keepalive(
-                self.forward_ct,
-                evicted_iter,
-                getattr(self, "_dbg_fwd_done", {}).pop(evicted_iter, None),
-            )
+                    record_pin_keepalive(self.forward_ct, prev_iter, prev_done)
+                prev_done.synchronize()
         # List (not tuple) so that workers can register additional refs via
         # GenerationBatchResult.extra_keep_alive_refs after forward returns.
         self.batch_record_buf[self.batch_record_ct] = [batch, attr_snapshot]
@@ -4350,16 +4356,16 @@ class Scheduler(
                         batch_result = self.model_worker.forward_batch_generation(
                             batch, **fwd_kwargs
                         )
-                        if envs.SGLANG_NPU_COLL_TRACE.get():
-                            # Debug only: event right after this forward's launch,
-                            # queried when its pin slot is recycled. See
-                            # record_batch_in_overlap.
-                            dbg_ev = self.device_module.Event()
-                            dbg_ev.record(stream=self.forward_stream)
-                            self._dbg_fwd_done[batch.forward_iter] = dbg_ev
-                            if len(self._dbg_fwd_done) > 8:
-                                for stale in list(self._dbg_fwd_done)[:-8]:
-                                    del self._dbg_fwd_done[stale]
+                        # Event right after this forward's launch. Its ops are all
+                        # enqueued on forward_stream by now, so draining it means
+                        # the batch's snapshot tensors are no longer read and the
+                        # pin can be recycled. See record_batch_in_overlap.
+                        fwd_done = self.device_module.Event()
+                        fwd_done.record(stream=self.forward_stream)
+                        self._forward_done_events[batch.forward_iter] = fwd_done
+                        while len(self._forward_done_events) > 8:
+                            oldest = next(iter(self._forward_done_events))
+                            del self._forward_done_events[oldest]
                         if batch.spec_algorithm.is_none():
                             self.future_map.publish(future_indices, batch.seq_lens + 1)
                         # Park any refs the worker wants kept alive 2 iters
