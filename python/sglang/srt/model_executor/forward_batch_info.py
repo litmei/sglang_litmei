@@ -28,6 +28,8 @@ ScheduleBatch -> ForwardBatch
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 import warnings
 from dataclasses import dataclass
 from enum import IntEnum, auto
@@ -83,6 +85,63 @@ _skip_attn_backend_init_warned = False
 
 _is_npu = is_npu()
 _is_cpu = is_cpu()
+
+logger = logging.getLogger(__name__)
+
+_pin_race_check_warned = False
+
+
+def _debug_rank_info() -> str:
+    try:
+        from sglang.srt.layers.dp_attention import get_attention_dp_rank
+
+        return f"dp{get_attention_dp_rank()}"
+    except Exception:
+        return "dp?"
+
+
+def verify_pinned_h2d(
+    name: str,
+    got: torch.Tensor,
+    expected: List[int],
+    sibling: Optional[List[int]] = None,
+) -> None:
+    """Debug aid for the NPU pinned-H2D source-clobber race.
+
+    ``got`` is the device tensor staged from the host list ``expected`` through a
+    temporary ``pin_memory=True`` tensor. A later same-size temporary allocation
+    can reuse that host block before the queued DMA reads it, so ``got`` may hold
+    the values of a sibling list instead. ``sibling`` is the other list staged by
+    the immediately following same-size temporary, which makes the clobber
+    signature explicit in the log.
+
+    Gated by SGLANG_NPU_PIN_RACE_CHECK; performs a blocking D2H, so keep it off
+    in normal runs.
+    """
+    if not envs.SGLANG_NPU_PIN_RACE_CHECK.get():
+        return
+    global _pin_race_check_warned
+    if not _pin_race_check_warned:
+        _pin_race_check_warned = True
+        logger.warning(
+            "[pinned-h2d-check] active; adds a blocking D2H per checked tensor"
+        )
+    got_cpu = got.detach().cpu().tolist()
+    expected_cpu = list(expected)
+    sibling_cpu = None if sibling is None else list(sibling)
+    if got_cpu == expected_cpu:
+        return
+    logger.error(
+        "[pinned-h2d-check] %s pid=%d rank=%s MISMATCH got=%s expected=%s "
+        "clobbered_by_sibling=%s sibling=%s",
+        name,
+        os.getpid(),
+        _debug_rank_info(),
+        got_cpu,
+        expected_cpu,
+        sibling_cpu is not None and got_cpu == sibling_cpu,
+        sibling_cpu,
+    )
 
 
 def _elastic_should_preserve_local_token_counts(
@@ -758,6 +817,17 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             dtype=torch.int64,
             pin_memory=pin_memory,
         ).to(device, non_blocking=True)
+        verify_pinned_h2d(
+            "global_num_tokens_gpu",
+            self.global_num_tokens_gpu,
+            global_num_tokens,
+            sibling=global_num_tokens_for_logprob,
+        )
+        verify_pinned_h2d(
+            "global_num_tokens_for_logprob_gpu",
+            self.global_num_tokens_for_logprob_gpu,
+            global_num_tokens_for_logprob,
+        )
         self.can_run_decode_cuda_graph = batch.can_run_decode_cuda_graph
 
     @classmethod
@@ -946,6 +1016,17 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 ret.extend_prefix_lens = torch.tensor(
                     extend_prefix_lens, dtype=torch.int32, pin_memory=pin_memory
                 ).to(device, non_blocking=True)
+                verify_pinned_h2d(
+                    "extend_seq_lens",
+                    ret.extend_seq_lens,
+                    extend_seq_lens,
+                    sibling=extend_prefix_lens,
+                )
+                verify_pinned_h2d(
+                    "extend_prefix_lens",
+                    ret.extend_prefix_lens,
+                    extend_prefix_lens,
+                )
                 ret.extend_prefix_lens_cpu = extend_prefix_lens
                 ret.extend_seq_lens_cpu = extend_seq_lens
             else:
@@ -1571,6 +1652,11 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         )
         self.global_num_tokens_gpu.copy_(
             global_num_tokens_pinned, non_blocking=self.use_pin_memory
+        )
+        verify_pinned_h2d(
+            "prepare_mlp_sync_batch.global_num_tokens_gpu",
+            self.global_num_tokens_gpu,
+            global_num_tokens,
         )
 
         TboForwardBatchPreparer.prepare(
