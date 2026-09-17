@@ -489,6 +489,54 @@ class SchedulerInvariantChecker:
             self.tree_cache.sanity_check()
 
 
+def _stream_drain_state(scheduler: Scheduler) -> str:
+    """Report which of the scheduler's streams still has queued work.
+
+    A hang dump must not block, so every probe is a non-blocking Event.query()
+    recorded against an explicitly named stream: drained=False names the stream
+    the scheduler is actually stuck behind (its own vs the async forward's).
+    """
+    try:
+        device_module = torch.get_device_module()
+    except Exception as exc:
+        return f"streams: unavailable ({type(exc).__name__})"
+    parts = []
+    for name in ("schedule_stream", "forward_stream", "copy_stream"):
+        stream = getattr(scheduler, name, None)
+        if stream is None:
+            continue
+        try:
+            event = device_module.Event()
+            event.record(stream)
+            parts.append(f"{name}.drained={bool(event.query())}")
+        except Exception as exc:
+            parts.append(f"{name}.probe_error={type(exc).__name__}")
+    return " ".join(parts) if parts else "streams: none"
+
+
+def _step_state(scheduler: Scheduler) -> str:
+    last = getattr(scheduler, "last_batch", None)
+    return (
+        f"forward_ct={scheduler.forward_ct} "
+        f"last_batch.forward_mode={getattr(last, 'forward_mode', None)} "
+        f"last_batch.global_num_tokens={getattr(last, 'global_num_tokens', None)}"
+    )
+
+
+def _collective_trace_state() -> str:
+    """Last collective enqueues; the tail of the stuck step's issue order.
+
+    Diffing this tail against the peer rank's localizes a collective one rank
+    issued and the other never did.
+    """
+    from sglang.srt.distributed.coll_trace import recent_collectives
+
+    tail = recent_collectives()
+    if not tail:
+        return "coll-trace: (not installed or empty)"
+    return "coll-trace (oldest first):\n" + "\n".join(tail)
+
+
 def create_scheduler_watchdog(
     scheduler: Scheduler, watchdog_timeout: float, soft: bool = False
 ) -> WatchdogRaw:
@@ -499,8 +547,11 @@ def create_scheduler_watchdog(
             scheduler.pool_stats_observer.get_pool_stats(),
         )
         return (
+            f"{_step_state(scheduler)}\n"
+            f"{_stream_drain_state(scheduler)}\n"
             f"{scheduler.cur_batch_for_debug.batch_size()=}\n"
-            f"{scheduler.cur_batch_for_debug.reqs=}\n" + "\n".join(messages)
+            f"{scheduler.cur_batch_for_debug.reqs=}\n"
+            f"{_collective_trace_state()}\n" + "\n".join(messages)
         )
 
     return WatchdogRaw(

@@ -977,6 +977,10 @@ class Envs:
     # Debug aid: value-level check of the same staging. WARNING: its blocking D2H
     # drains the stream and masks the race; use SGLANG_NPU_PIN_RACE_CHECK instead.
     SGLANG_NPU_PIN_RACE_VALUE_CHECK = EnvBool(False)
+    # Debug aid: log every torch.distributed collective enqueue (op, group size,
+    # shape/dtype/device signature) so a hang's missing collective is visible by
+    # diffing the two ranks' log tails. High volume; keep off in normal runs.
+    SGLANG_NPU_COLL_TRACE = EnvBool(False)
 
     # ===================================================================
     # MUSA
