@@ -551,6 +551,37 @@ def _collective_trace_state() -> str:
     return "coll-trace (oldest first):\n" + "\n".join(tail)
 
 
+def _stream_ids_state(scheduler: Scheduler) -> str:
+    """Ids of the named streams, so EDGE entries in the trace can be decoded."""
+    parts = []
+    for name in ("schedule_stream", "forward_stream", "copy_stream"):
+        stream = getattr(scheduler, name, None)
+        if stream is not None:
+            parts.append(f"{name}={id(stream):#x}")
+    return "stream ids: " + " ".join(parts)
+
+
+def _device_liveness_state() -> str:
+    """Can the device run NEW work?
+
+    A brand-new stream with nothing queued is the cleanest probe: if its event
+    never completes, the device itself is wedged (a stuck HCCL op can do that on
+    Ascend) rather than the scheduler merely being ordered behind a dependency.
+    """
+    try:
+        device_module = torch.get_device_module()
+        fresh = device_module.Stream()
+        event = device_module.Event()
+        event.record(fresh)
+    except Exception as exc:
+        return f"fresh_stream: probe_error={type(exc).__name__}"
+    time.sleep(0.2)
+    try:
+        return f"fresh_stream.drained={bool(event.query())}"
+    except Exception as exc:
+        return f"fresh_stream: probe_error={type(exc).__name__}"
+
+
 def create_scheduler_watchdog(
     scheduler: Scheduler, watchdog_timeout: float, soft: bool = False
 ) -> WatchdogRaw:
@@ -563,6 +594,8 @@ def create_scheduler_watchdog(
         return (
             f"{_step_state(scheduler)}\n"
             f"{_stream_drain_state(scheduler)}\n"
+            f"{_device_liveness_state()}\n"
+            f"{_stream_ids_state(scheduler)}\n"
             f"{scheduler.cur_batch_for_debug.batch_size()=}\n"
             f"{scheduler.cur_batch_for_debug.reqs=}\n"
             f"{_collective_trace_state()}\n" + "\n".join(messages)

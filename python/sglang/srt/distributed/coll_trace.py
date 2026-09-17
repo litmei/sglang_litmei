@@ -32,7 +32,9 @@ from sglang.srt.environ import envs
 
 logger = logging.getLogger(__name__)
 
-_TRACE_DEPTH = 96
+# Deep enough to keep a few whole steps: a step issues ~50 collectives, and the
+# cross-stream EDGE entries have to survive alongside them.
+_TRACE_DEPTH = 256
 
 _installed = False
 _seq = 0
@@ -121,6 +123,50 @@ def record_dp_geometry(tag: str, **fields: Any) -> None:
     _recent.append(f"GEOM {tag} " + " ".join(f"{k}={v}" for k, v in fields.items()))
 
 
+def _record_edge(kind: str, waiter: Any, waited: Any) -> None:
+    """Record a cross-stream synchronisation edge.
+
+    Every edge is logged by object id; the watchdog dump prints the ids of the
+    scheduler's named streams so a dumped tail can be decoded into "which stream
+    waited on which". With overlap on there are two streams and a hang is often
+    one unsatisfiable edge rather than a missing collective.
+    """
+    if not envs.SGLANG_NPU_COLL_TRACE.get():
+        return
+    global _seq
+    _seq += 1
+    _recent.append(
+        f"seq={_seq} EDGE {kind} waiter={id(waiter):#x} waited={id(waited):#x}"
+    )
+
+
+def _patch_stream_syncs(device_module: Any) -> bool:
+    """Hook Stream.wait_stream / wait_event on every instance.
+
+    Patching the class beats instrumenting ~8 call sites: it also covers edges
+    added later, and the Python-level methods are only ever called from sglang's
+    own overlap machinery (the allocator's cross-stream waits are C++-level).
+    """
+    cls = getattr(device_module, "Stream", None)
+    if cls is None or getattr(cls, "_sglang_coll_trace_patched", False):
+        return False
+    orig_wait_stream = cls.wait_stream
+    orig_wait_event = cls.wait_event
+
+    def wait_stream(self, other):
+        _record_edge("wait_stream", self, other)
+        return orig_wait_stream(self, other)
+
+    def wait_event(self, event):
+        _record_edge("wait_event", self, event)
+        return orig_wait_event(self, event)
+
+    cls.wait_stream = wait_stream
+    cls.wait_event = wait_event
+    cls._sglang_coll_trace_patched = True
+    return True
+
+
 def _make_wrapper(name: str, fn: Callable, sig_builder: Callable) -> Callable:
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
@@ -187,6 +233,13 @@ def install_coll_trace() -> None:
             continue
         setattr(dist, name, _make_wrapper(name, orig, sig_builder))
         patched.append(name)
+    try:
+        import torch
+
+        if _patch_stream_syncs(torch.get_device_module()):
+            patched.append("Stream.wait_stream/wait_event")
+    except Exception as exc:
+        logger.warning("[coll-trace] stream sync hook failed: %r", exc)
     logger.warning(
         "[coll-trace] installed pid=%d depth=%d patched=%s",
         os.getpid(),

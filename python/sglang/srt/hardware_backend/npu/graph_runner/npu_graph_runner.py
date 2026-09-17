@@ -251,18 +251,6 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
                 # Non-DFlash keeps the historical pre-planned replay path: no
                 # attention-metadata refresh, no seq_lens_cpu work, and no
                 # device sync (DSA/DSV4 rely on this staying sync-free).
-                # The captured graph reads the DP token segment sizes from these
-                # buffers, so they must be restored to the capture-time uniform
-                # [padded] * dp_size on every replay: a stale value (e.g. an
-                # idle rank's real [0, n]) misaligns dp-gather segments across
-                # ranks and the coupled HCCL op never completes. The DFlash
-                # branch below refreshes them for the same reason.
-                if self.require_mlp_tp_gather:
-                    _padded_num_tokens = self.bs * self.captured_req_width
-                    self.buffers.global_num_tokens_gpu.fill_(_padded_num_tokens)
-                    self.buffers.global_num_tokens_for_logprob_gpu.fill_(
-                        _padded_num_tokens
-                    )
                 self.buffers.input_ids[: self.raw_num_token].copy_(
                     forward_batch.input_ids
                 )
