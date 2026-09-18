@@ -272,6 +272,16 @@ def _local_decode_cuda_graph_vote(
     """This rank's vote for the decode graph (min-reduced across dp ranks)."""
     if disable_cuda_graph:
         return False
+    if envs.SGLANG_DP_IDLE_EAGER.get() and (
+        local_batch is None or local_batch.forward_mode.is_idle()
+    ):
+        # An idle rank would otherwise replay the decode graph captured for its
+        # peer's DECODE mode. The two ranks then run the same captured graph in
+        # different modes, which desynchronises the coupled HCCL ops and hangs
+        # the scheduler. The vote min-reduces, so voting no here runs the whole
+        # step eagerly, where both ranks issue plain collectives instead of
+        # device-captured ones.
+        return False
     return (
         local_batch is None
         or local_batch.forward_mode.is_decode_or_idle()
