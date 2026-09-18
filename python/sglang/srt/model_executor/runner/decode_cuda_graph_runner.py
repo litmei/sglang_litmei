@@ -1411,6 +1411,14 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         )
         with timer_ctx, self.backend.replay_session():
             self.load_batch(forward_batch, pp_proxy_tensors)
+            # Hand the just-refilled static buffers to the trace so the watchdog
+            # dump can read back, from the still-alive device, the DP token-count
+            # buffers this replayed graph will slice its collectives by. Two
+            # ranks replaying with different values here is the mismatch the
+            # coupled HCCL op can never pair.
+            from sglang.srt.distributed.coll_trace import register_graph_replay
+
+            register_graph_replay(self.buffers)
             if envs.SGLANG_LOG_DECODE_GRAPH_KEY.get():
                 logger.info(
                     "Decode graph replay: worker=%s key_size=%s (%s) mode=%s raw_bs=%d%s",

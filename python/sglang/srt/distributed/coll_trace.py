@@ -89,18 +89,27 @@ def _find_group(args: tuple, kwargs: dict) -> Any:
 def _record(op: str, group: Any, in_sig: str, out_sig: Optional[str]) -> None:
     global _seq
     _seq += 1
-    try:
-        group_size = group.size()
-    except Exception:
-        group_size = "?"
+    # GroupCoordinator exposes world_size/unique_name; a torch ProcessGroup
+    # exposes size(). Keep the name: it is the identifier the HCCL log uses
+    # ("group_name_3"), so a line here maps onto an orchestrator tag.
+    group_size = getattr(group, "world_size", None)
+    if group_size is None:
+        try:
+            group_size = group.size()
+        except Exception:
+            group_size = "?"
+    group_name = getattr(group, "unique_name", "?")
     key = f"{op} {in_sig} -> {out_sig}"
     origin = _seen_sigs.get(key)
     if origin is None:
         origin = _caller()
         _seen_sigs[key] = origin
+    # fwd= is the same counter the geometry ring uses, so the ops of one forward
+    # can be read off directly instead of guessed from seq= order (seq is
+    # per-process and the two ranks are not at the same seq when they hang).
     _recent.append(
-        f"seq={_seq} op={op} group_size={group_size} in={in_sig} out={out_sig}"
-        f" @{origin}"
+        f"fwd={_fwd_seq} seq={_seq} op={op} group={group_name}"
+        f" group_size={group_size} in={in_sig} out={out_sig} @{origin}"
     )
 
 
@@ -271,12 +280,22 @@ def _patch_stream_syncs(device_module: Any) -> bool:
     return True
 
 
-def _make_wrapper(name: str, fn: Callable, sig_builder: Callable) -> Callable:
+def _make_wrapper(
+    name: str,
+    fn: Callable,
+    sig_builder: Callable,
+    group_getter: Optional[Callable] = None,
+) -> Callable:
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
             in_sig, out_sig = sig_builder(args, kwargs)
-            _record(name, _find_group(args, kwargs), in_sig, out_sig)
+            group = (
+                group_getter(args, kwargs)
+                if group_getter is not None
+                else _find_group(args, kwargs)
+            )
+            _record(name, group, in_sig, out_sig)
         except Exception:
             # Never let diagnostics break the collective itself.
             pass
@@ -337,8 +356,113 @@ _PATCH_TARGETS = (
 )
 
 
+def _sig_any(t: Any) -> str:
+    return _sig_list(t) if isinstance(t, (list, tuple)) else _sig(t)
+
+
+def _sig_gc_all_reduce(args, kwargs) -> Tuple[str, Optional[str]]:
+    return _sig(args[1]), None
+
+
+def _sig_gc_all_gather_into_tensor(args, kwargs) -> Tuple[str, Optional[str]]:
+    return _sig(args[2]), _sig(args[1])
+
+
+def _sig_gc_reduce_scatter_tensor(args, kwargs) -> Tuple[str, Optional[str]]:
+    return _sig(args[2]), _sig(args[1])
+
+
+def _sig_gc_all_gather(args, kwargs) -> Tuple[str, Optional[str]]:
+    outputs = args[3] if len(args) > 3 else kwargs.get("output_tensor_list")
+    return _sig_any(args[1]), None if outputs is None else _sig_list(outputs)
+
+
+def _sig_gc_reduce_scatter(args, kwargs) -> Tuple[str, Optional[str]]:
+    return _sig_any(args[2]), _sig(args[1])
+
+
+def _sig_gc_reduce_scatterv(args, kwargs) -> Tuple[str, Optional[str]]:
+    output = args[2] if len(args) > 2 else kwargs.get("output")
+    return _sig_any(args[1]), None if output is None else _sig_any(output)
+
+
+def _sig_gc_all_gatherv(args, kwargs) -> Tuple[str, Optional[str]]:
+    return _sig_any(args[1]), None
+
+
+def _sig_gc_all_to_all_single(args, kwargs) -> Tuple[str, Optional[str]]:
+    return _sig(args[2]), _sig(args[1])
+
+
+def _sig_gc_broadcast(args, kwargs) -> Tuple[str, Optional[str]]:
+    return _sig(args[1]), None
+
+
+def _sig_gc_barrier(args, kwargs) -> Tuple[str, Optional[str]]:
+    return "-", None
+
+
+# The DP gather/combine never calls torch.distributed directly: it goes through
+# GroupCoordinator (get_tp_group().all_gather_into_tensor, get_attn_tp_group(),
+# tensor_model_parallel_all_reduce -> get_tp_group().all_reduce, ...). Patching
+# only torch.distributed therefore recorded NONE of the ops that actually couple
+# the DP ranks -- the dump's tail was pure GEOM lines. Group size / name come
+# from the coordinator itself (args[0]); _record prefers its world_size /
+# unique_name so a line can be matched against the HCCL orchestrator tag.
+_GC_PATCH_TARGETS = (
+    ("all_reduce", _sig_gc_all_reduce),
+    ("all_gather_into_tensor", _sig_gc_all_gather_into_tensor),
+    ("reduce_scatter_tensor", _sig_gc_reduce_scatter_tensor),
+    ("all_gather", _sig_gc_all_gather),
+    ("reduce_scatter", _sig_gc_reduce_scatter),
+    ("reduce_scatterv", _sig_gc_reduce_scatterv),
+    ("all_gatherv", _sig_gc_all_gatherv),
+    ("all_to_all_single", _sig_gc_all_to_all_single),
+    ("broadcast", _sig_gc_broadcast),
+    ("barrier", _sig_gc_barrier),
+)
+
+
+def _dynamo_opaque(fn: Callable) -> Callable:
+    """Keep the recording out of Dynamo's trace.
+
+    GroupCoordinator's collectives *are* traced during capture (that is why
+    parallel_state routes them through custom ops at all), so a probe frame with
+    string formatting, a signature cache and sys._getframe would be traced with
+    them -- and a graph break inside graph capture has no eager fallback.
+    """
+    try:
+        import torch
+
+        return torch._dynamo.disable(fn)
+    except Exception:
+        return fn
+
+
+def _patch_group_coordinator() -> List[str]:
+    """Wrap GroupCoordinator's collectives once per process."""
+    from sglang.srt.distributed.parallel_state import GroupCoordinator
+
+    if getattr(GroupCoordinator, "_sglang_coll_trace_patched", False):
+        return []
+    patched = []
+    for name, sig_builder in _GC_PATCH_TARGETS:
+        orig = getattr(GroupCoordinator, name, None)
+        if orig is None:
+            continue
+        wrapper = _dynamo_opaque(
+            _make_wrapper(
+                f"gc.{name}", orig, sig_builder, group_getter=lambda a, k: a[0]
+            )
+        )
+        setattr(GroupCoordinator, name, wrapper)
+        patched.append(name)
+    GroupCoordinator._sglang_coll_trace_patched = True
+    return patched
+
+
 def install_coll_trace() -> None:
-    """Patch the torch.distributed collectives once per process."""
+    """Patch the collectives once per process."""
     global _installed
     if _installed or not envs.SGLANG_NPU_COLL_TRACE.get():
         return
@@ -350,6 +474,10 @@ def install_coll_trace() -> None:
             continue
         setattr(dist, name, _make_wrapper(name, orig, sig_builder))
         patched.append(name)
+    try:
+        patched.extend(_patch_group_coordinator())
+    except Exception as exc:
+        logger.warning("[coll-trace] GroupCoordinator hook failed: %r", exc)
     try:
         import torch
 

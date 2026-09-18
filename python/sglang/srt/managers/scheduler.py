@@ -1427,6 +1427,13 @@ class Scheduler(
             )
 
     def init_watch_dog_memory_saver_input_blocker(self):
+        # Install the collective trace before the watchdog that reads it; the
+        # module was written but never installed, so the dump's op list stayed
+        # empty no matter what SGLANG_NPU_COLL_TRACE was set to.
+        from sglang.srt.distributed.coll_trace import install_coll_trace
+
+        install_coll_trace()
+
         # Start watchdog thread
         self.watchdog = create_scheduler_watchdog(
             self, watchdog_timeout=get_device().watchdog_timeout
