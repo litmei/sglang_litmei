@@ -335,7 +335,7 @@ def replay(self):
 | `python/sglang/srt/platforms/npu.py` | 新增 breakable 能力位（`support_piecewise_cuda_graph` 保持 `False`） | 必须 |
 | `python/sglang/srt/arg_groups/cuda_graph_hook.py` | `:190-199` 的 non-CUDA 规则需按 backend 区分：不要在 breakable 路径上挡掉 NPU（建议做成 per-arch allowlist） | 必须 |
 | `python/sglang/srt/model_executor/runner_backend/utils.py` | `resolve_prefill_backend` 增加 NPU 默认值分支（若走 config 显式指定则可不改） | 可选 |
-| `breakable_cuda_graph/breakable_cuda_graph.py` | ① `graph_cls` 加 `torch.npu.NPUGraph`；② `capture_begin` 设备分支；③ `_is_stream_capturing` 加 NPU（`:92`）；④ `wait_stream` hook 的设备类（`:105-140`） | 必须 |
+| `breakable_cuda_graph/breakable_cuda_graph.py` | ① `graph_cls` 加 `torch.npu.NPUGraph`；② `_begin_new_segment`/`_end_current_segment` 的设备分支（见下方"两种分段写法"）；③ `_is_stream_capturing` 加 NPU（`:92`）；④ `wait_stream` hook 的设备类（`:105-140`） | 必须 |
 | `breakable_cuda_graph/cuda_utils.py` | 无（CUDA 专用，已隔离） | — |
 | `runner_backend/breakable_cuda_graph_backend.py` | 基本无需（已走 `device_module` + 设备无关的 `pool.py`） | — |
 | `runner_utils/pool.py` | `GraphPoolPrecarve`（`:127-161`）用 `torch.cuda.*` / `device="cuda"`；受 `SGLANG_ENABLE_GRAPH_POOL_PRECARVE`（`environ.py:1395`，**默认 False**）门控 → 默认惰性无害；若要开启需补设备分支 | 低（可延后） |
@@ -343,6 +343,20 @@ def replay(self):
 | 测试 | spike 脚本 + 端到端精度回归 | 必须 |
 
 **注意**：`NPUCudaGraphBackend` 与 `FullCudaGraphBackend` 是不同类，**BCG 不复用 `NPUCudaGraphBackend`**（后者只服务 Full 形态）。BCG 的 NPU 适配走的是 `BreakableCudaGraphBackend` + 设备分支。
+
+**两种分段写法**（由 §4.2 Test 0 决定用哪种，两者都是 BCG，不改变方案选型）：
+
+```python
+# A) split API（CUDA/XPU 形态，BCG 现状）
+graph.capture_begin(pool=self._pool, capture_error_mode=self._capture_error_mode)   # 开段
+graph.capture_end()                                                                 # 关段
+
+# B) context-manager（torch_npu 现有代码唯一用过的形态；NPUGraph 无 split API 时用）
+self._seg_cm = torch.npu.graph(graph, pool=self._pool, stream=self._capture_stream)
+self._seg_cm.__enter__()                        # 开段（等价于 capture_begin）
+...
+self._seg_cm.__exit__(None, None, None)         # 关段（等价于 capture_end）
+```
 
 ### 3.3 阶段划分
 
@@ -366,11 +380,15 @@ BCG 依赖 NPUGraph 的四项能力，其中三项需要实机确认：
 
 | 编号 | 能力 | 对应测试 | 若不成立 |
 |---|---|---|---|
-| **U1** | `capture_begin()` / `capture_end()` 作为**可分别调用**的方法存在，且 `capture_begin` 接受 `pool=` | Test A | 分段捕获不成立 → 退 Full |
-| **U2** | 同一 capture stream 上可**多次** begin/end，中间可夹任意 eager 执行（含 host 逻辑） | Test A + B | 同上 |
-| **U3** | 多段共享同一 pool 时，段间张量的**地址稳定性**由"图存活"保证 | Test C / D | 弱引用改强引用即可（+20-80 行） |
+| **U1** | 存在一种**可分段**的捕获 API：优先 `capture_begin()`/`capture_end()`（且 `capture_begin` 接受 `pool=`），退而求其次 `torch.npu.graph(graph, pool=...)` 上下文管理器可手动 `__enter__`/`__exit__` | Test 0 + A | 两者都没有 → 分段捕获不成立 → 退 Full；只有 CM 形态 → **仍是 BCG**，改接线即可 |
+| **U2** | 同一 capture stream 上可**多次** begin/end，中间可夹任意 eager 执行（含 host 同步逻辑），之后能重新 begin | Test A + B | 退 Full |
+| **U3** | 段图输出张量在**丢弃 Python 强引用**后，地址仍由 pool 存活保证，跨 replay 保持新鲜 | Test C / D | 弱引用改强引用 / 加 bridge buffer（+20-80 行） |
 
 第四项（pool handle 可获取）已在 NPU decode 中被验证，无需重新测。
+
+> **U1 的退路不能只看 `capture_begin`**：仓库里 NPU 现有代码（`npu_cudagraph_backend.py:113-123`、`vit_npu_graph_runner.py:72`、`npu_piecewise_backend.py:76`）**一律只用 `torch.npu.graph(...)` 上下文管理器**，从未调用过 `capture_begin`。因此"没有 split API"不等于"不能分段捕获" —— 手动 `__enter__`/`__exit__` 就能切段，§3.2 的 `_begin_new_segment`/`_end_current_segment` 换一种写法即可（+10~20 行）。旧版脚本把这一点误判为"退 Full"，是 §4.3 结论偏悲观的原因。
+
+> **U3 必须用弱引用验**：只要测试里还留着段输出的 Python 强引用，地址就必然稳定，测出来的 PASS 是假阳性。`breakable_cuda_graph._weak_ref_if_tensor` 在 NPU 上落到 `torch_npu._C._weak_ref_tensor`（`weak_ref_tensor.py:9-10`），所以 NPU 侧这条链路本身是通的；spike 必须复现同样的"弱引用 + 丢强引用"形态才有判定力。
 
 ### 4.1 关于"XPU 支持则 NPU 也应该支持"的分析
 
@@ -387,6 +405,7 @@ BCG 依赖 NPUGraph 的四项能力，其中三项需要实机确认：
 1. **XPU 默认也没走 BCG**。XPU 与 NPU 同样被 `cuda_graph_hook.py:190-199` 的 "non-CUDA hardware" 规则挡掉 `tc_piecewise`，而 XPU 平台自身 `support_piecewise_cuda_graph()` 返回 `True`（`platforms/xpu.py:103-104`）→ 说明 XPU 默认路径是被禁用的，**"XPU 已跑通 BCG"缺乏证据**，那些 XPU 分支可能是防御性代码而非已验收路径。
 2. **NPU 与 XPU 的能力面确实不同**：`platforms/npu.py:86-87` 的 `support_piecewise_cuda_graph()` 返回 **False**，而 XPU 返回 **True**。不能把"XPU 有"当定理推"NPU 必有"。
 3. **torch_npu 是独立实现**，不是 PyTorch 上游 cuda/xpu 实现的变体，方法签名与语义需要实机确认。
+4. **NPU 侧 `weak_ref_tensor` 已存在**（`weak_ref_tensor.py:9-10` 走 `torch_npu._C._weak_ref_tensor`），且 `npu_piecewise_backend.py:85` 已在用 → U3 所需的"弱引用张量"原语在 NPU 上不是空白，剩下的问题是 **pool 是否真的把这些弱引用撑住**。
 
 **结论**：XPU 证据把 **U1 的不确定性显著降低**（方法形态大概率存在），但无法替代实机验证，尤其是 **U2（重入捕获 + eager 插缝）和 U3（pool 存活语义）** —— 这两点在 XPU 上也未必被验证过。因此 §4.2 的 spike 仍然是必要的，只是预期成功率较高。
 
@@ -403,15 +422,23 @@ python /tmp/npu_bcg_spike.py
 NPUGraph 分段捕获能力验证 —— BCG 适配前置 spike
 
 验证三件事:
-  U1: torch.npu.NPUGraph 是否暴露 capture_begin()/capture_end()，capture_begin 是否接受 pool=
-  U2: 同一 capture stream 上能否多次 begin/end，中间能否夹 eager 执行(含 host 逻辑)
-  U3: 多段共享同一 pool 时，段间张量地址是否稳定
+  U1: 同一 capture stream 上能反复 begin/end 捕获，且每次都能绑定到同一个 pool
+  U2: begin 之间（非捕获态）能执行任意 eager 代码（含 .item()/.cpu() 等 host 逻辑），
+      之后能重新 begin 捕获
+  U3: 段图输出张量在**丢失 Python 强引用**后，地址仍因 pool 存活而稳定，
+      跨 replay 保持"新鲜"
+
+判定标准（三者缺一不可）:
+  数值正确 + 不抛异常 + 不依赖 Python 强引用。
+  特别是 U3 必须用弱引用张量去验：只要还留着强引用，地址就必然稳定，
+  测出来的 PASS 是假阳性，掩盖了"pool 是否保住段间张量"这一唯一待验证事实。
 
 用法:
   python npu_bcg_spike.py            # 全部测试
   python npu_bcg_spike.py --only A   # 只跑某个测试
 """
 import argparse
+import gc
 import inspect
 import sys
 import traceback
@@ -426,6 +453,80 @@ except ImportError:
 
 DEV = "npu:0"
 RESULTS = {}
+
+# 实际生效的分段捕获形态（split API / context-manager），供结果解读使用
+# desc:     生效写法
+# pool_ok:  True=pool= 被接受; False=只能无 pool 捕获(共享 pool 不成立); None=未知
+CAPTURE_MODE = {"desc": None, "pool_ok": None}
+
+
+def weak_ref(t):
+    """段图输出 -> 弱引用张量（共享 storage，但不延长其生命周期）。
+
+    这正是 breakable 路径在 NPU 上的形态：
+      breakable_cuda_graph._weak_ref_if_tensor -> weak_ref_tensors
+      -> sglang/srt/compilation/weak_ref_tensor.py:10
+         `from torch_npu._C import _weak_ref_tensor`
+    """
+    fn = getattr(getattr(torch_npu, "_C", None), "_weak_ref_tensor", None)
+    if fn is None:
+        raise RuntimeError("torch_npu._C._weak_ref_tensor 不可用，无法验证 U3")
+    return fn(t)
+
+
+class _NoSplitAPI(Exception):
+    pass
+
+
+def _split_begin(graph, pool):
+    """CUDA 形态：graph.capture_begin(pool=...)，返回实际生效的写法。"""
+    for desc, fn in (
+        (
+            "capture_begin(pool=pool, capture_error_mode='global')",
+            lambda: graph.capture_begin(pool=pool, capture_error_mode="global"),
+        ),
+        ("capture_begin(pool=pool)", lambda: graph.capture_begin(pool=pool)),
+        ("capture_begin()", lambda: graph.capture_begin()),
+    ):
+        try:
+            fn()
+            return desc
+        except (TypeError, AttributeError):
+            continue
+        except Exception as e:
+            # 签名存在但调用失败 -> 不能当成"没有该 API"，必须暴露出来
+            raise RuntimeError(f"{desc} 抛出非签名错误: {e}") from e
+    raise _NoSplitAPI("capture_begin 的三种写法均不被接受")
+
+
+def begin_segment(graph, pool):
+    """开始一段捕获；返回 (end_fn, mode_desc)。
+
+    split API 优先（对应 BCG 的 _begin_new_segment / _end_current_segment）。
+    若 NPUGraph 不暴露 capture_begin/capture_end，退回官方 context-manager
+    `torch.npu.graph(graph, pool=...)`：手动 __enter__/__exit__ 同样能分段，
+    只是 §3.2 的接线要换一种写法（+10~20 行），并非"BCG 不可行"。
+    """
+    if CAPTURE_MODE["desc"] != "cm":
+        if hasattr(graph, "capture_begin") and hasattr(graph, "capture_end"):
+            try:
+                desc = _split_begin(graph, pool)
+            except _NoSplitAPI:
+                pass
+            else:
+                CAPTURE_MODE["desc"] = desc
+                # U1 要求 pool= 被接受；只有 capture_begin() 可用 = 无法共享 pool
+                CAPTURE_MODE["pool_ok"] = "pool=" in desc
+                return graph.capture_end, desc
+        CAPTURE_MODE["desc"] = "cm"
+
+    cm = torch.npu.graph(graph, pool=pool)
+    cm.__enter__()
+    CAPTURE_MODE["pool_ok"] = True          # CM 形态下 pool= 是显式入参
+    return (
+        lambda: cm.__exit__(None, None, None),
+        "cm:torch.npu.graph(graph, pool=pool)",
+    )
 
 
 def hr(title):
@@ -444,21 +545,17 @@ def record(name, ok, note=""):
 # --------------------------------------------------------------------------
 def test_api_probe():
     hr("Test 0: API 探测")
-    ok = True
-
-    print(f"torch.npu.NPUGraph = {getattr(torch.npu, 'NPUGraph', None)}")
     if not hasattr(torch.npu, "NPUGraph"):
-        record("U1-API-NPUGraph", False, "torch.npu.NPUGraph 不存在")
+        record("U1-API", False, "torch.npu.NPUGraph 不存在")
         return False
 
     cls = torch.npu.NPUGraph
+    print(f"torch.npu.NPUGraph = {cls}")
     for name in ("capture_begin", "capture_end", "replay", "reset",
                  "update", "pool", "instantiate", "debug_dump"):
         fn = getattr(cls, name, None)
         if fn is None:
             print(f"  [MISSING] {name}")
-            if name in ("capture_begin", "capture_end", "replay"):
-                ok = False
             continue
         try:
             sig = str(inspect.signature(fn))
@@ -466,49 +563,41 @@ def test_api_probe():
             sig = "(签名不可反射，可能是 C 扩展)"
         print(f"  [OK] {name}{sig}")
 
-    print(f"\ntorch.npu.graph_pool_handle = {getattr(torch.npu, 'graph_pool_handle', None)}")
-    print(f"torch.npu.graph             = {getattr(torch.npu, 'graph', None)}")
-    print(f"torch.npu.Stream            = {getattr(torch.npu, 'Stream', None)}")
-    print(f"torch.npu.synchronize       = {getattr(torch.npu, 'synchronize', None)}")
+    has_split = hasattr(cls, "capture_begin") and hasattr(cls, "capture_end")
+    has_cm = hasattr(torch.npu, "graph")
+    print(f"\n  split API   (capture_begin/capture_end) = {has_split}")
+    print(f"  ctx-manager (torch.npu.graph)           = {has_cm}")
+    print(f"  torch.npu.graph_pool_handle             = {getattr(torch.npu, 'graph_pool_handle', None)}")
+    print(f"  torch.npu.Stream                        = {getattr(torch.npu, 'Stream', None)}")
+    print(f"  torch.npu.synchronize                   = {getattr(torch.npu, 'synchronize', None)}")
 
     if hasattr(torch.npu, "graph_pool_handle"):
         try:
-            pool = torch.npu.graph_pool_handle()
-            print(f"  graph_pool_handle() -> {pool!r}")
+            print(f"  graph_pool_handle() -> {torch.npu.graph_pool_handle()!r}")
         except Exception as e:
             print(f"  graph_pool_handle() 失败: {e}")
 
-    record("U1-capture_begin/end 存在", ok,
-           "" if ok else "缺少 capture_begin/capture_end/replay 之一")
+    # U3 只能靠弱引用张量来验：缺这个原语时 Test C/D 的 FAIL 不代表 NPU 不支持 pool 存活
+    weak_fn = getattr(getattr(torch_npu, "_C", None), "_weak_ref_tensor", None)
+    print(f"  torch_npu._C._weak_ref_tensor           = {weak_fn}")
+    if weak_fn is None:
+        print("  [WARN] 缺该原语 -> U3(Test C/D) 无法验证，其 FAIL 不可直接解读为'缺 pool 存活语义'")
+
+    # 关键：两种 API 任一可用即可分段捕获；只有两者都缺才是"BCG 不可行"
+    ok = has_split or has_cm
+    if has_split:
+        note = "split API 可用"
+    elif has_cm:
+        note = "仅 ctx-manager 可用（BCG 需改用 __enter__/__exit__ 分段，仍可行）"
+    else:
+        note = "两种 API 都不存在"
+    record("U1-API", ok, note)
     return ok
 
 
 # --------------------------------------------------------------------------
-# 工具: 兼容多种 capture_begin 签名
+# 工具: 捕获流
 # --------------------------------------------------------------------------
-def capture_begin_best_effort(graph, pool):
-    """按 CUDA -> XPU -> 无参 的顺序尝试 capture_begin，返回实际生效的写法。"""
-    attempts = [
-        ("capture_begin(pool=pool, capture_error_mode='global')",
-         lambda: graph.capture_begin(pool=pool, capture_error_mode="global")),
-        ("capture_begin(pool=pool)",
-         lambda: graph.capture_begin(pool=pool)),
-        ("capture_begin()",
-         lambda: graph.capture_begin()),
-    ]
-    last_err = None
-    for desc, fn in attempts:
-        try:
-            fn()
-            return desc
-        except TypeError as e:      # 签名不匹配 -> 试下一种
-            last_err = e
-            continue
-        except Exception as e:      # 其他错误 -> 直接抛出，便于定位
-            raise RuntimeError(f"{desc} 抛出非签名错误: {e}") from e
-    raise RuntimeError(f"所有 capture_begin 写法均失败, 最后一个错误: {last_err}")
-
-
 def make_capture_stream():
     return torch.npu.Stream(device=DEV)
 
@@ -517,52 +606,50 @@ def make_capture_stream():
 # Test A: 多次 capture_begin / capture_end (U1 + U2)
 # --------------------------------------------------------------------------
 def test_multi_segment():
-    hr("Test A: 同一 stream 上多次 capture_begin / capture_end")
+    hr("Test A: 同一 stream 上多次 begin/end（隔离 U1/U2，段间无耦合）")
     try:
         pool = torch.npu.graph_pool_handle()
         stream = make_capture_stream()
-        x = torch.ones(8, device=DEV)
 
-        # warmup: 先在图外跑一遍，确保 kernel 已加载
-        _ = (x + 1) * 2 + 3
+        # 每段有**自己的**输入输出：段间没有张量依赖 -> 不可能被 U3 的失败污染
+        xs = [torch.full((8,), float(v), device=DEV) for v in (1.0, 2.0, 3.0)]
+        _ = xs[0] + 1
         torch.npu.synchronize()
 
-        g1, g2, g3 = (torch.npu.NPUGraph() for _ in range(3))
-        used = []
+        graphs = [torch.npu.NPUGraph() for _ in range(3)]
+        outs = [None] * 3
 
         with torch.npu.stream(stream):
-            used.append(capture_begin_best_effort(g1, pool))
-            a = x + 1
-            g1.capture_end()
+            for i, g in enumerate(graphs):
+                end, used = begin_segment(g, pool)
+                outs[i] = xs[i] + 1
+                end()
 
-            used.append(capture_begin_best_effort(g2, pool))
-            b = a * 2
-            g2.capture_end()
+        print(f"  捕获形态: {CAPTURE_MODE['desc']}；本段实际生效: {used}")
 
-            used.append(capture_begin_best_effort(g3, pool))
-            c = b + 3
-            g3.capture_end()
-
-        print(f"capture_begin 实际生效写法: {used}")
-
-        # replay
-        x.fill_(5.0)
+        # 输入改写与 replay 放在同一条流上，避免 cross-stream 竞态
+        new_vals = (10.0, 20.0, 30.0)
         with torch.npu.stream(stream):
-            g1.replay(); g2.replay(); g3.replay()
+            for x, v in zip(xs, new_vals):
+                x.fill_(v)
+            for g in graphs:
+                g.replay()
         torch.npu.synchronize()
 
-        got = c.cpu().tolist()
-        want = [15.0] * 8          # (5+1)*2+3
-        if got != want:
-            record("U1+U2-多段捕获", False, f"数值错误: {got[:3]}... 期望 {want[:3]}...")
-            return False
+        for i, (o, v) in enumerate(zip(outs, new_vals)):
+            got = o.cpu().tolist()
+            want = [v + 1.0] * 8
+            if got != want:
+                record("U1-多段捕获", False,
+                       f"段{i} 数值错误 {got[:3]}... 期望 {want[:3]}...")
+                return False
 
-        record("U1-多段捕获", True, f"capture_begin 写法 = {used[0]}")
-        record("U2-eager 插缝", True, "3 段各自独立捕获成功")
+        record("U1-多段捕获", True,
+               f"3 段独立 begin/end + replay 数值正确（{CAPTURE_MODE['desc']}）")
         return True
     except Exception:
         traceback.print_exc()
-        record("U1+U2-多段捕获", False, "见上方 traceback")
+        record("U1-多段捕获", False, "见上方 traceback")
         return False
 
 
@@ -581,43 +668,61 @@ def test_eager_gap_with_host_logic():
 
         g1, g2 = torch.npu.NPUGraph(), torch.npu.NPUGraph()
         host_seen = {}
+        hold = {}
 
         with torch.npu.stream(stream):
-            capture_begin_best_effort(g1, pool)
-            a = x + 1
-            g1.capture_end()
+            end, _ = begin_segment(g1, pool)
+            hold["a"] = x + 1
+            end()
 
-            # ---- 关键: 这里必须完全退出捕获态，可执行任意 host 逻辑 ----
-            print("  [in gap] 尝试 host 同步...")
-            host_seen["item"] = a.sum().item()
+            # ---- 非捕获态：任意 host 逻辑 ----
+            # 注意：capture 期的 kernel 并未真正执行，这里读到的数值本身无意义；
+            # 本测试只要求"允许执行且不报错"，数值正确性由下面的 g2 负责。
+            a = hold["a"]
+            host_seen["item"] = float(a.sum().item())
             host_seen["tolist"] = a.cpu().tolist()
             host_seen["shape"] = tuple(a.shape)
-            # 模拟 ascend forward_extend 里的 Host-IntArray 构造
-            host_seen["host_int_list"] = [int(v) for v in a.cpu().numpy().tolist()]
+            host_seen["host_int_list"] = [int(v) for v in host_seen["tolist"]]
             print(f"  [in gap] item={host_seen['item']} "
                   f"host_int_list={host_seen['host_int_list']}")
 
-            capture_begin_best_effort(g2, pool)
-            b = a * 2
-            g2.capture_end()
+            # ---- 重新进入捕获；g2 只依赖 x，不依赖 g1 的输出 ----
+            end, _ = begin_segment(g2, pool)
+            hold["b"] = x * 2
+            end()
 
-        record("U2-eager 插缝(host 逻辑)", True,
-               f"item={host_seen['item']}, 沟内可做 D2H")
-        return True
+        # replay 验证：沟里做完 host 逻辑后还能继续捕获且结果正确
+        with torch.npu.stream(stream):
+            x.fill_(3.0)
+            g1.replay()
+            g2.replay()
+        torch.npu.synchronize()
+
+        got = hold["b"].cpu().tolist()
+        want = [6.0] * 8
+        ok = got == want
+        record("U2-段间eager", ok,
+               "沟内可做 D2H/host 逻辑，续捕段数值正确" if ok
+               else f"续捕段数值错误 {got[:3]}... 期望 {want[:3]}...")
+        return ok
     except Exception:
         traceback.print_exc()
-        record("U2-eager 插缝(host 逻辑)", False, "沟内 host 逻辑失败，见 traceback")
+        record("U2-段间eager", False, "沟内 host 逻辑或续捕失败，见 traceback")
         return False
 
 
 # --------------------------------------------------------------------------
-# Test C / D: 跨段数据依赖
+# Test C / D: 跨段数据依赖 + 弱引用（U3 的**唯一**有效验证形态）
 #   C: 共享同一 pool（BCG 的实际形态）
 #   D: 各自独立 pool（对照，用于判定"是否必须共享 pool"）
+#
+# 关键：段1 的输出降级为弱引用并**丢弃强引用**，否则地址必然稳定，
+#       测不出 pool 的存活语义（这正是旧版用例的假阳性来源）。
+#       段2 申请等大张量，制造"地址被复用"的机会。
 # --------------------------------------------------------------------------
 def _cross_segment_case(share_pool: bool):
     stream = make_capture_stream()
-    x = torch.ones(16, device=DEV)
+    x = torch.full((16,), 4.0, device=DEV)
 
     _ = (x + 1) * 2
     torch.npu.synchronize()
@@ -626,63 +731,85 @@ def _cross_segment_case(share_pool: bool):
     pool_b = pool_a if share_pool else torch.npu.graph_pool_handle()
 
     g1, g2 = torch.npu.NPUGraph(), torch.npu.NPUGraph()
-    with torch.npu.stream(stream):
-        capture_begin_best_effort(g1, pool_a)
-        a = x + 1               # 段1 输出 —— 会被段2 当输入读
-        g1.capture_end()
+    box = {}
 
-        capture_begin_best_effort(g2, pool_b)
-        c = a * 2               # 段2 读段1 的输出（跨段依赖）
-        g2.capture_end()
-
-    # 用不同的输入回放，检查段2 是否读到"新鲜"的 a
-    x.fill_(4.0)
     with torch.npu.stream(stream):
-        g1.replay(); g2.replay()
+        end, _ = begin_segment(g1, pool_a)
+        a = x + 1
+        end()
+
+        # BCG 形态：段输出 -> 弱引用，丢掉强引用
+        box["a_weak"] = weak_ref(a)
+        box["a_ptr"] = a.data_ptr()
+        del a
+        gc.collect()
+
+        # 段2：申请若干等大张量，制造地址复用机会
+        end, _ = begin_segment(g2, pool_b)
+        box["c"] = [(x * 2.0) + i for i in range(4)]
+        end()
+
+    report = []
+    ok = True
+
+    def check(tag, expect):
+        nonlocal ok
+        got = box["a_weak"].cpu().tolist()
+        want = [expect] * 16
+        good = got == want
+        ok = ok and good
+        addr = "ptr-same" if box["a_weak"].data_ptr() == box["a_ptr"] else "ptr-CHANGED"
+        report.append(f"{tag}: {'OK' if good else f'BAD {got[:2]} want {want[:2]}'} ({addr})")
+
+    # x=4 -> a=5：replay g1 后弱引用应读到 5
+    with torch.npu.stream(stream):
+        g1.replay()
     torch.npu.synchronize()
+    check("g1.replay", 5.0)
 
-    got = c.cpu().tolist()
-    want = [10.0] * 16          # (4+1)*2
-    # 再加一轮不同输入，排除"恰好正确"的偶然性
-    x.fill_(7.0)
+    # replay g2（等大分配可能覆盖 a 的地址）后，弱引用应仍是 5
     with torch.npu.stream(stream):
-        g1.replay(); g2.replay()
+        g2.replay()
     torch.npu.synchronize()
-    got2 = c.cpu().tolist()
-    want2 = [16.0] * 16         # (7+1)*2
+    check("g2.replay", 5.0)
 
-    return got == want and got2 == want2, got[:3], want[:3], got2[:3], want2[:3]
+    # 换输入再来一轮，排除"恰好正确"
+    with torch.npu.stream(stream):
+        x.fill_(7.0)
+        g1.replay()
+    torch.npu.synchronize()
+    check("x=7 g1.replay", 8.0)
+
+    print("  " + "; ".join(report))
+    return ok
 
 
 def test_cross_segment_shared_pool():
-    hr("Test C: 跨段数据依赖 + 共享 pool（BCG 形态）")
+    hr("Test C: 跨段弱引用 + 共享 pool（BCG 形态）")
     try:
-        ok, g1_, w1_, g2_, w2_ = _cross_segment_case(share_pool=True)
-        if ok:
-            record("U3-共享 pool 跨段", True, "两轮 replay 数值均正确")
-        else:
-            record("U3-共享 pool 跨段", False,
-                   f"数值错误: {g1_} vs {w1_}; {g2_} vs {w2_}")
+        ok = _cross_segment_case(share_pool=True)
+        record("U3-共享pool", ok,
+               "弱引用段输出跨 replay 保持新鲜" if ok
+               else "弱引用失效/被覆盖（需 bridge buffer 兜底）")
         return ok
     except Exception:
         traceback.print_exc()
-        record("U3-共享 pool 跨段", False, "见 traceback")
+        record("U3-共享pool", False, "见 traceback")
         return False
 
 
 def test_cross_segment_independent_pool():
-    hr("Test D（对照）: 跨段数据依赖 + 各自独立 pool")
+    hr("Test D（对照）: 跨段弱引用 + 各自独立 pool")
     try:
-        ok, g1_, w1_, g2_, w2_ = _cross_segment_case(share_pool=False)
-        print("  说明: 此项失败是**预期可能**的——它正好证明'必须共享 pool'，"
-              "从而需要 bridge buffer 兜底；成功则说明 NPU 上可放宽为独立图。")
-        record("U3-对照(独立 pool)", ok,
-               "意外成功（说明可放宽）" if ok
-               else f"如预期失败: {g1_} vs {w1_}（地址被复用）")
+        ok = _cross_segment_case(share_pool=False)
+        print("  说明: D 失败是**预期可能**的——正好证明'必须共享 pool'；"
+              "D 成功则说明 NPU 上独立图池也能保住地址，显存管理更灵活。")
+        record("U3-对照独立pool", ok,
+               "独立池也可行（可放宽）" if ok else "独立池下地址被复用（如预期）")
         return ok
     except Exception:
         traceback.print_exc()
-        record("U3-对照(独立 pool)", False, "见 traceback（如预期）")
+        record("U3-对照独立pool", False, "见 traceback（如预期）")
         return False
 
 
@@ -691,26 +818,46 @@ def test_cross_segment_independent_pool():
 # --------------------------------------------------------------------------
 def summarize():
     hr("结果解读")
-    a = RESULTS.get("U1-多段捕获", (False,))[0]
-    b = RESULTS.get("U2-eager 插缝(host 逻辑)", (False,))[0]
-    c = RESULTS.get("U3-共享 pool 跨段", (False,))[0]
+    u1 = RESULTS.get("U1-多段捕获", (False, ""))[0]
+    u2 = RESULTS.get("U2-段间eager", (False, ""))[0]
+    u3 = RESULTS.get("U3-共享pool", (False, ""))[0]
+    u3d = RESULTS.get("U3-对照独立pool", (False, ""))[0]
+    api = RESULTS.get("U1-API", (False, ""))[0]
+    mode = CAPTURE_MODE["desc"]
+    pool_ok = CAPTURE_MODE["pool_ok"]
 
-    print(f"  U1/U2 分段捕获 : {'PASS' if a else 'FAIL'}")
-    print(f"  U2     段间 eager : {'PASS' if b else 'FAIL'}")
-    print(f"  U3     共享 pool  : {'PASS' if c else 'FAIL'}")
+    print(f"  U1  多次 begin/end : {'PASS' if u1 else 'FAIL'}")
+    print(f"  U2  段间 eager     : {'PASS' if u2 else 'FAIL'}")
+    print(f"  U3  共享 pool+弱引用: {'PASS' if u3 else 'FAIL'}")
+    print(f"  U3  独立 pool(对照) : {'PASS' if u3d else 'FAIL'}")
+    print(f"  捕获形态            : {mode}")
+    print(f"  pool= 是否被接受    : {pool_ok}")
     print()
 
-    if a and b and c:
+    if pool_ok is False:
+        print("  [!] 只能做到 'capture_begin()' 无 pool 捕获：BCG 的共享 pool 语义不成立，")
+        print("      U3 的 PASS 不可信（多个图各用默认池）。需按情形 2 的 bridge buffer 兜底。")
+
+    if u1 and u2 and u3:
         print("  ==> 情形 1：BCG 可直接适配。按 §3.3 Phase 1 推进。")
-    elif a and b and not c:
+        if mode == "cm":
+            print("      注：NPUGraph 未暴露 split API，实现时把 §3.2 的")
+            print("      _begin_new_segment/_end_current_segment 改成 torch.npu.graph 的")
+            print("      手动 __enter__/__exit__（+10~20 行），不要因此退 Full。")
+        if u3d:
+            print("      注：Test D 也通过 -> 段间地址在独立池下同样稳定，显存管理可放宽。")
+    elif u1 and u2 and not u3:
         print("  ==> 情形 2：分段捕获可行，但缺 pool 存活语义。")
         print("      兜底：把 breakable_cuda_graph.py:252 的弱引用改为强引用 /")
         print("      显式 bridge buffer（+20-80 行），仍是'适配'而非重设计。")
     else:
         print("  ==> 情形 3：分段捕获在 NPU 上不成立。")
-        print("      退路 a：改用 Full（单图捕获，NPU 必然支持，约 600-1100 行）")
-        print("      退路 b：把 BCG 改造成'N 个独立图顺序 replay + 显式 bridge")
-        print("              buffer'的变体（不共享 pool，靠 copy_ 传递段间数据）")
+        if not api:
+            print("      原因：split API 与 torch.npu.graph 均不可用 -> 只能退 Full。")
+        else:
+            print("      原因：API 存在但多段/EAGER 插缝不成立（Test A/B 失败）。")
+        print("      退路 a：改用 Full（单图捕获，约 600-1100 行）")
+        print("      退路 b：'N 个独立图顺序 replay + 显式 bridge buffer' 的变体")
 
 
 def main():
@@ -721,24 +868,23 @@ def main():
     hr(f"环境信息\ntorch={torch.__version__}\ndevice={DEV}")
     print(f"  device_name = {torch.npu.get_device_name(0)}")
 
-    if args.only is None or args.only == "A":
-        if not test_api_probe():
-            print("\n[FATAL] capture_begin/capture_end 缺失，后续测试无意义")
-            summarize()
-            return
-    run = {
+    # 任何子测试都依赖 API 探测结果，因此总是先跑 Test 0
+    if not test_api_probe():
+        print("\n[FATAL] 两种分段捕获 API 都不存在，后续测试无意义")
+        summarize()
+        return
+
+    tests = {
         "A": test_multi_segment,
         "B": test_eager_gap_with_host_logic,
         "C": test_cross_segment_shared_pool,
         "D": test_cross_segment_independent_pool,
     }
     if args.only:
-        run[args.only]()
+        tests[args.only]()
     else:
-        test_multi_segment()
-        test_eager_gap_with_host_logic()
-        test_cross_segment_shared_pool()
-        test_cross_segment_independent_pool()
+        for name in "ABCD":
+            tests[name]()
 
     summarize()
 
@@ -751,13 +897,16 @@ if __name__ == "__main__":
 
 | Test 0 | Test A | Test B | Test C | 结论 | 后续 |
 |---|---|---|---|---|---|
-| ✅ | ✅ | ✅ | ✅ | **情形 1**：分段捕获 + pool 共享均可用 | 直接按 Phase 1 做 BCG（200-600 行） |
+| ✅ | ✅ | ✅ | ✅ | **情形 1**：分段捕获 + pool 存活均可用 | 直接按 Phase 1 做 BCG（200-600 行） |
+| ✅(仅 CM) | ✅ | ✅ | ✅ | **情形 1′**：无 split API，但 CM 分段可用 | 仍是 BCG：`_begin_new_segment`/`_end_current_segment` 改用 `torch.npu.graph` 手动 enter/exit（+10-20 行），**不要退 Full** |
 | ✅ | ✅ | ✅ | ❌ | **情形 2**：缺 pool 存活语义 | 弱引用改强引用 / 加 bridge buffer（+20-80 行），仍属"适配" |
 | ✅ | ❌ | — | — | **情形 3a**：无法多次 begin/end | 退 Full（600-1100 行） |
 | ✅ | ✅ | ❌ | — | **情形 3b**：无法在捕获中间执行 eager | 同上，退 Full |
-| ❌ | — | — | — | **情形 3c**：无 capture_begin/capture_end 方法 | 只能退 Full |
+| ❌ | — | — | — | **情形 3c**：split API 与 `torch.npu.graph` **都不存在** | 只能退 Full |
 
 **Test D 的作用**：它是一个"预期可能失败"的对照组。若 D 失败、C 成功 → 证明 pool 共享是**必要**的（U3 是关键依赖）；若 D 也成功 → 说明 NPU 上段间地址天然稳定，将来甚至可以放宽为独立图池，显存管理更灵活。
+
+> **判定口径说明**：Test C/D 都用"弱引用段输出 + 丢强引用 + 后续段申请等大张量"来施加地址复用压力，并检查弱引用在 `g1.replay()` / `g2.replay()` / 换输入再 replay 三次观察点上的数值。**只有这种形态的 PASS 才算 U3 通过**；若改用强引用，任何实现都会 PASS，判定无效。
 
 ---
 
@@ -768,6 +917,7 @@ if __name__ == "__main__":
 | 情形 | 最小可用（Phase 0-1） | 完整能力（含 Phase 2-3） | 说明 |
 |---|---|---|---|
 | **情形 1**（全通过） | **200-400 行** | **450-1100 行** | 首选路径 |
+| **情形 1′**（仅 CM 分段） | 210-420 行 | 460-1120 行 | 与情形 1 同，仅多 `torch.npu.graph` 手动 enter/exit 的接线 |
 | **情形 2**（U3 失败） | 220-480 行 | 470-1180 行 | 仅加 bridge buffer / 强引用 |
 | **情形 3**（U1/U2 失败 → 转 Full） | 600-1100 行 | 1400-2900 行 | 含 `forward_extend` 重写 |
 | 情形 3 退路 b（多图串联变体） | 400-800 行 | 800-1500 行 | 新设计，不共享 pool，靠 `copy_` 传递 |
