@@ -286,6 +286,14 @@ def _sig_barrier(args, kwargs) -> Tuple[str, Optional[str]]:
     return "-", None
 
 
+def _sig_all_to_all_single(args, kwargs) -> Tuple[str, Optional[str]]:
+    return _sig(args[0]), _sig(args[1])
+
+
+def _sig_all_to_all(args, kwargs) -> Tuple[str, Optional[str]]:
+    return _sig_list(args[0]), _sig_list(args[1])
+
+
 _PATCH_TARGETS = (
     ("all_gather_into_tensor", _sig_all_gather_into_tensor),
     ("all_gather", _sig_all_gather),
@@ -293,6 +301,11 @@ _PATCH_TARGETS = (
     ("reduce_scatter", _sig_reduce_scatter),
     ("reduce_scatter_tensor", _sig_reduce_scatter_tensor),
     ("broadcast", _sig_broadcast),
+    # MoE a2a: the family that differs between EXTEND / DECODE / IDLE paths, so
+    # leaving it untraced made "the two ranks issue the same op sequence" an
+    # unfounded claim.
+    ("all_to_all_single", _sig_all_to_all_single),
+    ("all_to_all", _sig_all_to_all),
     ("barrier", _sig_barrier),
 )
 
