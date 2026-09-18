@@ -357,6 +357,20 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
 
         graph_key = self._make_graph_key(self.bs)
 
+        # NPUGraphRunner overrides DecodeCudaGraphRunner.execute, so the hook in
+        # the base class never runs on this path. Hand the just-refreshed static
+        # buffers plus the replay key/bucket to the watchdog dump -- this is the
+        # only readout of which DP token counts the replayed graph slices its
+        # collectives by, and two ranks replaying different buckets run
+        # different dp-gather segments even when both are on the graph path.
+        from sglang.srt.distributed.coll_trace import register_graph_replay
+
+        register_graph_replay(
+            self.buffers,
+            key=getattr(graph_key, "size", None),
+            bucket=self.bs,
+        )
+
         if not (
             is_deepseek_dsa(self.model_runner.model_config.hf_config)
             or is_deepseek_v4(self.model_runner.model_config.hf_config)
