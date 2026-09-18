@@ -270,6 +270,43 @@ def _prefill_cuda_graph_allows_context_parallel(
     )
 
 
+def trace_dp_forward_geometry(forward_batch: ForwardBatch, *, replay: bool) -> None:
+    """Record the DP geometry this forward actually runs with.
+
+    Called from the forward thread at the decode-graph dispatch, which is the one
+    point both paths share -- and that matters, because a replay never enters the
+    Python DP gather: recording only at the gather call site (coll_trace
+    record_dp_family) sees just the eager rank and the peer's replay contributes
+    nothing, so two ranks can disagree while both traces read the same. Here the
+    replay side is recorded as a replay, with the geometry it replays.
+
+    One record per forward per rank; the shared fwd= counter aligns the ranks
+    one-to-one. Gated by SGLANG_NPU_COLL_TRACE inside record_dp_geometry.
+    """
+    from sglang.srt.distributed.coll_trace import record_dp_geometry
+    from sglang.srt.layers.dp_attention import DpPaddingMode
+
+    global_num_tokens = forward_batch.global_num_tokens_cpu
+    record_dp_geometry(
+        "fwd",
+        path="graph" if replay else "eager",
+        mode=forward_batch.forward_mode.name,
+        # A replay runs the geometry captured for its peer's DECODE mode (the
+        # capture uses get_default_mode_in_cuda_graph); the eager path runs the
+        # live one. A difference here is the mismatch, not a symptom of it.
+        dp_padding=(
+            DpPaddingMode.get_default_mode_in_cuda_graph().name
+            if replay
+            else getattr(forward_batch.dp_padding_mode, "name", "?")
+        ),
+        graph_vote=forward_batch.can_run_decode_cuda_graph,
+        bs=forward_batch.batch_size,
+        global_num_tokens=(
+            None if global_num_tokens is None else [int(t) for t in global_num_tokens]
+        ),
+    )
+
+
 @dataclass
 class ModelRunnerOutput:
     logits_output: Union[LogitsProcessorOutput, PPProxyTensors]
@@ -1812,6 +1849,7 @@ class ModelRunner:
 
             # Replay cuda graph if applicable
             if can_run_graph:
+                trace_dp_forward_geometry(forward_batch, replay=True)
                 ret = self.decode_cuda_graph_runner.execute(
                     forward_batch,
                     pp_proxy_tensors=pp_proxy_tensors,
@@ -1825,6 +1863,7 @@ class ModelRunner:
             # global_dp_buffer_len / padded token counts that graph eligibility
             # and the collectives depend on.
             self._prepare_eager_forward_batch(forward_batch)
+            trace_dp_forward_geometry(forward_batch, replay=False)
 
             # Deferred mamba COW/clear on the forward stream, before the extend
             # dispatch below reads the pool.
