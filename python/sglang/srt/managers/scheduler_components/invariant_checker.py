@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import (
@@ -489,6 +490,137 @@ class SchedulerInvariantChecker:
             self.tree_cache.sanity_check()
 
 
+def _stream_drain_state(scheduler: Scheduler) -> str:
+    """Report which of the scheduler's streams still has queued work.
+
+    An event recorded and queried back-to-back reports False even on an idle
+    stream, so leave a short grace period before querying. A hang dump may take
+    seconds already, so the sleep is free, and it is the only way to tell a
+    drained stream from the one the scheduler is actually stuck behind.
+    """
+    try:
+        device_module = torch.get_device_module()
+    except Exception as exc:
+        return f"streams: unavailable ({type(exc).__name__})"
+    probes = []
+    for name in ("schedule_stream", "forward_stream", "copy_stream"):
+        stream = getattr(scheduler, name, None)
+        if stream is None:
+            continue
+        try:
+            event = device_module.Event()
+            event.record(stream)
+            probes.append((name, event))
+        except Exception as exc:
+            probes.append((name, f"probe_error={type(exc).__name__}"))
+    if not probes:
+        return "streams: none"
+    time.sleep(0.2)
+    parts = []
+    for name, probe in probes:
+        if isinstance(probe, str):
+            parts.append(f"{name}.{probe}")
+        else:
+            try:
+                parts.append(f"{name}.drained={bool(probe.query())}")
+            except Exception as exc:
+                parts.append(f"{name}.probe_error={type(exc).__name__}")
+    return " ".join(parts)
+
+
+def _step_state(scheduler: Scheduler) -> str:
+    last = getattr(scheduler, "last_batch", None)
+    return (
+        f"forward_ct={scheduler.forward_ct} "
+        f"last_batch.forward_mode={getattr(last, 'forward_mode', None)} "
+        f"last_batch.global_num_tokens={getattr(last, 'global_num_tokens', None)}"
+    )
+
+
+def _collective_trace_state() -> str:
+    """Per-step geometry plus the last collective enqueues.
+
+    The geometry ring survives the ~50 collectives a step issues, so the last
+    ~20 steps of both ranks can be compared directly: execution path (graph
+    replay vs eager), bucket, padding mode and per-rank token counts.
+    """
+    from sglang.srt.distributed.coll_trace import (
+        recent_collectives,
+        recent_dp_families,
+        recent_dp_geometry,
+    )
+
+    # fwd= aligns the two ranks one-to-one (one forward per step). An entry here
+    # that differs from the peer's at the same fwd is the hang's cause: MAX_LEN
+    # gathers through all_gather_into_tensor, SUM_LEN through all_reduce, and a
+    # mismatched pair can never complete.
+    fams = recent_dp_families()
+    fams_str = (
+        "dp-family trace (oldest first):\n" + "\n".join(fams)
+        if fams
+        else "dp-family trace: (empty)"
+    )
+    steps = recent_dp_geometry()
+    steps_str = (
+        "dp-step trace (oldest first):\n" + "\n".join(steps)
+        if steps
+        else "dp-step trace: (empty)"
+    )
+    tail = recent_collectives()
+    ops_str = (
+        "coll-trace (oldest first):\n" + "\n".join(tail)
+        if tail
+        else "coll-trace: (not installed or empty)"
+    )
+    return f"{fams_str}\n{steps_str}\n{ops_str}"
+
+
+def _stream_ids_state(scheduler: Scheduler) -> str:
+    """Ids of the named streams, so EDGE entries in the trace can be decoded."""
+    parts = []
+    for name in ("schedule_stream", "forward_stream", "copy_stream"):
+        stream = getattr(scheduler, name, None)
+        if stream is not None:
+            parts.append(f"{name}={id(stream):#x}")
+    return "stream ids: " + " ".join(parts)
+
+
+def _graph_buffer_state() -> str:
+    """DP token-count buffers bound by the last replayed decode graph.
+
+    Read on the dump thread while the process is stuck, so no hot-path device
+    sync is needed. Both ranks derive their dp-gather segment sizes from these,
+    so a disagreement here explains a coupled HCCL op that never completes.
+    """
+    try:
+        from sglang.srt.distributed.coll_trace import graph_replay_buffer_state
+
+        return graph_replay_buffer_state()
+    except Exception as exc:
+        return f"graph buffers: probe_error={type(exc).__name__}"
+
+
+def _device_liveness_state() -> str:
+    """Can the device run NEW work?
+
+    A brand-new stream with nothing queued is the cleanest probe: if its event
+    never completes, the device itself is wedged (a stuck HCCL op can do that on
+    Ascend) rather than the scheduler merely being ordered behind a dependency.
+    """
+    try:
+        device_module = torch.get_device_module()
+        fresh = device_module.Stream()
+        event = device_module.Event()
+        event.record(fresh)
+    except Exception as exc:
+        return f"fresh_stream: probe_error={type(exc).__name__}"
+    time.sleep(0.2)
+    try:
+        return f"fresh_stream.drained={bool(event.query())}"
+    except Exception as exc:
+        return f"fresh_stream: probe_error={type(exc).__name__}"
+
+
 def create_scheduler_watchdog(
     scheduler: Scheduler, watchdog_timeout: float, soft: bool = False
 ) -> WatchdogRaw:
@@ -499,8 +631,14 @@ def create_scheduler_watchdog(
             scheduler.pool_stats_observer.get_pool_stats(),
         )
         return (
+            f"{_step_state(scheduler)}\n"
+            f"{_stream_drain_state(scheduler)}\n"
+            f"{_device_liveness_state()}\n"
+            f"{_graph_buffer_state()}\n"
+            f"{_stream_ids_state(scheduler)}\n"
             f"{scheduler.cur_batch_for_debug.batch_size()=}\n"
-            f"{scheduler.cur_batch_for_debug.reqs=}\n" + "\n".join(messages)
+            f"{scheduler.cur_batch_for_debug.reqs=}\n"
+            f"{_collective_trace_state()}\n" + "\n".join(messages)
         )
 
     return WatchdogRaw(
