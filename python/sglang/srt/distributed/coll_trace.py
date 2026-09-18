@@ -24,7 +24,7 @@ import logging
 import os
 import sys
 from collections import deque
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Deque, List, Optional, Tuple
 
 import torch.distributed as dist
 
@@ -177,18 +177,27 @@ def record_pin_keepalive(
     )
 
 
+_recent_geom: Deque[str] = deque(maxlen=48)
+
+
 def record_dp_geometry(tag: str, **fields: Any) -> None:
     """Record the DP communication geometry decided for one forward.
 
-    Interleaved with the collective entries, so the watchdog dump shows per step
-    which geometry each rank used. The CUDA-graph replay bucket and the eager
-    MAX_LEN padding must agree: the DP gather/combine split sizes are derived
-    from them, and all_gather_into_tensor / reduce_scatter require every rank to
-    split identically.
+    Kept in a dedicated ring as well as the shared one: a step issues ~50
+    collectives, so the interleaved copy would be pushed out long before the
+    hang, while the last ~20 steps are exactly what has to be compared between
+    ranks (execution path, bucket, padding mode, per-rank token counts).
     """
     if not envs.SGLANG_NPU_COLL_TRACE.get():
         return
-    _recent.append(f"GEOM {tag} " + " ".join(f"{k}={v}" for k, v in fields.items()))
+    entry = f"{tag} " + " ".join(f"{k}={v}" for k, v in fields.items())
+    _recent.append(f"GEOM {entry}")
+    _recent_geom.append(entry)
+
+
+def recent_dp_geometry() -> List[str]:
+    """Per-forward geometry of the last few steps, oldest first."""
+    return list(_recent_geom)
 
 
 def _record_edge(kind: str, waiter: Any, waited: Any) -> None:

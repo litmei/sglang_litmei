@@ -538,17 +538,30 @@ def _step_state(scheduler: Scheduler) -> str:
 
 
 def _collective_trace_state() -> str:
-    """Last collective enqueues; the tail of the stuck step's issue order.
+    """Per-step geometry plus the last collective enqueues.
 
-    Diffing this tail against the peer rank's localizes a collective one rank
-    issued and the other never did.
+    The geometry ring survives the ~50 collectives a step issues, so the last
+    ~20 steps of both ranks can be compared directly: execution path (graph
+    replay vs eager), bucket, padding mode and per-rank token counts.
     """
-    from sglang.srt.distributed.coll_trace import recent_collectives
+    from sglang.srt.distributed.coll_trace import (
+        recent_collectives,
+        recent_dp_geometry,
+    )
 
+    steps = recent_dp_geometry()
+    steps_str = (
+        "dp-step trace (oldest first):\n" + "\n".join(steps)
+        if steps
+        else "dp-step trace: (empty)"
+    )
     tail = recent_collectives()
-    if not tail:
-        return "coll-trace: (not installed or empty)"
-    return "coll-trace (oldest first):\n" + "\n".join(tail)
+    ops_str = (
+        "coll-trace (oldest first):\n" + "\n".join(tail)
+        if tail
+        else "coll-trace: (not installed or empty)"
+    )
+    return f"{steps_str}\n{ops_str}"
 
 
 def _stream_ids_state(scheduler: Scheduler) -> str:
