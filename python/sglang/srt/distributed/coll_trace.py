@@ -114,17 +114,27 @@ def _record(op: str, group: Any, in_sig: str, out_sig: Optional[str]) -> None:
 
 
 _graph_buffers: Any = None
+# (key, bucket) of the last replayed graph. Recorded from runner state, not from
+# the device, so it survives even when the buffers hook is missing/wedged.
+_replay_key: Any = None
+_replay_bucket: Any = None
 
 
-def register_graph_replay(buffers: Any) -> None:
+def register_graph_replay(
+    buffers: Any, *, key: Any = None, bucket: Any = None
+) -> None:
     """Remember the buffers bound by the last replayed graph.
 
     The watchdog dump reads them back from the (still alive) device, so the two
     ranks' values can be compared at hang time without adding a device sync to
-    the hot path.
+    the hot path. `key`/`bucket` identify WHICH captured graph was replayed: two
+    ranks replaying graphs captured for different buckets run different DP
+    gather segments even when both are on the graph path.
     """
-    global _graph_buffers
+    global _graph_buffers, _replay_key, _replay_bucket
     _graph_buffers = buffers
+    _replay_key = key
+    _replay_bucket = bucket
 
 
 def graph_replay_buffer_state() -> str:
@@ -136,8 +146,9 @@ def graph_replay_buffer_state() -> str:
     complete -- the failure mode the DFlash replay path documents when it
     refreshes exactly these buffers before replaying.
     """
+    head = f"last replay: key={_replay_key} bucket={_replay_bucket}"
     if _graph_buffers is None:
-        return "graph buffers: none registered"
+        return f"graph buffers: none registered ({head})"
     parts = []
     for name in (
         "global_num_tokens_gpu",
@@ -152,7 +163,7 @@ def graph_replay_buffer_state() -> str:
             parts.append(f"{name}={buf.flatten().tolist()}")
         except Exception as exc:
             parts.append(f"{name}=<{type(exc).__name__}>")
-    return "graph buffers: " + " ".join(parts)
+    return f"graph buffers: {head} " + " ".join(parts)
 
 
 def recent_collectives() -> List[str]:

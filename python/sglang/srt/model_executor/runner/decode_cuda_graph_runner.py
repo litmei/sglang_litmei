@@ -1418,7 +1418,11 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             # coupled HCCL op can never pair.
             from sglang.srt.distributed.coll_trace import register_graph_replay
 
-            register_graph_replay(self.buffers)
+            register_graph_replay(
+                self.buffers,
+                key=getattr(self._replay_graph_key, "size", None),
+                bucket=self.bs,
+            )
             if envs.SGLANG_LOG_DECODE_GRAPH_KEY.get():
                 logger.info(
                     "Decode graph replay: worker=%s key_size=%s (%s) mode=%s raw_bs=%d%s",
