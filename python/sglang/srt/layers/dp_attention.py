@@ -530,6 +530,9 @@ def _dp_gather_via_all_reduce(
     forward_batch: ForwardBatch,
     is_partial: bool,
 ):
+    from sglang.srt.distributed.coll_trace import record_dp_family
+
+    record_dp_family("gather=all_reduce(SUM_LEN)")
     local_start_pos, local_num_tokens = get_dp_local_info(forward_batch)
 
     global_tokens.fill_(0)
@@ -572,6 +575,9 @@ def _dp_gather_via_all_gather(
     forward_batch: ForwardBatch,
     is_partial: bool,
 ):
+    from sglang.srt.distributed.coll_trace import record_dp_family
+
+    record_dp_family("gather=all_gather(MAX_LEN)")
     use_world = world_dp_gather_enabled()
 
     if get_attn_tensor_model_parallel_world_size() == 1:
