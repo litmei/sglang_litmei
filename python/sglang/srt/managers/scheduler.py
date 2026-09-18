@@ -1674,10 +1674,10 @@ class Scheduler(
 
         self.batch_record_buf = [None] * 2
         self.batch_record_ct = 0
-        # Forward-launch events keyed by forward_iter. The pin ring is only two
-        # slots wide, so once the host runs ahead of the device it starts
-        # evicting batches whose forward has not drained; these events let the
-        # eviction fence itself. See record_batch_in_overlap.
+        # Debug only (SGLANG_NPU_COLL_TRACE): events recorded right after each
+        # forward's launch, queried when its pin slot is recycled so a pin
+        # dropped while the forward is still in flight shows up in the dump.
+        # See record_batch_in_overlap.
         self._forward_done_events = {}
 
     def maybe_init_ngram_embedding(self):
@@ -4211,26 +4211,22 @@ class Scheduler(
             getattr(batch, f.name, None) for f in dataclasses.fields(batch)
         ]
         self.batch_record_ct = (self.batch_record_ct + 1) % 2
-        # Fence the eviction: the snapshot's GPU tensors are read by the forward
-        # stream, so dropping the pin before that forward drains lets the caching
-        # allocator recycle them under the in-flight graph replay. The ring holds
-        # only two batches, so this fires exactly when the host has run ahead of
-        # the device -- a state that needs no host<->device sync to reach, since
-        # the overlap decode path takes no D2H and the scheduler's DP barrier
-        # synchronises the two hosts rather than host against device. In the
-        # steady state the event has long completed and query() is free.
-        prev = self.batch_record_buf[self.batch_record_ct]
-        if prev is not None:
-            prev_iter = getattr(prev[0], "forward_iter", None)
-            prev_done = self._forward_done_events.pop(prev_iter, None)
-            if prev_done is not None and not prev_done.query():
-                if envs.SGLANG_NPU_COLL_TRACE.get():
-                    from sglang.srt.distributed.coll_trace import (
-                        record_pin_keepalive,
-                    )
+        # Debug only (SGLANG_NPU_COLL_TRACE): the slot about to be overwritten
+        # still holds a batch whose forward may not have drained. The ring is
+        # only two slots wide, so this reports once the host has run ahead of the
+        # device. Reported, not fenced: fencing measurably perturbs the overlap
+        # timing without removing the hang.
+        if envs.SGLANG_NPU_COLL_TRACE.get():
+            from sglang.srt.distributed.coll_trace import record_pin_keepalive
 
-                    record_pin_keepalive(self.forward_ct, prev_iter, prev_done)
-                prev_done.synchronize()
+            evicted = self.batch_record_buf[self.batch_record_ct]
+            evicted_batch = evicted[0] if evicted else None
+            evicted_iter = getattr(evicted_batch, "forward_iter", None)
+            record_pin_keepalive(
+                self.forward_ct,
+                evicted_iter,
+                self._forward_done_events.pop(evicted_iter, None),
+            )
         # List (not tuple) so that workers can register additional refs via
         # GenerationBatchResult.extra_keep_alive_refs after forward returns.
         self.batch_record_buf[self.batch_record_ct] = [batch, attr_snapshot]
@@ -4356,16 +4352,17 @@ class Scheduler(
                         batch_result = self.model_worker.forward_batch_generation(
                             batch, **fwd_kwargs
                         )
-                        # Event right after this forward's launch. Its ops are all
+                        # Event right after this forward's launch, queried when its pin slot is
+                        # recycled (see record_batch_in_overlap). Its ops are all
                         # enqueued on forward_stream by now, so draining it means
-                        # the batch's snapshot tensors are no longer read and the
-                        # pin can be recycled. See record_batch_in_overlap.
-                        fwd_done = self.device_module.Event()
-                        fwd_done.record(stream=self.forward_stream)
-                        self._forward_done_events[batch.forward_iter] = fwd_done
-                        while len(self._forward_done_events) > 8:
-                            oldest = next(iter(self._forward_done_events))
-                            del self._forward_done_events[oldest]
+                        # the batch's snapshot tensors are no longer read.
+                        if envs.SGLANG_NPU_COLL_TRACE.get():
+                            fwd_done = self.device_module.Event()
+                            fwd_done.record(stream=self.forward_stream)
+                            self._forward_done_events[batch.forward_iter] = fwd_done
+                            while len(self._forward_done_events) > 8:
+                                oldest = next(iter(self._forward_done_events))
+                                del self._forward_done_events[oldest]
                         if batch.spec_algorithm.is_none():
                             self.future_map.publish(future_indices, batch.seq_lens + 1)
                         # Park any refs the worker wants kept alive 2 iters
