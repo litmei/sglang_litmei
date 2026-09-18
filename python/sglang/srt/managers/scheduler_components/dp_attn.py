@@ -272,15 +272,17 @@ def _local_decode_cuda_graph_vote(
     """This rank's vote for the decode graph (min-reduced across dp ranks)."""
     if disable_cuda_graph:
         return False
-    if envs.SGLANG_DP_IDLE_EAGER.get() and (
-        local_batch is None or local_batch.forward_mode.is_idle()
-    ):
-        # An idle rank would otherwise replay the decode graph captured for its
-        # peer's DECODE mode. The two ranks then run the same captured graph in
-        # different modes, which desynchronises the coupled HCCL ops and hangs
-        # the scheduler. The vote min-reduces, so voting no here runs the whole
-        # step eagerly, where both ranks issue plain collectives instead of
-        # device-captured ones.
+    if local_batch is None or local_batch.forward_mode.is_idle():
+        # The min-reduce means one idle rank forces the whole step eager, which
+        # is what it takes to keep the two ranks' DP collectives the same kind:
+        # a graph replay uses the captured bucket geometry, while the eager peer
+        # pads to raw token counts. Mixing them disagrees on the DP-gather
+        # segment offsets ("padded bucket vs raw counts") and the coupled HCCL
+        # op never completes. The speculative verify path carries this same
+        # idle guard; the mainline did not.
+        #
+        # Unlike _local_prefill_cuda_graph_vote, which accepts an idle batch, the
+        # decode graph cannot represent an idle rank's raw counts.
         return False
     return (
         local_batch is None
