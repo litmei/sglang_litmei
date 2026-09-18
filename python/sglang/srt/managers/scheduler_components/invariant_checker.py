@@ -561,6 +561,21 @@ def _stream_ids_state(scheduler: Scheduler) -> str:
     return "stream ids: " + " ".join(parts)
 
 
+def _graph_buffer_state() -> str:
+    """DP token-count buffers bound by the last replayed decode graph.
+
+    Read on the dump thread while the process is stuck, so no hot-path device
+    sync is needed. Both ranks derive their dp-gather segment sizes from these,
+    so a disagreement here explains a coupled HCCL op that never completes.
+    """
+    try:
+        from sglang.srt.distributed.coll_trace import graph_replay_buffer_state
+
+        return graph_replay_buffer_state()
+    except Exception as exc:
+        return f"graph buffers: probe_error={type(exc).__name__}"
+
+
 def _device_liveness_state() -> str:
     """Can the device run NEW work?
 
@@ -595,6 +610,7 @@ def create_scheduler_watchdog(
             f"{_step_state(scheduler)}\n"
             f"{_stream_drain_state(scheduler)}\n"
             f"{_device_liveness_state()}\n"
+            f"{_graph_buffer_state()}\n"
             f"{_stream_ids_state(scheduler)}\n"
             f"{scheduler.cur_batch_for_debug.batch_size()=}\n"
             f"{scheduler.cur_batch_for_debug.reqs=}\n"

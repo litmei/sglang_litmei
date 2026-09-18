@@ -228,8 +228,14 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
         forward_batch: ForwardBatch,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> Union[LogitsProcessorOutput, PPProxyTensors]:
-        from sglang.srt.distributed.coll_trace import record_dp_geometry
+        from sglang.srt.distributed.coll_trace import (
+            record_dp_geometry,
+            register_graph_replay,
+        )
 
+        # Hand the graph-bound buffers to the watchdog dump: at hang time the
+        # two ranks' values can be compared without a hot-path device sync.
+        register_graph_replay(self.buffers)
         record_dp_geometry(
             "graph.replay",
             mode=forward_batch.forward_mode.name,

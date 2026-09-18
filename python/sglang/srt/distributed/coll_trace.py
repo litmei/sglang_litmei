@@ -104,6 +104,48 @@ def _record(op: str, group: Any, in_sig: str, out_sig: Optional[str]) -> None:
     )
 
 
+_graph_buffers: Any = None
+
+
+def register_graph_replay(buffers: Any) -> None:
+    """Remember the buffers bound by the last replayed graph.
+
+    The watchdog dump reads them back from the (still alive) device, so the two
+    ranks' values can be compared at hang time without adding a device sync to
+    the hot path.
+    """
+    global _graph_buffers
+    _graph_buffers = buffers
+
+
+def graph_replay_buffer_state() -> str:
+    """Contents of the DP token-count buffers the captured graph reads.
+
+    Capture writes a uniform [num_tokens] * dp_size into these, and the replayed
+    graph derives its dp-gather / combine segment sizes from them. If the two
+    ranks disagree here, the segments disagree and the coupled HCCL op can never
+    complete -- the failure mode the DFlash replay path documents when it
+    refreshes exactly these buffers before replaying.
+    """
+    if _graph_buffers is None:
+        return "graph buffers: none registered"
+    parts = []
+    for name in (
+        "global_num_tokens_gpu",
+        "global_num_tokens_for_logprob_gpu",
+        "global_num_token_non_padded",
+        "num_token_non_padded",
+    ):
+        buf = getattr(_graph_buffers, name, None)
+        if buf is None:
+            continue
+        try:
+            parts.append(f"{name}={buf.flatten().tolist()}")
+        except Exception as exc:
+            parts.append(f"{name}=<{type(exc).__name__}>")
+    return "graph buffers: " + " ".join(parts)
+
+
 def recent_collectives() -> List[str]:
     """Last few collective enqueues, oldest first."""
     return list(_recent)
