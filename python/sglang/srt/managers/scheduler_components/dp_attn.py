@@ -272,6 +272,14 @@ def _local_decode_cuda_graph_vote(
     """This rank's vote for the decode graph (min-reduced across dp ranks)."""
     if disable_cuda_graph:
         return False
+    if envs.SGLANG_DP_IDLE_EAGER.get() and (
+        local_batch is None or local_batch.forward_mode.is_idle()
+    ):
+        # Debug experiment. The vote min-reduces, so an idle rank voting no sends
+        # every rank down the eager path for this step: an idle rank would
+        # otherwise replay the graph captured for its peer's DECODE mode, and
+        # that mode mismatch is the only structural asymmetry left in the hang.
+        return False
     return (
         local_batch is None
         or local_batch.forward_mode.is_decode_or_idle()

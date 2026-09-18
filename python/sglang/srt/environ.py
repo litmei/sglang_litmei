@@ -977,6 +977,12 @@ class Envs:
     # Debug aid: value-level check of the same staging. WARNING: its blocking D2H
     # drains the stream and masks the race; use SGLANG_NPU_PIN_RACE_CHECK instead.
     SGLANG_NPU_PIN_RACE_VALUE_CHECK = EnvBool(False)
+    # Debug experiment: make an idle DP rank vote no on the decode graph, which
+    # the vote min-reduces so every rank runs the step eagerly. An idle rank
+    # replaying a graph captured for the peer's DECODE mode is the only
+    # structural asymmetry left in the DP hang, and eager replays issue plain
+    # collectives instead of device-captured ones. Off by default.
+    SGLANG_DP_IDLE_EAGER = EnvBool(False)
     # Debug aid: log every torch.distributed collective enqueue (op, group size,
     # shape/dtype/device signature) so a hang's missing collective is visible by
     # diffing the two ranks' log tails. High volume; keep off in normal runs.
