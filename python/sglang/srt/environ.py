@@ -971,6 +971,7 @@ class Envs:
     SGLANG_NPU_ATTN_BACKEND_NEEDS_CPU_SEQ_LENS = EnvBool(True)
     # Enable pin_memory=True to reduce free bubbles caused by host to device transfer.
     SGLANG_NPU_ENABLE_PIN_MEMORY = EnvBool(False)
+    SGLANG_NPU_COLL_TRACE = EnvBool(False)
 
     # ===================================================================
     # MUSA
