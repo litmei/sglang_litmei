@@ -184,8 +184,8 @@ class NPUCudaGraphBackend(BaseCudaGraphBackend):
         update_future = self._update_executor.submit(
             graph.update, cpu_update_input=cpu_update_input
         )
-        update_future.result()
         graph.replay()
+        update_future.result()
 
         fence = self._device_module.Event()
         fence.record()
