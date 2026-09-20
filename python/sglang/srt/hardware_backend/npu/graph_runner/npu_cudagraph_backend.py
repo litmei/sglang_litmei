@@ -175,11 +175,27 @@ class NPUCudaGraphBackend(BaseCudaGraphBackend):
 
         graph = self._graphs[shape_key]
 
+        # `update` only writes HOST memory: actual_seq_lengths_kv is an `int[]`
+        # arg, so it is captured as a Host-side IntArray (a device tensor makes
+        # the op read it back on the host and capture refuses to synchronize).
+        # The device reads that memory asynchronously while replaying, so waiting
+        # for the update call to return orders the wrong pair: it guarantees
+        # "write before replay is enqueued", never "the previous replay finished
+        # reading". Block the host until the previous replay's event completes,
+        # i.e. until the device is done with the buffer, before rewriting it.
+        prev_fence = getattr(self, "_rebind_fence", None)
+        if prev_fence is not None:
+            prev_fence.synchronize()
+
         update_future = self._update_executor.submit(
             graph.update, cpu_update_input=cpu_update_input
         )
         update_future.result()
         graph.replay()
+
+        fence = self._device_module.Event()
+        fence.record()
+        self._rebind_fence = fence
         return self._outputs[shape_key]
 
     def cleanup(self) -> None:
