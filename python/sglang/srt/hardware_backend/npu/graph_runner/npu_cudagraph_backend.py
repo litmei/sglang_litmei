@@ -166,14 +166,31 @@ class NPUCudaGraphBackend(BaseCudaGraphBackend):
 
         graph = self._graphs[shape_key]
 
+        # The rebind patches a Host-side IntArray: FIA's actual_seq_lengths_kv is
+        # an `int[]` arg, so it cannot be a device tensor (a device tensor makes
+        # the op read it back on the host, and capture refuses to synchronize).
+        # The DEVICE reads that host memory while replaying, and this rewrite has
+        # no ordering edge against that read -- so a rewrite can land inside the
+        # previous replay's read window. Waiting for the previous replay to be
+        # done before patching again is the only fence that closes it: the window
+        # is *after* the replay, which is why joining/syncing before the replay
+        # changes nothing.
+        prev_fence = getattr(self, "_rebind_fence", None)
+        if prev_fence is not None:
+            prev_fence.synchronize()
+
         def _update():
             self._device_module.set_device(self._device_id)
             graph.update(cpu_update_input=cpu_update_input)
 
         thread = threading.Thread(target=_update)
         thread.start()
-        graph.replay()
         thread.join()
+        graph.replay()
+
+        fence = self._device_module.Event()
+        fence.record()
+        self._rebind_fence = fence
         return self._outputs[shape_key]
 
     def cleanup(self) -> None:
