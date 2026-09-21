@@ -765,17 +765,17 @@ class AscendAttnBackend(AttentionBackend):
                 metadata.block_tables_swa[:bs, max_seq_pages:].fill_(0)
                 metadata.block_tables_swa[bs:, :].fill_(0)
 
-            # Update SWA mask: True = masked out (don't attend), False = attend
-            seq_lens_int = seq_lens[:bs].int()
-            starts = torch.clamp(seq_lens_int - self.sliding_window_size, min=0)
-            indices = self.graph_metadata["swa_indices"]
-            start_exp = starts.unsqueeze(1)
-            seq_exp = seq_lens_int.unsqueeze(1)
-            mask = (indices.unsqueeze(0) < start_exp) | (
-                indices.unsqueeze(0) >= seq_exp
-            )
-            metadata.swa_mask[:bs, 0, :].copy_(mask)
-            metadata.swa_mask[bs:, :, :].fill_(True)
+                # Update SWA mask: True = masked out (don't attend), False = attend
+                seq_lens_int = seq_lens[:bs].int()
+                starts = torch.clamp(seq_lens_int - self.sliding_window_size, min=0)
+                indices = self.graph_metadata["swa_indices"]
+                start_exp = starts.unsqueeze(1)
+                seq_exp = seq_lens_int.unsqueeze(1)
+                mask = (indices.unsqueeze(0) < start_exp) | (
+                    indices.unsqueeze(0) >= seq_exp
+                )
+                metadata.swa_mask[:bs, 0, :].copy_(mask)
+                metadata.swa_mask[bs:, :, :].fill_(True)
             metadata.block_tables[:bs, :max_seq_pages].copy_(
                 self.req_to_token[req_pool_indices[:bs], 0 : max_len : self.page_size]
                 // self.page_size
