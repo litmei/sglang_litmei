@@ -776,10 +776,10 @@ class AscendAttnBackend(AttentionBackend):
             )
             metadata.swa_mask[:bs, 0, :].copy_(mask)
             metadata.swa_mask[bs:, :, :].fill_(True)
-        metadata.block_tables[:bs, :max_seq_pages].copy_(
-            self.req_to_token[req_pool_indices[:bs], 0 : max_len : self.page_size]
-            // self.page_size
-        )
+            metadata.block_tables[:bs, :max_seq_pages].copy_(
+                self.req_to_token[req_pool_indices[:bs], 0 : max_len : self.page_size]
+                // self.page_size
+            )
 
             metadata.block_tables[:bs, max_seq_pages:].fill_(0)
             metadata.block_tables[bs:, :].fill_(0)
