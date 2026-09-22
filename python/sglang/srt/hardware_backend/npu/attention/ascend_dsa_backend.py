@@ -340,20 +340,28 @@ class AscendDSAAttnBackend(AscendAttnBackend):
     def _cache_seqlens_cpu_max(self, forward_batch: ForwardBatch) -> int:
         """Return the effective width used to slice the page table.
 
-        With the CPU seq-lens mirror disabled (``needs_cpu_seq_lens=False``) no
-        host-side length is available, so fall back to the full ``req_to_token``
-        width. This mirrors AscendAttnBackend's mirror-free block-table path and
-        keeps capture/replay widths identical.
-        """
-        if not self.needs_cpu_seq_lens:
-            return int(self.req_to_token_pool.req_to_token.shape[1])
+        This width is also the KV scan extent every DSA consumer derives from the
+        table (indexer / sparse attention / kpool plans), so it must be the live
+        KV length. Slicing the whole ``req_to_token`` row instead would leave the
+        columns past each request's own length filled with stale page ids that
+        point at *other* requests' live KV - silently degrading attention, most
+        visibly the MTP draft.
 
-        assert forward_batch.seq_lens_cpu is not None
+        With the CPU seq-lens mirror disabled (``needs_cpu_seq_lens=False``) there
+        is no host length, so fall back to the device KV lengths (which already
+        carry the spec offsets) and read their max - the same formula this width
+        used before it was derived from the host mirror, and the same fallback the
+        GPU DSA backend takes. One scalar read per metadata init, not per layer.
+        """
+        if forward_batch.seq_lens_cpu is None:
+            cache_seqlens = self._cache_seqlens(forward_batch)
+            return (
+                int(cache_seqlens.max().item()) if cache_seqlens.numel() > 0 else 0
+            )
+
         seq_lens_cpu = forward_batch.seq_lens_cpu[: forward_batch.batch_size]
         max_seq_len = (
-            int(seq_lens_cpu.max().item())
-            if seq_lens_cpu.numel() > 0
-            else 0
+            int(seq_lens_cpu.max().item()) if seq_lens_cpu.numel() > 0 else 0
         )
         if forward_batch.forward_mode.is_target_verify():
             max_seq_len += self.speculative_num_draft_tokens
@@ -424,6 +432,9 @@ class AscendDSAAttnBackend(AscendAttnBackend):
         # ── Populate only consumed fields ──
         metadata.page_size = self.page_size
         metadata.cache_seqlens_int32 = cache_seqlens
+        # A shorter request in the batch would otherwise keep stale page ids in the
+        # columns between its own KV length and the batch-wide width.
+        self._mask_page_table_tail(real_page_table, cache_seqlens)
         metadata.real_page_table = real_page_table
         metadata.dsa_seqlens_expanded = seq_lens_expanded
         metadata.token_to_batch_idx = token_request_ids
@@ -566,7 +577,11 @@ class AscendDSAAttnBackend(AscendAttnBackend):
         query_lens = self._query_lens_device(forward_batch)
 
         # 2. real_page_table — recompute and in-place copy
-        max_seq_len_k = self._cache_seqlens_cpu_max(forward_batch)
+        # Graph replay keeps the captured (full) buffer width on purpose: consumers
+        # read the table's shape, so trimming the copied width buys nothing here,
+        # while _cache_seqlens_cpu_max would add one scalar sync per replay. The
+        # live-length invariant is restored by masking the tail below instead.
+        max_seq_len_k = int(self.req_to_token_pool.req_to_token.shape[1])
         page_table_1 = self.req_to_token_pool.req_to_token[
             forward_batch.req_pool_indices[:bs], :max_seq_len_k
         ]
@@ -586,6 +601,12 @@ class AscendDSAAttnBackend(AscendAttnBackend):
                 f"replay={new_real_page_table.shape}, batch_size={bs}."
             )
         metadata.real_page_table[:n_rows, :n_cols].copy_(new_real_page_table)
+        # The captured buffer keeps a fixed width while n_cols follows the live KV
+        # length, so the columns past n_cols are never rewritten - they hold values
+        # from an earlier (longer) replay and would be read by any consumer that
+        # walks the table by width. Keep them zero (page 0), like the capture-time
+        # zeros the host-mirror path relies on.
+        self._mask_page_table_tail(metadata.real_page_table[:n_rows], cache_seqlens)
 
         # 3. dsa_seqlens_expanded — update causal lengths for each query token
         needs_causal_expansion = (

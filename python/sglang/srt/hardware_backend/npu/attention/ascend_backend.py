@@ -419,6 +419,27 @@ class AscendAttnBackend(AttentionBackend):
         v = layer.v_head_dim
         return (d == v and d in (128, 192, 256)) or (d == 192 and v == 128)
 
+    def _mask_page_table_tail(
+        self, page_table: torch.Tensor, kv_lens: torch.Tensor
+    ) -> None:
+        """In-place zero the columns past each request's live KV length.
+
+        ``kv_lens`` must be the device KV lengths *including* the speculative
+        offsets (+draft_token_num / +step+1), i.e. the same values the host-mirror
+        path uses to size the table. Columns step by ``page_size``, so the number
+        of live columns is ``ceil(kv_len / page_size)``; everything past it is
+        stale ``req_to_token`` content (page ids belonging to other requests'
+        live KV) and must be zero, which is what the mirror path guarantees via
+        "fill only up to max_seq_pages, then fill_(0)". Pure device-side, no D2H.
+        """
+        valid_pages = (
+            kv_lens[: page_table.shape[0]].to(torch.int32) + self.page_size - 1
+        ) // self.page_size
+        cols = torch.arange(
+            page_table.shape[1], device=page_table.device, dtype=torch.int32
+        )
+        page_table.masked_fill_(cols.unsqueeze(0) >= valid_pages.unsqueeze(1), 0)
+
     def update_verify_buffers_to_fill_after_draft(
         self, spec_info: SpecInput, cuda_graph_bs: Optional[int]
     ):
@@ -491,10 +512,25 @@ class AscendAttnBackend(AttentionBackend):
                     .contiguous()
                 )
         else:
+            # needs_cpu_seq_lens=False: the host mirror is absent, so size the
+            # table from the device lengths with the *same* speculative offsets
+            # the mirror branch applies. The width is also the KV scan extent
+            # downstream, so it must stay the live length: filling the whole
+            # req_to_token row would expose stale page ids (other requests' live
+            # KV) to every consumer. Slicing with a 0-dim device tensor keeps this
+            # D2H-free.
+            kv_lens = forward_batch.seq_lens
+            if forward_batch.forward_mode.is_target_verify():
+                kv_lens = kv_lens + int(forward_batch.spec_info.draft_token_num)
+            elif (
+                forward_batch.forward_mode.is_decode_or_idle()
+                and forward_batch.spec_info is not None
+            ):
+                kv_lens = kv_lens + self.speculative_step_id + 1
             self.forward_metadata.block_tables = (
                 self.req_to_token_pool.req_to_token[
-                    forward_batch.req_pool_indices, :: self.page_size
-                ]
+                    forward_batch.req_pool_indices, : kv_lens.max()
+                ][:, :: self.page_size]
                 // self.page_size
             )
         if forward_batch.extend_seq_lens is not None:
@@ -795,14 +831,23 @@ class AscendAttnBackend(AttentionBackend):
                 ]
                 // self.page_size
             )
-            if total_pages < metadata.block_tables.shape[1]:
-                metadata.block_tables[:bs, total_pages:].fill_(0)
+            metadata.block_tables[:bs, total_pages:].fill_(0)
+            metadata.block_tables[bs:, :].fill_(0)
 
         if forward_mode.is_target_verify():
             seq_lens = seq_lens + self.speculative_num_draft_tokens
         elif forward_mode.is_decode_or_idle() and spec_info is not None:
             seq_lens = seq_lens + self.speculative_step_offset_npu
         metadata.seq_lens[:bs].copy_(seq_lens[:bs])
+
+        if not self.needs_cpu_seq_lens:
+            # The captured graph buffer keeps a fixed (full) width, so a consumer
+            # that reads the table by width would scan past each request's live KV
+            # - into stale page ids pointing at other requests' live KV. The host
+            # mirror path is protected by "fill only up to max_seq_pages, then
+            # fill_(0)"; restore the same invariant here, per row, from the
+            # device KV lengths (seq_lens already carries the spec offsets).
+            self._mask_page_table_tail(metadata.block_tables[:bs], seq_lens[:bs])
 
         self.forward_metadata = metadata
 
