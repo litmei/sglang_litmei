@@ -451,6 +451,14 @@ class AscendAttnBackend(AttentionBackend):
         v = layer.v_head_dim
         return (d == v and d in (128, 192, 256)) or (d == 192 and v == 128)
 
+    def _kv_lens_for_attn(self):
+        seq_lens = self.forward_metadata.seq_lens_cpu_int
+        if seq_lens is None:
+            return self.forward_metadata.seq_lens_cpu_list
+        if seq_lens.device.type == "cpu":
+            return seq_lens.int().tolist()
+        return seq_lens.int()
+
     def update_verify_buffers_to_fill_after_draft(
         self, spec_info: SpecInput, cuda_graph_bs: Optional[int]
     ):
@@ -552,8 +560,10 @@ class AscendAttnBackend(AttentionBackend):
                 self.device
             ).int()
 
-        if forward_batch.seq_lens_cpu is not None and self.needs_cpu_seq_lens:
+        if forward_batch.seq_lens_cpu is not None:
             self.forward_metadata.seq_lens_cpu_int = forward_batch.seq_lens_cpu.int()
+        else:
+            self.forward_metadata.seq_lens_cpu_int = self.forward_metadata.seq_lens.int()
         # In graph mode (see _init_cuda_graph_metadata) seq_lens_cpu_int stays
         # None so forward_mtp binds seq_lens_cpu_list instead: graph.update can
         # only rebind the Host-side IntArray when captured as a Python list.
@@ -856,8 +866,8 @@ class AscendAttnBackend(AttentionBackend):
                 ]
                 // self.page_size
             )
-            if total_pages < metadata.block_tables.shape[1]:
-                metadata.block_tables[:bs, total_pages:].fill_(0)
+            metadata.block_tables[:bs, total_pages:].fill_(0)
+            metadata.block_tables[bs:, :].fill_(0)
 
         if forward_mode.is_target_verify():
             seq_lens = seq_lens + self.speculative_num_draft_tokens
@@ -2113,14 +2123,7 @@ class AscendAttnBackend(AttentionBackend):
         v_cache = self.token_to_kv_pool.get_value_buffer(layer.layer_id)
         query = q.reshape(-1, layer.tp_q_head_num, layer.qk_head_dim)
 
-        if self.forward_metadata.seq_lens_cpu_int is None:
-            # capture
-            actual_seq_lengths_kv = self.forward_metadata.seq_lens_cpu_list
-        else:
-            # eagle
-            actual_seq_lengths_kv = (
-                self.forward_metadata.seq_lens_cpu_int.cpu().int().tolist()
-            )
+        actual_seq_lengths_kv = self._kv_lens_for_attn()
 
         if self.forward_metadata.extend_seq_lens_cpu_int is None:
             # capture & replay
@@ -2198,14 +2201,7 @@ class AscendAttnBackend(AttentionBackend):
                 if forward_batch.forward_mode.is_target_verify():
                     real_bs = query.shape[0] // self.speculative_num_draft_tokens
 
-            if self.forward_metadata.seq_lens_cpu_int is None:
-                # Graph mode: bind the Python list, which graph.update can
-                # rebind (a captured CPU tensor would be baked as constant).
-                actual_seq_lengths_kv = self.forward_metadata.seq_lens_cpu_list
-            else:
-                actual_seq_lengths_kv = (
-                    self.forward_metadata.seq_lens_cpu_int.cpu().int().tolist()
-                )
+            actual_seq_lengths_kv = self._kv_lens_for_attn()
             if (
                 not self.graph_mode
                 and forward_batch.forward_mode.is_target_verify()
@@ -2336,12 +2332,7 @@ class AscendAttnBackend(AttentionBackend):
                 num_token_padding = q.shape[0]
                 q_nope = q_nope[: forward_batch.global_num_token_non_padded_cpu]
                 q_rope = q_rope[: forward_batch.global_num_token_non_padded_cpu]
-            if self.forward_metadata.seq_lens_cpu_int is None:
-                actual_seq_lengths_kv = self.forward_metadata.seq_lens_cpu_list
-            else:
-                actual_seq_lengths_kv = (
-                    self.forward_metadata.seq_lens_cpu_int.cpu().int().tolist()
-                )
+            actual_seq_lengths_kv = self._kv_lens_for_attn()
             actual_seq_lengths = np.arange(
                 self.speculative_num_draft_tokens,
                 self.speculative_num_draft_tokens + q_nope.shape[0],
@@ -2872,12 +2863,7 @@ class AscendAttnBackend(AttentionBackend):
                 else:
                     block_tables = self.forward_metadata.block_tables
                 if self.use_fia:
-                    if self.forward_metadata.seq_lens_cpu_int is None:
-                        actual_seq_len_kv = self.forward_metadata.seq_lens_cpu_list
-                    else:
-                        actual_seq_len_kv = (
-                            self.forward_metadata.seq_lens_cpu_int.cpu().int().tolist()
-                        )
+                    actual_seq_len_kv = self._kv_lens_for_attn()
                     block_size = self.page_size
 
                     if sinks is not None:
@@ -2934,12 +2920,7 @@ class AscendAttnBackend(AttentionBackend):
                 return attn_out
 
             if self.use_fia:
-                if self.forward_metadata.seq_lens_cpu_int is None:
-                    actual_seq_len_kv = self.forward_metadata.seq_lens_cpu_list
-                else:
-                    actual_seq_len_kv = (
-                        self.forward_metadata.seq_lens_cpu_int.cpu().int().tolist()
-                    )
+                actual_seq_len_kv = self._kv_lens_for_attn()
                 num_token_padding = q.shape[0]
                 actual_bs = self.forward_metadata.block_tables.shape[0]
                 q = q[:actual_bs]
