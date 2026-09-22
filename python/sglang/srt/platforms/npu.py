@@ -16,7 +16,6 @@ class NPUDeviceMixin(DeviceMixin):
     """NPU implementation of the shared device operations."""
 
     _enum: PlatformEnum = PlatformEnum.NPU
-    _is_pin_memory_available = None
     device_name: str = "npu"
     device_type: str = "npu"
 
@@ -59,14 +58,7 @@ class NPUDeviceMixin(DeviceMixin):
     def is_pin_memory_available(self, device=None) -> bool:
         if device is not None and str(device) == "cpu":
             return False
-        # FIXME: npu supports pin_memory=True like cuda, but now has hang issue #38971 on some model with dp-attn.
-        if self._is_pin_memory_available is None:
-            from sglang.srt.utils import envs
-
-            self._is_pin_memory_available = envs.SGLANG_NPU_ENABLE_PIN_MEMORY.get()
-        if self._is_pin_memory_available:
-            return True
-        return False
+        return True
 
     @classmethod
     def seed_everything(cls, seed: int | None = None) -> None:
