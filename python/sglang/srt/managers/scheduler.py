@@ -352,6 +352,7 @@ from sglang.srt.utils import (
     triton_load_watch,
 )
 from sglang.srt.utils.common import is_npu
+from sglang.srt.utils.common import pinned_h2d_drain
 from sglang.srt.utils.hf_transformers_utils import (
     get_processor,
     get_tokenizer,
@@ -4792,6 +4793,12 @@ class Scheduler(
             self.batch_result_processor.process_batch_result_prebuilt(batch)
         elif batch.forward_mode.is_idle():
             self.batch_result_processor.process_batch_result_idle(batch, result)
+
+        # NPU: recycle the temp-H2D pinned staging blocks used by this
+        # round's batch prep. copy_done was synchronized above (decode and
+        # prefill paths both wait on it), and our pending event is
+        # stream-ordered before copy_done, so this drain's sync is free.
+        pinned_h2d_drain()
 
         # Submit this batch's queued host backups before the next scheduler step.
         self.tree_cache.flush_pending_backups()

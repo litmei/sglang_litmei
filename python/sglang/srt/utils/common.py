@@ -559,23 +559,46 @@ def is_pin_memory_available(device=None) -> bool:
     return current_platform.is_pin_memory_available(device)
 
 
-_pinned_h2d_rings: Dict[Any, "deque"] = {}
+_pinned_h2d_free: List = []  # (bucket, staging) with completed copies — safe to reuse
+_pinned_h2d_pending: List = []  # staging blocks whose H2D may still be in flight
+_pinned_h2d_pending_event = None  # covers every pending copy (refreshed per copy)
+
+
+def pinned_h2d_drain() -> None:
+    """Recycle staging blocks whose H2Ds have completed.
+
+    Call this right after ``copy_done.synchronize()`` in the scheduler's
+    result-processing step. The pending event is stream-ordered BEFORE the
+    forward's output copy_done event, so by the time copy_done fires it has
+    already fired — this sync piggybacks on the framework's existing wait
+    and costs nothing. Until drained, used blocks are simply not handed
+    out again, so batch prep can never touch a staging block whose DMA is
+    in flight.
+    """
+    if not _pinned_h2d_pending:
+        return
+    if _pinned_h2d_pending_event is not None:
+        _pinned_h2d_pending_event.synchronize()
+    _pinned_h2d_free.extend(_pinned_h2d_pending)
+    _pinned_h2d_pending.clear()
 
 
 def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
-    """Safe temp host->device copy with a fenced pinned-staging ring.
+    """Safe temp host->device copy of a small batch-publish tensor (NPU).
 
-    A bare ``torch.tensor(..., pin_memory=True).to(device, non_blocking=True)``
-    is unsafe on NPU: torch_npu's host caching allocator recycles the freed
-    pinned block immediately (the copy path records no event), so the next
-    same-size host allocation clobbers the DMA source while the H2D is still
-    queued. This helper keeps a small ring of persistent pinned staging
-    blocks and fences each reuse with a recorded event, making back-to-back
-    temp H2Ds race-free without any stream-wide sync in the common case.
+    On NPU a bare ``torch.tensor(..., pin_memory=True).to(device,
+    non_blocking=True)`` is unsafe: torch_npu's host caching allocator
+    recycles the freed pinned block immediately (the copy path records no
+    event), so a later same-size host allocation clobbers the DMA source
+    while the H2D is still queued. Here the copy stages through pinned
+    blocks owned by this arena: a used block is never handed out again
+    until ``pinned_h2d_drain`` fences it behind a single event — which is
+    piggybacked on the scheduler's existing copy_done.synchronize() wait,
+    so batch prep itself runs with zero syncs.
 
-    Staging blocks are flat uint8 buffers bucketed by byte size (power of
-    two), NOT keyed by exact numel: batch shapes change every step, and
-    exact-size keying would grow pinned memory without bound.
+    On every other platform the plain temp copy is kept verbatim: their
+    host allocators already event-track pinned reuse, so the original
+    semantics (and performance) are preserved exactly.
 
     Returns a freshly allocated device tensor (device-side reuse is
     stream-ordered and safe).
@@ -586,30 +609,39 @@ def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
         if host.dtype != dtype:
             host = host.to(dtype)
     else:
-        host = torch.tensor(data, dtype=dtype)
+        host = torch.tensor(
+            data, dtype=dtype, pin_memory=is_pin_memory_available(device)
+        )
+
+    if not is_npu():
+        return host.to(device, non_blocking=True)
+
+    if host.numel() == 0:
+        return torch.empty(host.shape, dtype=dtype, device=device)
 
     nbytes = host.numel() * host.element_size()
     bucket = 1 << max(nbytes - 1, 64).bit_length()
-    key = (str(device), bucket)
-    ring = _pinned_h2d_rings.get(key)
-    if ring is None:
-        ring = _pinned_h2d_rings[key] = deque(maxlen=2)
-    if len(ring) == ring.maxlen:
-        staging, ev = ring[0]
-        # Fence: the previous H2D from this staging block must be complete
-        # before we overwrite its bytes.
-        ev.synchronize()
-        ring.rotate(-1)
-    else:
+    staging = None
+    for i, (blk_bucket, blk) in enumerate(_pinned_h2d_free):
+        if blk_bucket >= bucket:
+            staging = _pinned_h2d_free.pop(i)
+            break
+    if staging is None:
         staging = torch.empty(bucket, dtype=torch.uint8, pin_memory=True)
-        ev = torch.npu.Event() if is_npu() else torch.cuda.Event()
-        ring.append((staging, ev))
 
     staging_view = staging[:nbytes].view(dtype).view(host.shape)
     staging_view.copy_(host)
-    dev = torch.empty(host.numel(), dtype=dtype, device=device)
+    dev = torch.empty(host.shape, dtype=dtype, device=device)
     dev.copy_(staging_view, non_blocking=True)
+    # record() is async and ~us-cheap; refreshing per copy keeps the pending
+    # event stream-ordered after every copy so far, so one drain sync covers
+    # all of them (including copies issued after the drain point, e.g.
+    # init_new-time H2Ds inside run_batch).
+    global _pinned_h2d_pending_event
+    ev = torch.npu.Event()
     ev.record()
+    _pinned_h2d_pending_event = ev
+    _pinned_h2d_pending.append((bucket, staging))
     return dev
 
 
