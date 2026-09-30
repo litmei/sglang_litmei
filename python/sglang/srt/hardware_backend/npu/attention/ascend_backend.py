@@ -137,8 +137,10 @@ def _debug_check_dsa_gather_inputs(
             elif kv_req.numel() >= n_rows:
                 row_bound = kv_req[:n_rows]
                 real_rows = n_rows
-            tk_min_row = topk_indices.min(dim=1).values.to(torch.int64).cpu()
-            tk_max_row = topk_indices.max(dim=1).values.to(torch.int64).cpu()
+            # aclnnMinDim/aclnnMaxDim on NPU do not support int32; cast first.
+            topk_i64 = topk_indices.to(torch.int64)
+            tk_min_row = topk_i64.min(dim=1).values.cpu()
+            tk_max_row = topk_i64.max(dim=1).values.cpu()
             if row_bound is not None:
                 bad_mask = (tk_min_row < -1) | (tk_max_row >= row_bound)
             else:
@@ -161,8 +163,9 @@ def _debug_check_dsa_gather_inputs(
             if n_bad_real:
                 bad.append(f"{n_bad_real} REAL rows contain out-of-range topk")
         else:
-            tk_min = int(topk_indices.min().item())
-            tk_max = int(topk_indices.max().item())
+            topk_i64 = topk_indices.to(torch.int64)
+            tk_min = int(topk_i64.min().item())
+            tk_max = int(topk_i64.max().item())
             msg += f" topk=[{tk_min},{tk_max}] rows={tuple(topk_indices.shape)}"
             if tk_max >= sl_max or tk_min < -1:
                 bad.append(f"topk range [{tk_min},{tk_max}] vs kv bound {sl_max}")
