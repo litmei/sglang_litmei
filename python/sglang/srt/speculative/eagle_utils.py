@@ -1092,7 +1092,6 @@ def eagle_prepare_for_decode(batch: ScheduleBatch):
     # and race-free.
     cur_kv_lens_device = pinned_h2d(cur_kv_lens, torch.int32, batch.device)
     nxt_kv_lens_device = pinned_h2d(nxt_kv_lens, torch.int32, batch.device)
-    del cur_kv_lens_cpu, nxt_kv_lens_cpu
     tree_cache = batch.tree_cache
     req_to_token_pool = batch.req_to_token_pool
     req_pool_indices = batch.req_pool_indices

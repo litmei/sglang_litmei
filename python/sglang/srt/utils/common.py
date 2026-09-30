@@ -570,9 +570,12 @@ def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
     pinned block immediately (the copy path records no event), so the next
     same-size host allocation clobbers the DMA source while the H2D is still
     queued. This helper keeps a small ring of persistent pinned staging
-    buffers keyed by (device, dtype, numel) and fences each reuse with a
-    recorded event, making back-to-back temp H2Ds race-free without any
-    stream-wide sync in the common case.
+    blocks and fences each reuse with a recorded event, making back-to-back
+    temp H2Ds race-free without any stream-wide sync in the common case.
+
+    Staging blocks are flat uint8 buffers bucketed by byte size (power of
+    two), NOT keyed by exact numel: batch shapes change every step, and
+    exact-size keying would grow pinned memory without bound.
 
     Returns a freshly allocated device tensor (device-side reuse is
     stream-ordered and safe).
@@ -584,10 +587,13 @@ def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
             host = host.to(dtype)
     else:
         host = torch.tensor(data, dtype=dtype)
-    key = (str(device), dtype, host.numel())
+
+    nbytes = host.numel() * host.element_size()
+    bucket = 1 << max(nbytes - 1, 64).bit_length()
+    key = (str(device), bucket)
     ring = _pinned_h2d_rings.get(key)
     if ring is None:
-        ring = _pinned_h2d_rings[key] = deque(maxlen=4)
+        ring = _pinned_h2d_rings[key] = deque(maxlen=2)
     if len(ring) == ring.maxlen:
         staging, ev = ring[0]
         # Fence: the previous H2D from this staging block must be complete
@@ -595,16 +601,16 @@ def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
         ev.synchronize()
         ring.rotate(-1)
     else:
-        staging = torch.empty(
-            host.numel(), dtype=dtype, pin_memory=True
-        )
+        staging = torch.empty(bucket, dtype=torch.uint8, pin_memory=True)
         ev = torch.npu.Event() if is_npu() else torch.cuda.Event()
         ring.append((staging, ev))
-    staging.copy_(host)
+
+    staging_view = staging[:nbytes].view(dtype).view(host.shape)
+    staging_view.copy_(host)
     dev = torch.empty(host.numel(), dtype=dtype, device=device)
-    dev.copy_(staging, non_blocking=True)
+    dev.copy_(staging_view, non_blocking=True)
     ev.record()
-    return dev.view(host.shape)
+    return dev
 
 
 def async_d2h(tensor: torch.Tensor) -> torch.Tensor:
