@@ -68,7 +68,10 @@ from sglang.srt.utils import (
     is_npu,
     support_triton,
 )
-from sglang.srt.utils.common import ceil_align, is_pin_memory_available
+from sglang.srt.utils.common import (
+    ceil_align,
+    pinned_h2d,
+)
 
 if TYPE_CHECKING:
     from sglang.srt.configs.model_config import ModelConfig
@@ -132,11 +135,7 @@ def _build_forward_token_modalities(
         )
     if not has_multimodal_tokens:
         return None
-    return torch.tensor(
-        modalities,
-        dtype=torch.int8,
-        pin_memory=is_pin_memory_available(device),
-    ).to(device, non_blocking=True)
+    return pinned_h2d(modalities, torch.int8, device)
 
 
 def _maybe_build_forward_token_modalities(
@@ -914,16 +913,17 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         self.original_global_num_tokens_cpu = global_num_tokens_source
         self.global_num_tokens_cpu = global_num_tokens
-        pin_memory = is_pin_memory_available(device)
-        self.global_num_tokens_gpu = torch.tensor(
-            global_num_tokens, dtype=torch.int64, pin_memory=pin_memory
-        ).to(device, non_blocking=True)
+        # Fenced pinned staging (NOT bare temp pinned H2D): torch_npu recycles
+        # the host block immediately, so a bare copy races with the next
+        # same-size host alloc while the DMA is queued. Corruption here
+        # misaligns DP/TP collectives (observed as HCCL hangs).
+        self.global_num_tokens_gpu = pinned_h2d(
+            global_num_tokens, torch.int64, device
+        )
         self.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
-        self.global_num_tokens_for_logprob_gpu = torch.tensor(
-            global_num_tokens_for_logprob,
-            dtype=torch.int64,
-            pin_memory=pin_memory,
-        ).to(device, non_blocking=True)
+        self.global_num_tokens_for_logprob_gpu = pinned_h2d(
+            global_num_tokens_for_logprob, torch.int64, device
+        )
         self.can_run_decode_cuda_graph = batch.can_run_decode_cuda_graph
         self.can_run_dp_draft_cuda_graph = batch.can_run_dp_draft_cuda_graph
 
@@ -1101,11 +1101,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         num_tokens = len(batch.input_ids) if batch.input_ids is not None else 0
         if enable_num_token_non_padded():
-            ret.global_num_token_non_padded = torch.tensor(
-                num_tokens,
-                dtype=torch.int32,
-                pin_memory=is_pin_memory_available(device),
-            ).to(device, non_blocking=True)
+            ret.global_num_token_non_padded = pinned_h2d(
+                num_tokens, torch.int32, device
+            )
         ret.global_num_token_non_padded_cpu = num_tokens
 
         ret.init_mlp_sync_metadata(
@@ -1145,13 +1143,12 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             if isinstance(extend_seq_lens, list):
                 # Main path: H2D from host lists; populate *_cpu mirrors.
                 assert isinstance(extend_prefix_lens, list)
-                pin_memory = is_pin_memory_available(device)
-                ret.extend_seq_lens = torch.tensor(
-                    extend_seq_lens, dtype=torch.int32, pin_memory=pin_memory
-                ).to(device, non_blocking=True)
-                ret.extend_prefix_lens = torch.tensor(
-                    extend_prefix_lens, dtype=torch.int32, pin_memory=pin_memory
-                ).to(device, non_blocking=True)
+                ret.extend_seq_lens = pinned_h2d(
+                    extend_seq_lens, torch.int32, device
+                )
+                ret.extend_prefix_lens = pinned_h2d(
+                    extend_prefix_lens, torch.int32, device
+                )
                 ret.extend_prefix_lens_cpu = list(extend_prefix_lens)
                 ret.extend_seq_lens_cpu = list(extend_seq_lens)
             else:
@@ -1267,11 +1264,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             r.token_type_ids for r in batch.reqs if r.token_type_ids is not None
         ]
         if token_type_ids:
-            self.token_type_ids = torch.tensor(
-                sum(token_type_ids, []),
-                dtype=torch.int64,
-                pin_memory=is_pin_memory_available(batch.device),
-            ).to(batch.device, non_blocking=True)
+            self.token_type_ids = pinned_h2d(
+                sum(token_type_ids, []), torch.int64, batch.device
+            )
 
     def set_local_num_token_non_padded(self, *, sharded: bool) -> None:
         """Derive the LOCAL num_token_non_padded from the invariant GLOBAL scalar.

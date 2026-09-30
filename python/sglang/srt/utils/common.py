@@ -591,6 +591,49 @@ def async_h2d(args: List, *, dtype: torch.dtype, device: torch.device) -> torch.
     return torch.tensor(args, dtype=dtype, pin_memory=pin).to(device, non_blocking=pin)
 
 
+def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
+    """Safe temp host->device copy of a small batch-publish tensor.
+
+    On NPU a bare ``torch.tensor(..., pin_memory=True).to(device,
+    non_blocking=True)`` is unsafe: torch_npu's host caching allocator
+    recycles the freed pinned block immediately (its copy path, unlike
+    at::native::copy_kernel_cuda, records no event into the allocator),
+    so a later same-size host allocation clobbers the DMA source while
+    the H2D is still queued. Here the returned device tensor pins its
+    host source: every caller stores the result in the ForwardBatch,
+    which the scheduler only releases after that batch's result has been
+    processed — i.e. after ``copy_done.synchronize()`` — while this copy
+    is stream-ordered BEFORE the forward that consumes it. The source
+    therefore always outlives its DMA, with no events, rings or drains.
+    Once torch_npu's host allocator records events on the copy path
+    (parity with CUDA), this helper can be dropped for the bare copy.
+
+    On every other platform the plain temp copy is kept verbatim: their
+    host allocators already event-track pinned reuse, so the original
+    semantics (and performance) are preserved exactly.
+
+    Returns a freshly allocated device tensor (device-side reuse is
+    stream-ordered and safe).
+    """
+    if isinstance(data, torch.Tensor):
+        host = data if data.is_cpu else data.cpu()
+        host = host.contiguous()
+        if host.dtype != dtype:
+            host = host.to(dtype)
+    else:
+        host = torch.tensor(
+            data, dtype=dtype, pin_memory=is_pin_memory_available(device)
+        )
+
+    if not is_npu():
+        return host.to(device, non_blocking=True)
+
+    dev = torch.empty(host.shape, dtype=dtype, device=device)
+    dev.copy_(host, non_blocking=True)
+    dev._sglang_pinned_source = host
+    return dev
+
+
 def async_d2h(tensor: torch.Tensor) -> torch.Tensor:
     """Enqueue a CUDA-to-pinned-host copy on the current stream."""
     if not tensor.is_cuda:

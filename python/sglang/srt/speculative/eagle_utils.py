@@ -31,6 +31,7 @@ from sglang.srt.utils import (
     is_xpu,
 )
 from sglang.srt.utils.async_probe import maybe_detect_oob
+from sglang.srt.utils.common import pinned_h2d
 
 if TYPE_CHECKING:
     from sglang.srt.constrained.base_grammar_backend import GrammarMask
@@ -1089,10 +1090,12 @@ def eagle_prepare_for_decode(batch: ScheduleBatch):
             f"row to hold committed + get_alloc_reserve_per_decode (PR #26972)."
         )
 
-    # non_blocking H2D: a blocking .to() syncs the schedule stream, which the WAR
-    # barrier has chained to the prev forward -> host stalls a full forward.
-    cur_kv_lens_device = cur_kv_lens_cpu.to(device=batch.device, non_blocking=True)
-    nxt_kv_lens_device = nxt_kv_lens_cpu.to(device=batch.device, non_blocking=True)
+    # Fenced pinned staging (NOT bare pageable non_blocking H2D): the raw
+    # pageable copy either syncs the schedule stream (hostbound) or — worse —
+    # is truly async from recyclable host memory. pinned_h2d is both async
+    # and race-free.
+    cur_kv_lens_device = pinned_h2d(cur_kv_lens, torch.int32, batch.device)
+    nxt_kv_lens_device = pinned_h2d(nxt_kv_lens, torch.int32, batch.device)
     tree_cache = batch.tree_cache
     req_to_token_pool = batch.req_to_token_pool
     req_pool_indices = batch.req_pool_indices
