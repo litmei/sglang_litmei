@@ -1004,6 +1004,10 @@ class Envs:
     SGLANG_ZBAL_BOOTSTRAP_URL = EnvStr("")
     # Set to 0 to allow AscendAttnBackend to set needs_cpu_seq_lens to False for dsa models.
     SGLANG_NPU_ATTN_BACKEND_NEEDS_CPU_SEQ_LENS = EnvBool(True)
+    # Debug: validate DSA gather inputs (block_tables / seq_lens / topk_indices)
+    # before the lightning indexer and sparse attention calls. Introduces D2H
+    # syncs; debug only.
+    SGLANG_NPU_DSA_DEBUG_GATHER = EnvBool(False)
 
     # ===================================================================
     # MUSA

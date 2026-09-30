@@ -70,6 +70,59 @@ def _expand_dsa_sparse_indices(topk_indices: torch.Tensor) -> torch.Tensor:
     return topk_indices
 
 
+def _debug_check_dsa_gather_inputs(
+    backend: "AscendAttnBackend",
+    tag: str,
+    mode_name: str,
+    bs: int,
+    num_tokens: int,
+    block_tables: torch.Tensor,
+    seq_lens: torch.Tensor,
+    topk_indices: Optional[torch.Tensor],
+) -> None:
+    """Env-gated validation of DSA gather inputs (SGLANG_NPU_DSA_DEBUG_GATHER).
+
+    Syncs the device (D2H .max()/.min()); debug only. Flags any buffer whose
+    values would make the PA_BSND KV gather (GatherV3) index out of range,
+    and dumps the batch shape so a crash can be attributed to padding vs.
+    steady-state decode.
+    """
+    if not envs.SGLANG_NPU_DSA_DEBUG_GATHER.get():
+        return
+    if torch.cuda.is_current_stream_capturing():
+        # .item() sync is illegal under graph capture; skip.
+        return
+    page_size = max(backend.page_size, 1)
+    pool_pages = backend.token_to_kv_pool.size // page_size + 1
+    bt_max = int(block_tables.max().item())
+    sl = seq_lens[:bs]
+    sl_min = int(sl.min().item())
+    sl_max = int(sl.max().item())
+    bad = []
+    if bt_max >= pool_pages:
+        bad.append(f"block_tables_max={bt_max} >= pool_pages={pool_pages}")
+    if sl_max > backend.max_context_len:
+        bad.append(f"seq_lens_max={sl_max} > max_context_len={backend.max_context_len}")
+    msg = (
+        f"[dsa-gather-debug][{tag}] mode={mode_name} "
+        f"bs={bs} num_tokens={num_tokens} "
+        f"block_tables={tuple(block_tables.shape)} bt_max={bt_max} "
+        f"(pool_pages={pool_pages}) seq_lens=[{sl_min},{sl_max}]"
+    )
+    if topk_indices is not None and topk_indices.numel() > 0:
+        tk_min = int(topk_indices.min().item())
+        tk_max = int(topk_indices.max().item())
+        msg += f" topk=[{tk_min},{tk_max}] rows={tuple(topk_indices.shape)}"
+        if tk_max >= sl_max or tk_min < -1:
+            bad.append(f"topk range [{tk_min},{tk_max}] vs kv bound {sl_max}")
+    zero_len_rows = int((sl == 0).sum().item())
+    if zero_len_rows:
+        msg += f" padded_rows(seq_lens==0)={zero_len_rows}"
+    if bad:
+        msg += " !! " + "; ".join(bad)
+    logger.warning(msg)
+
+
 def _reshape_kv_for_fia_nz(
     tensor: torch.Tensor, num_heads: int, head_dim: int, page_size: int
 ) -> torch.Tensor:
@@ -879,6 +932,17 @@ class AscendAttnBackend(AttentionBackend):
             seq_lens = seq_lens + self.speculative_step_offset_npu
         metadata.seq_lens[:bs].copy_(seq_lens[:bs])
 
+        _debug_check_dsa_gather_inputs(
+            self,
+            "graph_prep",
+            forward_mode.name,
+            bs,
+            metadata.seq_lens.shape[0],
+            metadata.block_tables,
+            metadata.seq_lens,
+            None,
+        )
+
         self.forward_metadata = metadata
 
         self.graph_mode = True
@@ -1257,6 +1321,16 @@ class AscendAttnBackend(AttentionBackend):
         else:
             if topk_indices is not None:
                 topk_indices = self._pad_topk_indices(topk_indices, q_nope.shape[0])
+            _debug_check_dsa_gather_inputs(
+                self,
+                "sparse_attn",
+                forward_batch.forward_mode.name,
+                forward_batch.batch_size,
+                q_nope.shape[0],
+                self.forward_metadata.block_tables,
+                actual_seq_lengths_kv,
+                topk_indices,
+            )
             topk_indices = _expand_dsa_sparse_indices(topk_indices)
             if self.kv_cache_dtype == torch.float8_e4m3fn:
                 assert q_nope.dtype == q_pe.dtype == torch.bfloat16

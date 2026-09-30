@@ -308,6 +308,21 @@ class DSANPUIndexerMixin:
                 if is_prefill
                 else block_table
             )
+            from sglang.srt.hardware_backend.npu.attention.ascend_backend import (
+                _debug_check_dsa_gather_inputs,
+            )
+
+            _attn_backend = get_attn_backend()
+            _debug_check_dsa_gather_inputs(
+                _attn_backend,
+                f"indexer_l{layer_id}",
+                forward_batch.forward_mode.name,
+                forward_batch.batch_size,
+                forward_batch.input_ids.shape[0],
+                block_table,
+                actual_seq_lengths_kv,
+                None,
+            )
 
             if use_quant_indexer:
                 query, query_scale = _quantize_npu_indexer_activation(
