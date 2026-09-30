@@ -270,6 +270,20 @@ def get_dsa_violation_log(device) -> DsaGatherViolationLog:
     return _dsa_violation_log
 
 
+_dsa_gather_pool_bound: Optional[int] = None
+
+
+def set_dsa_gather_pool_bound(bound: int) -> None:
+    """Cache the KV-pool hard upper bound once at backend init so scheduler-
+    side callers (no forward context active) can use async_check too."""
+    global _dsa_gather_pool_bound
+    _dsa_gather_pool_bound = bound
+
+
+def get_dsa_gather_pool_bound() -> Optional[int]:
+    return _dsa_gather_pool_bound
+
+
 def async_check_dsa_gather_inputs(
     tag: str, values: torch.Tensor, lo, hi
 ) -> None:
@@ -552,6 +566,8 @@ class AscendAttnBackend(AttentionBackend):
         # corresponding ForwardBatch fields.
         self.req_to_token_pool = model_runner.req_to_token_pool
         self.token_to_kv_pool = model_runner.token_to_kv_pool
+        if envs.SGLANG_NPU_DSA_DEBUG_GATHER.get() == 2:
+            set_dsa_gather_pool_bound(self.token_to_kv_pool.size)
         self.req_to_token = model_runner.req_to_token_pool.req_to_token
         self.graph_mode = False
         self.use_fa = get_bool_env_var("ASCEND_USE_FA", "False")

@@ -455,21 +455,21 @@ class FutureMap:
             if _is_npu and envs.SGLANG_NPU_DSA_DEBUG_GATHER.get() == 2:
                 # Async bounds check (no host sync): flags rows that were
                 # never stashed (torch.empty garbage) or relay-corrupted
-                # before the in-flight forward consumes them.
+                # before the in-flight forward consumes them. Pool bound is
+                # cached at attn-backend init (no forward context here).
                 from sglang.srt.hardware_backend.npu.attention.ascend_backend import (
                     async_check_dsa_gather_inputs,
-                )
-                from sglang.srt.model_executor.forward_context import (
-                    get_attn_backend,
+                    get_dsa_gather_pool_bound,
                 )
 
-                _attn_backend = get_attn_backend()
-                async_check_dsa_gather_inputs(
-                    "resolve_dsa_topk",
-                    draft_input.dsa_topk_indices,
-                    -1,
-                    _attn_backend.token_to_kv_pool.size,
-                )
+                _pool = get_dsa_gather_pool_bound()
+                if _pool is not None:
+                    async_check_dsa_gather_inputs(
+                        "resolve_dsa_topk",
+                        draft_input.dsa_topk_indices,
+                        -1,
+                        _pool,
+                    )
         else:
             draft_input.dsa_topk_indices = None
         if _DEBUG_ASSERT:
