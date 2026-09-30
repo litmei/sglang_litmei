@@ -49,7 +49,7 @@ import types
 import uuid
 import warnings
 from array import array
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
@@ -557,6 +557,54 @@ def get_available_gpu_memory(
 
 def is_pin_memory_available(device=None) -> bool:
     return current_platform.is_pin_memory_available(device)
+
+
+_pinned_h2d_rings: Dict[Any, "deque"] = {}
+
+
+def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
+    """Safe temp host->device copy with a fenced pinned-staging ring.
+
+    A bare ``torch.tensor(..., pin_memory=True).to(device, non_blocking=True)``
+    is unsafe on NPU: torch_npu's host caching allocator recycles the freed
+    pinned block immediately (the copy path records no event), so the next
+    same-size host allocation clobbers the DMA source while the H2D is still
+    queued. This helper keeps a small ring of persistent pinned staging
+    buffers keyed by (device, dtype, numel) and fences each reuse with a
+    recorded event, making back-to-back temp H2Ds race-free without any
+    stream-wide sync in the common case.
+
+    Returns a freshly allocated device tensor (device-side reuse is
+    stream-ordered and safe).
+    """
+    if isinstance(data, torch.Tensor):
+        host = data if data.is_cpu else data.cpu()
+        host = host.contiguous()
+        if host.dtype != dtype:
+            host = host.to(dtype)
+    else:
+        host = torch.tensor(data, dtype=dtype)
+    key = (str(device), dtype, host.numel())
+    ring = _pinned_h2d_rings.get(key)
+    if ring is None:
+        ring = _pinned_h2d_rings[key] = deque(maxlen=4)
+    if len(ring) == ring.maxlen:
+        staging, ev = ring[0]
+        # Fence: the previous H2D from this staging block must be complete
+        # before we overwrite its bytes.
+        ev.synchronize()
+        ring.rotate(-1)
+    else:
+        staging = torch.empty(
+            host.numel(), dtype=dtype, pin_memory=True
+        )
+        ev = torch.npu.Event() if is_npu() else torch.cuda.Event()
+        ring.append((staging, ev))
+    staging.copy_(host)
+    dev = torch.empty(host.numel(), dtype=dtype, device=device)
+    dev.copy_(staging, non_blocking=True)
+    ev.record()
+    return dev.view(host.shape)
 
 
 def async_d2h(tensor: torch.Tensor) -> torch.Tensor:

@@ -19,6 +19,7 @@ from sglang.srt.utils.common import (
     flatten_arrays_to_pinned_cpu,
     is_hip,
     is_pin_memory_available,
+    pinned_h2d,
 )
 from sglang.srt.utils.weight_versions import (
     WeightVersionEvent,
@@ -2621,9 +2622,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         self.encoder_lens_cpu = encoder_lens_cpu
         self.encoder_cached = encoder_cached
 
-        self.encoder_lens = torch.tensor(
-            self.encoder_lens_cpu, dtype=torch.int64, pin_memory=_pin
-        ).to(self.device, non_blocking=True)
+        self.encoder_lens = pinned_h2d(
+            self.encoder_lens_cpu, torch.int64, self.device
+        )
 
         # Strip encoder infos
         pt = 0
@@ -2659,9 +2660,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         # resolve_forward_inputs will H2D this on forward stream. self.input_ids
         # stays None.
         self.prefill_input_ids_cpu = flatten_arrays_to_pinned_cpu(input_ids, _pin)
-        self.seq_lens = torch.tensor(seq_lens, dtype=torch.int64, pin_memory=_pin).to(
-            self.device, non_blocking=True
-        )
+        self.seq_lens = pinned_h2d(seq_lens, torch.int64, self.device)
         self.seq_lens_cpu = torch.tensor(seq_lens, dtype=torch.int64)
 
         if not decoder_out_cache_loc:
@@ -2754,13 +2753,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         # Stay on pinned CPU; H2D is deferred to forward stream via
         # resolve_forward_inputs.
         pinned_input_ids = flatten_arrays_to_pinned_cpu(input_ids, _pin)
-        seq_lens_tensor = torch.tensor(seq_lens, dtype=torch.int64, pin_memory=_pin).to(
-            self.device, non_blocking=True
-        )
+        seq_lens_tensor = pinned_h2d(seq_lens, torch.int64, self.device)
         seq_lens_cpu = torch.tensor(seq_lens, dtype=torch.int64)
-        orig_seq_lens_tensor = torch.tensor(
-            orig_seq_lens, dtype=torch.int32, pin_memory=_pin
-        ).to(self.device, non_blocking=True)
+        orig_seq_lens_tensor = pinned_h2d(orig_seq_lens, torch.int32, self.device)
 
         # Set batch fields needed by alloc_for_extend
         self.prefix_lens = prefix_lens
@@ -3542,14 +3537,12 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             req.output_ids[-1] if len(req.output_ids) else req.origin_input_ids[-1]
             for req in self.reqs
         ]
-        # Non-blocking H2D so this per-step copy doesn't sync behind the forward.
-        # pin_memory (matching the prefill-path tensors) keeps the copy async;
-        # is_pin_memory_available falls back to pageable on unsupported devices.
-        latest_output_ids = torch.tensor(
-            last_tokens,
-            dtype=torch.int64,
-            pin_memory=is_pin_memory_available(self.device),
-        ).to(self.device, non_blocking=True)
+        # Fenced pinned staging: a bare temp pinned H2D here races with the
+        # next same-size host allocation while the DMA is queued (NPU host
+        # allocator recycles without an event fence).
+        latest_output_ids = pinned_h2d(
+            last_tokens, torch.int64, self.device
+        )
         self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
             latest_output_ids
         )
