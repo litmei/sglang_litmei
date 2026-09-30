@@ -469,13 +469,15 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # host every replay), and capturing one freezes the capture-time
         # plan — drafts go stale and accept length collapses to ~1.
         enable_metadata_glue = envs.SGLANG_ENABLE_METADATA_GLUE_GRAPH.get()
-        if enable_metadata_glue and envs.SGLANG_NPU_DSA_DEBUG_GATHER.get():
-            # The debug gather-input checks sync (.item()), which is illegal
-            # under the glue capture; keep the metadata prep eager so the
-            # checks run on every replay step.
+        if enable_metadata_glue and envs.SGLANG_NPU_DSA_DEBUG_GATHER.get() == 1:
+            # The sync gather-input checks (.item()) are illegal under the
+            # glue capture; keep the metadata prep eager so the checks run on
+            # every replay step. Async mode (2) keeps the glue graph so the
+            # timing races stay reproducible.
             logger.warning(
-                "SGLANG_NPU_DSA_DEBUG_GATHER disables the metadata glue graph "
-                "so the gather-input checks run on every replay step."
+                "SGLANG_NPU_DSA_DEBUG_GATHER=1 disables the metadata glue "
+                "graph so the sync gather-input checks run on every replay "
+                "step."
             )
             enable_metadata_glue = False
         if enable_metadata_glue and model_runner.spec_algorithm.is_dflash_family():

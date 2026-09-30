@@ -90,7 +90,7 @@ def _debug_check_dsa_gather_inputs(
     (a real bug: the KV gather reads garbage positions) vs. padded rows
     (rows beyond bs*draft_tokens; usually masked by kv_len=0).
     """
-    if not envs.SGLANG_NPU_DSA_DEBUG_GATHER.get():
+    if envs.SGLANG_NPU_DSA_DEBUG_GATHER.get() != 1:
         return
     if torch.cuda.is_current_stream_capturing():
         # .item() sync is illegal under graph capture; skip.
@@ -175,6 +175,106 @@ def _debug_check_dsa_gather_inputs(
     if bad:
         msg += " !! " + "; ".join(bad)
     logger.warning(msg)
+
+
+_I64_MAX = (1 << 63) - 1
+_I64_MIN = -(1 << 63)
+
+
+class DsaGatherViolationLog:
+    """Device-side bounds-violation recorder with NO per-check host sync.
+
+    Every check runs as pure device ops (compare + reduce + few scalar
+    updates), so it does not throttle CPU run-ahead and keeps timing races
+    reproducible. Per-tag aggregates (violating batch count, first check id,
+    element count, offending value min/max) live in tiny device scalars; the
+    host samples them once every `sample_every` checks with a single small
+    D2H. One sync per ~thousand checks caps run-ahead at ~10+ steps of
+    headroom, far above the 1-2 steps this race needs, while costing
+    negligible benchmark throughput.
+    """
+
+    def __init__(self, device):
+        self.device = device
+        self.tags = {}
+        self.sample_every = max(
+            1, envs.SGLANG_NPU_DSA_DEBUG_GATHER_SAMPLE_EVERY.get()
+        )
+        self.n_checks = 0
+
+    def check(self, tag: str, values: torch.Tensor, lo, hi) -> None:
+        v = values.reshape(-1).to(torch.int64)
+        bad = (v < lo) | (v > hi)
+        st = self.tags.get(tag)
+        if st is None:
+            st = self.tags[tag] = {
+                name: torch.full((), init, dtype=torch.int64, device=v.device)
+                for name, init in (
+                    ("batches", 0),
+                    ("n_bad", 0),
+                    ("first_at", 0),
+                    ("vmin", _I64_MAX),
+                    ("vmax", _I64_MIN),
+                )
+            }
+            st["check_id"] = torch.zeros((), dtype=torch.int64, device=v.device)
+        st["check_id"] += 1
+        has_bad = (bad.sum() > 0).to(torch.int64)
+        was_zero = st["batches"] == 0
+        st["batches"] += has_bad
+        st["n_bad"] += bad.to(torch.int64).sum()
+        st["first_at"] = torch.where(
+            was_zero & (has_bad > 0), st["check_id"], st["first_at"]
+        )
+        st["vmin"] = torch.minimum(
+            st["vmin"], torch.where(bad, v, torch.full_like(v, _I64_MAX)).min()
+        )
+        st["vmax"] = torch.maximum(
+            st["vmax"], torch.where(bad, v, torch.full_like(v, _I64_MIN)).max()
+        )
+        self.n_checks += 1
+        if self.n_checks % self.sample_every == 0:
+            self.report()
+
+    def report(self) -> None:
+        lines = []
+        for tag, st in self.tags.items():
+            batches = int(st["batches"].item())
+            if batches:
+                lines.append(
+                    f"{tag}: violating_batches={batches} "
+                    f"first_at_check={int(st['first_at'].item())} "
+                    f"n_bad_elements={int(st['n_bad'].item())} "
+                    f"vmin={int(st['vmin'].item())} vmax={int(st['vmax'].item())}"
+                )
+        if lines:
+            logger.warning(
+                "[dsa-gather-async] violations after %d checks: %s",
+                self.n_checks,
+                " | ".join(lines),
+            )
+        else:
+            logger.warning(
+                "[dsa-gather-async] no violations so far (%d checks)",
+                self.n_checks,
+            )
+
+
+_dsa_violation_log: Optional[DsaGatherViolationLog] = None
+
+
+def get_dsa_violation_log(device) -> DsaGatherViolationLog:
+    global _dsa_violation_log
+    if _dsa_violation_log is None:
+        _dsa_violation_log = DsaGatherViolationLog(device)
+    return _dsa_violation_log
+
+
+def async_check_dsa_gather_inputs(
+    tag: str, values: torch.Tensor, lo, hi
+) -> None:
+    """Mode-2 (SGLANG_NPU_DSA_DEBUG_GATHER=2) bounds check without sync."""
+    get_dsa_violation_log(values.device).check(tag, values, lo, hi)
 
 
 def _reshape_kv_for_fia_nz(
@@ -1375,21 +1475,31 @@ class AscendAttnBackend(AttentionBackend):
         else:
             if topk_indices is not None:
                 topk_indices = self._pad_topk_indices(topk_indices, q_nope.shape[0])
-            _debug_check_dsa_gather_inputs(
-                self,
-                "sparse_attn",
-                forward_batch.forward_mode.name,
-                forward_batch.batch_size,
-                q_nope.shape[0],
-                self.forward_metadata.block_tables,
-                actual_seq_lengths_kv,
-                topk_indices,
-                draft_tokens=(
-                    self.speculative_num_draft_tokens
-                    if forward_batch.forward_mode.is_target_verify()
-                    else 0
-                ),
-            )
+            if envs.SGLANG_NPU_DSA_DEBUG_GATHER.get() == 2 and not (
+                torch.cuda.is_current_stream_capturing()
+            ):
+                # Hard bounds only (catches uninitialized/garbage rows); the
+                # known-benign eager-verify padding rows will also trip this
+                # tag, so treat "sparse_attn" hits as noisy.
+                async_check_dsa_gather_inputs(
+                    "sparse_attn", topk_indices, -1, self.token_to_kv_pool.size
+                )
+            if envs.SGLANG_NPU_DSA_DEBUG_GATHER.get() == 1:
+                _debug_check_dsa_gather_inputs(
+                    self,
+                    "sparse_attn",
+                    forward_batch.forward_mode.name,
+                    forward_batch.batch_size,
+                    q_nope.shape[0],
+                    self.forward_metadata.block_tables,
+                    actual_seq_lengths_kv,
+                    topk_indices,
+                    draft_tokens=(
+                        self.speculative_num_draft_tokens
+                        if forward_batch.forward_mode.is_target_verify()
+                        else 0
+                    ),
+                )
             topk_indices = _expand_dsa_sparse_indices(topk_indices)
             if self.kv_cache_dtype == torch.float8_e4m3fn:
                 assert q_nope.dtype == q_pe.dtype == torch.bfloat16
