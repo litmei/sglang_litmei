@@ -79,13 +79,16 @@ def _debug_check_dsa_gather_inputs(
     block_tables: torch.Tensor,
     seq_lens: torch.Tensor,
     topk_indices: Optional[torch.Tensor],
+    draft_tokens: int = 0,
 ) -> None:
     """Env-gated validation of DSA gather inputs (SGLANG_NPU_DSA_DEBUG_GATHER).
 
     Syncs the device (D2H .max()/.min()); debug only. Flags any buffer whose
     values would make the PA_BSND KV gather (GatherV3) index out of range,
     and dumps the batch shape so a crash can be attributed to padding vs.
-    steady-state decode.
+    steady-state decode. For topk_indices, bad rows are split into real rows
+    (a real bug: the KV gather reads garbage positions) vs. padded rows
+    (rows beyond bs*draft_tokens; usually masked by kv_len=0).
     """
     if not envs.SGLANG_NPU_DSA_DEBUG_GATHER.get():
         return
@@ -110,11 +113,59 @@ def _debug_check_dsa_gather_inputs(
         f"(pool_pages={pool_pages}) seq_lens=[{sl_min},{sl_max}]"
     )
     if topk_indices is not None and topk_indices.numel() > 0:
-        tk_min = int(topk_indices.min().item())
-        tk_max = int(topk_indices.max().item())
-        msg += f" topk=[{tk_min},{tk_max}] rows={tuple(topk_indices.shape)}"
-        if tk_max >= sl_max or tk_min < -1:
-            bad.append(f"topk range [{tk_min},{tk_max}] vs kv bound {sl_max}")
+        if topk_indices.dim() == 2:
+            n_rows = topk_indices.shape[0]
+            if isinstance(sl, torch.Tensor):
+                kv_req = sl.to(torch.int64)
+            else:
+                kv_req = torch.tensor(
+                    [int(x) for x in list(sl)], dtype=torch.int64
+                )
+            row_bound = None
+            real_rows = min(n_rows, bs)
+            if draft_tokens > 0 and bs * draft_tokens < n_rows:
+                # Verify layout: rows [0, bs*draft) are real draft tokens of
+                # each request (row -> req = row // draft_tokens); rows
+                # [bs*draft, n_rows) are batch padding.
+                row_bound = torch.cat(
+                    [
+                        kv_req.repeat_interleave(draft_tokens),
+                        torch.full((n_rows - bs * draft_tokens,), -1, dtype=torch.int64),
+                    ]
+                )
+                real_rows = bs * draft_tokens
+            elif kv_req.numel() >= n_rows:
+                row_bound = kv_req[:n_rows]
+                real_rows = n_rows
+            tk_min_row = topk_indices.min(dim=1).values.to(torch.int64).cpu()
+            tk_max_row = topk_indices.max(dim=1).values.to(torch.int64).cpu()
+            if row_bound is not None:
+                bad_mask = (tk_min_row < -1) | (tk_max_row >= row_bound)
+            else:
+                bad_mask = tk_min_row < -1
+            n_bad = int(bad_mask.sum().item())
+            n_bad_real = int(bad_mask[:real_rows].sum().item())
+            sample = bad_mask.nonzero(as_tuple=False).flatten()[:8].tolist()
+            msg += (
+                f" topk rows={n_rows} x K={topk_indices.shape[1]} "
+                f"bad_rows={n_bad} (real={n_bad_real}/{real_rows} "
+                f"pad={n_bad - n_bad_real})"
+            )
+            if sample:
+                msg += " first_bad=" + str(
+                    [
+                        (i, int(tk_min_row[i]), int(tk_max_row[i]))
+                        for i in sample
+                    ]
+                )
+            if n_bad_real:
+                bad.append(f"{n_bad_real} REAL rows contain out-of-range topk")
+        else:
+            tk_min = int(topk_indices.min().item())
+            tk_max = int(topk_indices.max().item())
+            msg += f" topk=[{tk_min},{tk_max}] rows={tuple(topk_indices.shape)}"
+            if tk_max >= sl_max or tk_min < -1:
+                bad.append(f"topk range [{tk_min},{tk_max}] vs kv bound {sl_max}")
     zero_len_rows = int((sl == 0).sum().item())
     if zero_len_rows:
         msg += f" padded_rows(seq_lens==0)={zero_len_rows}"
@@ -1330,6 +1381,11 @@ class AscendAttnBackend(AttentionBackend):
                 self.forward_metadata.block_tables,
                 actual_seq_lengths_kv,
                 topk_indices,
+                draft_tokens=(
+                    self.speculative_num_draft_tokens
+                    if forward_batch.forward_mode.is_target_verify()
+                    else 0
+                ),
             )
             topk_indices = _expand_dsa_sparse_indices(topk_indices)
             if self.kv_cache_dtype == torch.float8_e4m3fn:
