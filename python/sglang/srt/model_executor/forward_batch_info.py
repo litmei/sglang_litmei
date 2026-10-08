@@ -598,6 +598,11 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # === Borrowed from ScheduleBatch: host metadata (CPU lists / mirrors) ===
     # Optional seq_lens on cpu (CPU mirror of seq_lens)
     seq_lens_cpu: Optional[torch.Tensor] = None
+    # Host-side scalar upper bound of max(seq_lens) in tokens. Only consumed
+    # when seq_lens_cpu is unavailable (needs_cpu_seq_lens=False spec_v2
+    # rounds); attention backends use it to bound block-table width without
+    # any device sync. See ForwardBatch.init_new for seeding/advancing.
+    seq_lens_cpu_bound: Optional[int] = None
     # Fresh only for non-speculative extend; speculative modes use device slots.
     req_pool_indices_cpu: Optional[torch.Tensor] = None
 
@@ -985,6 +990,19 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         if batch.seq_lens_sum is None and seq_lens_cpu is not None:
             batch.seq_lens_sum = int(seq_lens_cpu.sum())
 
+        # Host upper bound of max(seq_lens) for block-table width (see the
+        # seq_lens_cpu_bound field). Whenever the exact CPU mirror exists it
+        # is authoritative and re-seeds the backfill on the ScheduleBatch
+        # (same tolerated-backfill class as seq_lens_sum above); when the
+        # mirror is dropped (needs_cpu_seq_lens=False spec_v2 rounds) the
+        # stale-but-safe scalar survives and is advanced per verify round in
+        # FutureMap.resolve_seq_lens_cpu -- never via a device sync.
+        if seq_lens_cpu is not None and seq_lens_cpu.numel():
+            seq_lens_cpu_bound = int(seq_lens_cpu.max())
+            batch.seq_lens_cpu_bound = seq_lens_cpu_bound
+        else:
+            seq_lens_cpu_bound = getattr(batch, "seq_lens_cpu_bound", None)
+
         ret = cls(
             # Required core inputs
             forward_mode=batch.forward_mode,
@@ -996,6 +1014,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             seq_lens_sum=batch.seq_lens_sum,
             # Inputs aliased by reference from ScheduleBatch
             seq_lens_cpu=seq_lens_cpu,
+            seq_lens_cpu_bound=seq_lens_cpu_bound,
             req_pool_indices_cpu=(
                 getattr(batch, "req_pool_indices_cpu", None)
                 if batch.forward_mode.is_extend_without_speculative()
@@ -2139,6 +2158,8 @@ def build_inner_fb_view(
         seq_lens=forward_batch.seq_lens,
         seq_lens_sum=forward_batch.seq_lens_sum,
         seq_lens_cpu=forward_batch.seq_lens_cpu,
+        # A caller may hand in another view that does not carry this field.
+        seq_lens_cpu_bound=getattr(forward_batch, "seq_lens_cpu_bound", None),
         encoder_lens=encoder_lens,
         out_cache_loc=getattr(forward_batch, "out_cache_loc", None),
         # A caller may hand in another view that does not carry this field.

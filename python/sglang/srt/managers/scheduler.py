@@ -4575,6 +4575,20 @@ class Scheduler(
                         if batch.seq_lens_cpu is not None:
                             batch.seq_lens_cpu = new_seq_lens.to("cpu")
                             batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
+                        elif batch.seq_lens_cpu_bound is not None:
+                            # needs_cpu_seq_lens=False: keep the host-side
+                            # block-table-width bound fresh without a D2H; one
+                            # forward commits at most one verify round's draft
+                            # tokens (see FutureMap.resolve_seq_lens_cpu).
+                            advance = getattr(
+                                self.spec_algorithm,
+                                "speculative_num_draft_tokens",
+                                None,
+                            )
+                            if advance is None:
+                                batch.seq_lens_cpu_bound = None
+                            else:
+                                batch.seq_lens_cpu_bound += int(advance)
                     batch.input_ids = None  # rebuilt next iter from draft_token
                     self.update_cache_from_scheduler(batch, batch_result)
                     # Only the last PP rank owns real results requiring D2H; other ranks

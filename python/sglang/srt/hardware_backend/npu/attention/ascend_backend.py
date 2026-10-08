@@ -534,6 +534,7 @@ class AscendAttnBackend(AttentionBackend):
             spec_info=forward_batch.spec_info,
             out_cache_loc=forward_batch.out_cache_loc,
             origin_out_cache_loc=getattr(forward_batch, "origin_out_cache_loc", None),
+            seq_lens_cpu_bound=getattr(forward_batch, "seq_lens_cpu_bound", None),
         )
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
@@ -587,12 +588,37 @@ class AscendAttnBackend(AttentionBackend):
                     .contiguous()
                 )
         else:
-            self.forward_metadata.block_tables = (
-                self.req_to_token_pool.req_to_token[
-                    forward_batch.req_pool_indices, :: self.page_size
-                ]
-                // self.page_size
-            )
+            bound = forward_batch.seq_lens_cpu_bound
+            if bound is not None:
+                # Host-side upper bound of the committed max seq len: narrow
+                # the block table to the pages any request can reach this
+                # step instead of the full req_to_token width. A full-span
+                # strided gather (step=page_size) lowers to the slow
+                # aclnnIndex_StridedSlice kernel; padding mirrors the
+                # needs_cpu_seq_lens=True branch above.
+                if forward_batch.forward_mode.is_target_verify():
+                    bound += self.speculative_num_draft_tokens
+                elif (
+                    forward_batch.forward_mode.is_decode_or_idle()
+                    and forward_batch.spec_info is not None
+                ):
+                    bound += self.speculative_step_id + 1
+                else:
+                    bound += 1
+                bound = min(bound, self.req_to_token.shape[1])
+                self.forward_metadata.block_tables = (
+                    self.req_to_token_pool.req_to_token[
+                        forward_batch.req_pool_indices, :bound : self.page_size
+                    ]
+                    // self.page_size
+                )
+            else:
+                self.forward_metadata.block_tables = (
+                    self.req_to_token_pool.req_to_token[
+                        forward_batch.req_pool_indices, :: self.page_size
+                    ]
+                    // self.page_size
+                )
         if forward_batch.extend_seq_lens is not None:
             self.forward_metadata.extend_seq_lens = forward_batch.extend_seq_lens
             self.forward_metadata.extend_seq_lens_cpu_int = (
@@ -925,6 +951,7 @@ class AscendAttnBackend(AttentionBackend):
         spec_info: Optional[SpecInput],
         out_cache_loc: Optional[torch.Tensor] = None,
         origin_out_cache_loc: Optional[torch.Tensor] = None,
+        seq_lens_cpu_bound: Optional[int] = None,
     ):
         """Shared capture+replay body for the cuda-graph init path.
 
@@ -994,18 +1021,42 @@ class AscendAttnBackend(AttentionBackend):
 
             metadata.block_tables[:bs, max_seq_pages:].fill_(0)
         else:
-            total_pages = min(
-                metadata.block_tables.shape[1],
-                (self.req_to_token.shape[1] + self.page_size - 1) // self.page_size,
-            )
-            metadata.block_tables[:bs, :total_pages].copy_(
-                self.req_to_token[
-                    req_pool_indices[:bs],
-                    0 : total_pages * self.page_size : self.page_size,
-                ]
-                // self.page_size
-            )
-            metadata.block_tables[:bs, total_pages:].fill_(0)
+            bound = seq_lens_cpu_bound
+            if bound is not None:
+                # Host-side upper bound of the committed max seq len: narrow
+                # the block-table refill to the pages any request can reach
+                # this step instead of the full req_to_token width. A
+                # full-span strided gather (step=page_size) lowers to the
+                # slow aclnnIndex_StridedSlice kernel; padding mirrors the
+                # needs_cpu_seq_lens=True branch above.
+                if forward_mode.is_target_verify():
+                    bound += self.speculative_num_draft_tokens
+                elif forward_mode.is_decode_or_idle() and spec_info is not None:
+                    bound += self.speculative_step_id + 1
+                else:
+                    bound += 1
+                max_len = min(bound, self.req_to_token.shape[1])
+                max_seq_pages = (max_len + self.page_size - 1) // self.page_size
+                metadata.block_tables[:bs, :max_seq_pages].copy_(
+                    self.req_to_token[
+                        req_pool_indices[:bs], 0 : max_len : self.page_size
+                    ]
+                    // self.page_size
+                )
+                metadata.block_tables[:bs, max_seq_pages:].fill_(0)
+            else:
+                total_pages = min(
+                    metadata.block_tables.shape[1],
+                    (self.req_to_token.shape[1] + self.page_size - 1) // self.page_size,
+                )
+                metadata.block_tables[:bs, :total_pages].copy_(
+                    self.req_to_token[
+                        req_pool_indices[:bs],
+                        0 : total_pages * self.page_size : self.page_size,
+                    ]
+                    // self.page_size
+                )
+                metadata.block_tables[:bs, total_pages:].fill_(0)
 
         if get_parallel().dcp_enabled and not self.is_draft_worker:
             if "dcp_origin_out_cache_loc" in self.graph_metadata:

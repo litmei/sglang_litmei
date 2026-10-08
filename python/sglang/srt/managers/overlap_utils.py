@@ -536,7 +536,30 @@ class FutureMap:
 
         if not self.needs_cpu_seq_lens:
             # GPU gather above is kept (SB.seq_lens must advance each verify);
-            # skip the .cpu() D2H. Downstream takes the GPU-only path.
+            # skip the .cpu() D2H. Downstream takes the GPU-only path. The
+            # host-side block-table-width bound still advances: one verify
+            # accepts at most draft_token_num tokens, so advancing by the
+            # spec config's max draft width keeps the bound safe without any
+            # device sync (ForwardBatch.init_new re-seeds it from the exact
+            # mirror whenever seq_lens_cpu exists again).
+            bound = getattr(batch, "seq_lens_cpu_bound", None)
+            if bound is not None:
+                advance = getattr(
+                    self.spec_algo, "speculative_num_draft_tokens", None
+                )
+                per_round = getattr(draft_input, "draft_token_num", None)
+                if per_round is not None:
+                    advance = (
+                        per_round
+                        if advance is None
+                        else max(int(per_round), int(advance))
+                    )
+                if advance is None:
+                    # Unknown per-round growth: invalidate so downstream falls
+                    # back to the full-width block table (correct, just slow).
+                    batch.seq_lens_cpu_bound = None
+                else:
+                    batch.seq_lens_cpu_bound = bound + int(advance)
             batch.seq_lens_cpu = None
             batch.seq_lens_sum = None
             if _DEBUG_ASSERT:
