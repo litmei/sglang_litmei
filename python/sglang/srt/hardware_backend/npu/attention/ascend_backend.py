@@ -62,6 +62,25 @@ import numpy as np
 logger = logging.getLogger(__name__)
 FULL_ATTENTION_WINDOW = 2147483647
 
+# Debug aid for the seq_lens_cpu_bound block-table-width narrowing:
+# SGLANG_DEBUG_SEQ_LENS_BOUND=1 logs one line every 1000 uses, showing whether
+# the host bound was available (narrowed) or the full-width fallback ran.
+_DEBUG_SEQ_LENS_BOUND = get_bool_env_var("SGLANG_DEBUG_SEQ_LENS_BOUND", "False")
+_debug_bound_log_counter = 0
+
+
+def _debug_log_seq_lens_bound(site: str, bound, req_to_token_width, page_size, bs):
+    global _debug_bound_log_counter
+    if not _DEBUG_SEQ_LENS_BOUND:
+        return
+    if _debug_bound_log_counter % 1000 == 0:
+        logger.info(
+            f"[seq_lens_cpu_bound] {site}: bound={bound} full_width={req_to_token_width} "
+            f"page_size={page_size} bs={bs} "
+            f"({'narrowed' if bound is not None else 'FALLBACK-full-width'})"
+        )
+    _debug_bound_log_counter += 1
+
 
 def _is_dflash_verify(spec_info: Optional[SpecInput]) -> bool:
     return (
@@ -589,6 +608,13 @@ class AscendAttnBackend(AttentionBackend):
                 )
         else:
             bound = forward_batch.seq_lens_cpu_bound
+            _debug_log_seq_lens_bound(
+                "eager",
+                bound,
+                self.req_to_token.shape[1],
+                self.page_size,
+                forward_batch.batch_size,
+            )
             if bound is not None:
                 # Host-side upper bound of the committed max seq len: narrow
                 # the block table to the pages any request can reach this
@@ -1022,6 +1048,13 @@ class AscendAttnBackend(AttentionBackend):
             metadata.block_tables[:bs, max_seq_pages:].fill_(0)
         else:
             bound = seq_lens_cpu_bound
+            _debug_log_seq_lens_bound(
+                "graph-replay",
+                bound,
+                self.req_to_token.shape[1],
+                self.page_size,
+                bs,
+            )
             if bound is not None:
                 # Host-side upper bound of the committed max seq len: narrow
                 # the block-table refill to the pages any request can reach
