@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING
 import torch
 
 from sglang.srt.configs.model_config import is_deepseek_dsa, is_deepseek_v4
+from sglang.srt.environ import envs
+from sglang.srt.runtime_context import get_spec
 from sglang.srt.speculative.eagle_draft_extend_cuda_graph_runner import (
     EAGLEDraftExtendCudaGraphRunner,
 )
@@ -37,7 +39,15 @@ class EAGLEDraftExtendNpuGraphRunner(EAGLEDraftExtendCudaGraphRunner):
     def _replay_graph(self, shape_key, forward_batch):
         hf_config = self.model_runner.model_config.hf_config
         if not (is_deepseek_dsa(hf_config) or is_deepseek_v4(hf_config)):
-            seq_lens = forward_batch.seq_lens_cpu.tolist() + [0] * (
+            # seq_lens_cpu_last mirror lag: draft extend follows the verify
+            # publish, whose growth is accept-count dependent and at most the
+            # draft width + 1; over-estimation is masked internally.
+            _slack = (
+                get_spec().speculative_num_draft_tokens + 1
+                if envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
+                else 0
+            )
+            seq_lens = (forward_batch.seq_lens_cpu + _slack).tolist() + [0] * (
                 self.bs - self.raw_bs
             )
             return self.backend.replay_with_input_update(

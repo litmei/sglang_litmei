@@ -1018,6 +1018,11 @@ class Envs:
     SGLANG_NPU_W4A4_NEW_PACKING = EnvBool(False)
     # Use the graph-safe Triton-Ascend kernel for masked speculative KV commits.
     SGLANG_NPU_USE_TRITON_PREFIX_KV_CACHE_STORE = EnvBool(False)
+    # Serve spec-decode rounds with the previous round's seq_lens_cpu snapshot
+    # (seq_lens_cpu_last) instead of blocking the host on a fresh D2H before
+    # every run_batch. Consumers must tolerate a one-publish-round lag and add
+    # an analytic slack where the value feeds a width bound; see FutureMap.
+    SGLANG_NPU_USE_SEQ_LENS_CPU_LAST = EnvBool(False)
     # Quantize x to int8 in the dispatch operator (vendor alias consumed by the
     # Ascend DeepEP library; the MTP draft-build scopes override it to False).
     DEEP_NORMAL_MODE_USE_INT8_QUANT = EnvBool(False)

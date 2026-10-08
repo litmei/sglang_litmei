@@ -12,6 +12,7 @@ from sgl_kernel_npu.attention.sinks_attention import (
 
 from sglang.srt.configs.model_config import AttentionArch
 from sglang.srt.dllm.config import DllmConfig
+from sglang.srt.environ import envs
 from sglang.srt.hardware_backend.npu.attention.ascend_torch_native_backend import (
     AscendTorchNativeAttnBackend,
 )
@@ -47,6 +48,7 @@ from sglang.srt.speculative.spec_info import SpecInput, SpecInputType
 from sglang.srt.utils import (
     get_bool_env_var,
     get_current_device_stream_fast,
+    is_npu,
     next_power_of_2,
 )
 
@@ -331,6 +333,13 @@ class AscendAttnBackend(AttentionBackend):
         self.speculative_step_offset_npu = torch.tensor(
             speculative_step_id + 1, device="npu"
         )
+        # SGLANG_NPU_USE_SEQ_LENS_CPU_LAST: forward_batch.seq_lens_cpu carries
+        # the previous publish round's snapshot (FutureMap seq_lens_cpu_last),
+        # so every consumer here must add a one-round growth slack on top of
+        # the existing per-step compensation.
+        self.use_seq_lens_cpu_last = (
+            is_npu() and envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
+        )
         self.page_size = model_runner.page_size
         self.model_dtype = model_runner.model_config.dtype
         self.kv_cache_dtype = model_runner.kv_cache_dtype
@@ -501,6 +510,27 @@ class AscendAttnBackend(AttentionBackend):
     ):
         pass
 
+    def _seq_lens_cpu_last_slack(self, forward_mode, spec_info) -> int:
+        """Extra per-request growth slack for the seq_lens_cpu_last mirror.
+
+        With SGLANG_NPU_USE_SEQ_LENS_CPU_LAST, forward_batch.seq_lens_cpu lags
+        the exact mirror by exactly one publish round, so consumers must add
+        the previous publish's growth: a draft step publishes +1 per request
+        (uniform), a target verify publishes up to draft_token_num (+1 margin)
+        (accept count is data-dependent). The current round type determines
+        which forward published last: verify always follows a draft step; the
+        first draft step of a chain follows the verify.
+        """
+        if not self.use_seq_lens_cpu_last:
+            return 0
+        if forward_mode.is_target_verify():
+            return 1
+        if forward_mode.is_decode_or_idle() and spec_info is not None:
+            if self.speculative_step_id == 0:
+                return self.speculative_num_draft_tokens + 1
+            return 1
+        return 0
+
     def init_forward_metadata_out_graph(
         self,
         forward_batch: ForwardBatch,
@@ -549,7 +579,11 @@ class AscendAttnBackend(AttentionBackend):
                 # asking FIA for N+1.
                 spec_tokens_per_req = int(forward_batch.spec_info.draft_token_num)
                 seq_lens_max = (
-                    forward_batch.seq_lens_cpu.max().item() + spec_tokens_per_req
+                    forward_batch.seq_lens_cpu.max().item()
+                    + spec_tokens_per_req
+                    + self._seq_lens_cpu_last_slack(
+                        forward_batch.forward_mode, forward_batch.spec_info
+                    )
                 )
         elif (
             forward_batch.forward_mode.is_decode_or_idle()
@@ -607,12 +641,20 @@ class AscendAttnBackend(AttentionBackend):
             if spec_algorithm is None or not spec_algorithm.is_dflash_family():
                 self.forward_metadata.seq_lens_cpu_int += int(
                     forward_batch.spec_info.draft_token_num
+                ) + self._seq_lens_cpu_last_slack(
+                    forward_batch.forward_mode, forward_batch.spec_info
                 )
         elif (
             forward_batch.forward_mode.is_decode_or_idle()
             and forward_batch.spec_info is not None
         ):
-            self.forward_metadata.seq_lens_cpu_int += self.speculative_step_id + 1
+            self.forward_metadata.seq_lens_cpu_int += (
+                self.speculative_step_id
+                + 1
+                + self._seq_lens_cpu_last_slack(
+                    forward_batch.forward_mode, forward_batch.spec_info
+                )
+            )
 
         # Set actual_seq_lengths_q from the pre-pad batch size so that the DSA
         # indexer reads a value consistent with actual_seq_lengths_kv /
@@ -926,11 +968,16 @@ class AscendAttnBackend(AttentionBackend):
         # includes it; speculative decode adds tokens through the current draft step.
         attention_kv_lens_cpu = seq_lens_cpu[:bs].int()
         if forward_mode.is_target_verify() and not _is_dflash_verify(spec_info):
-            attention_kv_lens_cpu = (
-                attention_kv_lens_cpu + self.speculative_num_draft_tokens
+            attention_kv_lens_cpu = attention_kv_lens_cpu + (
+                self.speculative_num_draft_tokens
+                + self._seq_lens_cpu_last_slack(forward_mode, spec_info)
             )
         elif forward_mode.is_decode_or_idle() and spec_info is not None:
-            attention_kv_lens_cpu = attention_kv_lens_cpu + self.speculative_step_id + 1
+            attention_kv_lens_cpu = attention_kv_lens_cpu + (
+                self.speculative_step_id
+                + 1
+                + self._seq_lens_cpu_last_slack(forward_mode, spec_info)
+            )
         max_len = attention_kv_lens_cpu.max().item()
         max_seq_pages = (max_len + self.page_size - 1) // self.page_size
 
