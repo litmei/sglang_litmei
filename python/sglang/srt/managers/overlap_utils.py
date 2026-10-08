@@ -336,6 +336,14 @@ class FutureMap:
                 torch.zeros(self.req_pool_size, dtype=torch.int64) for _ in range(2)
             ]
             self.seq_lens_cpu_last_kicked = [False, False]
+            # Provenance per buffer: only decode-family rounds (decode / idle /
+            # target_verify) may feed the mirror chain. Their per-round growth
+            # is analytic (+1 per draft step, draft-width-bounded for verify)
+            # and downstream consumers compensate for the one-round lag. An
+            # extend/prefill round's publish has data-dependent growth, so its
+            # snapshot is marked invalid and the next rounds take the exact
+            # fallback until a decode snapshot flows through.
+            self.seq_lens_cpu_last_dec = [True, True]
             self._seq_lens_cpu_last_cur = 0
             self._seq_lens_cpu_last_ids: Optional[torch.Tensor] = None
         else:
@@ -343,6 +351,7 @@ class FutureMap:
             self.seq_lens_cpu_last_events = None
             self.seq_lens_cpu_last_gens = None
             self.seq_lens_cpu_last_kicked = None
+            self.seq_lens_cpu_last_dec = None
             self._seq_lens_cpu_last_cur = 0
             self._seq_lens_cpu_last_ids = None
         self.need_topk = False
@@ -651,6 +660,7 @@ class FutureMap:
         last_ids = self._seq_lens_cpu_last_ids
         ready = (
             self.seq_lens_cpu_last_kicked[prev]
+            and self.seq_lens_cpu_last_dec[prev]
             and self.seq_lens_cpu_last_events[prev].query()
             and last_ids is not None
             and last_ids.shape == ids.shape
@@ -686,6 +696,9 @@ class FutureMap:
             # bumps req_generation and fails the consume check above.
             self.seq_lens_cpu_last_gens[cur].copy_(self.req_generation)
             self.seq_lens_cpu_last_kicked[cur] = True
+            self.seq_lens_cpu_last_dec[cur] = batch.forward_mode.is_decode_or_idle() or (
+                batch.forward_mode.is_target_verify()
+            )
         self._seq_lens_cpu_last_cur = prev
         self._seq_lens_cpu_last_ids = ids.clone()
 

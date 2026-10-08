@@ -655,6 +655,14 @@ class AscendAttnBackend(AttentionBackend):
                     forward_batch.forward_mode, forward_batch.spec_info
                 )
             )
+        elif (
+            self.use_seq_lens_cpu_last
+            and forward_batch.forward_mode.is_decode_or_idle()
+        ):
+            # Plain decode (no spec): the mirror lags exactly one +1 decode
+            # publish; compensate so actual_seq_lengths_kv / kv_lens_cpu keep
+            # the exact baseline value.
+            self.forward_metadata.seq_lens_cpu_int += 1
 
         # Set actual_seq_lengths_q from the pre-pad batch size so that the DSA
         # indexer reads a value consistent with actual_seq_lengths_kv /
@@ -978,6 +986,9 @@ class AscendAttnBackend(AttentionBackend):
                 + 1
                 + self._seq_lens_cpu_last_slack(forward_mode, spec_info)
             )
+        elif self.use_seq_lens_cpu_last and forward_mode.is_decode_or_idle():
+            # Plain decode (no spec): mirror lags one +1 decode publish.
+            attention_kv_lens_cpu = attention_kv_lens_cpu + 1
         max_len = attention_kv_lens_cpu.max().item()
         max_seq_pages = (max_len + self.page_size - 1) // self.page_size
 
