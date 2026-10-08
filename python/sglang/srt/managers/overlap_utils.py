@@ -289,18 +289,20 @@ class FutureMap:
                 (self.req_pool_size,), dtype=torch.int64, device=self.device
             )
         # Pinned host copy of new_seq_lens_buf + private stream for fwd-prepare
-        # D2H pulls (gated only on publish, off the schedule stream). CUDA-only:
-        # recovers occupancy lost to the WAR barrier (also CUDA-only); other
-        # platforms have no barrier and use the plain .cpu() bootstrap path.
-        # NPU joins when SGLANG_NPU_USE_SEQ_LENS_CPU_LAST is on: it needs the
-        # private stream to refresh seq_lens_cpu_last asynchronously (below).
+        # D2H pulls (gated only on publish, off the schedule stream). On CUDA
+        # this recovers occupancy lost to the WAR barrier (also CUDA-only);
+        # other platforms used to fall back to the plain .cpu() bootstrap path.
+        # NPU joins the private-D2H-stream path unconditionally (A/B experiment
+        # vs the seq_lens_cpu_last mirror: same scoped-blocking design as CUDA,
+        # still one publish_ready.wait() + one stream.synchronize() per round).
+        # The mirror (SGLANG_NPU_USE_SEQ_LENS_CPU_LAST) stays opt-in on top.
         self.use_seq_lens_cpu_last = (
             (not _is_cuda)
             and _is_npu
             and needs_cpu_seq_lens
             and envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
         )
-        if _is_cuda or self.use_seq_lens_cpu_last:
+        if _is_cuda or _is_npu:
             self.new_seq_lens_cpu_pinned = torch.empty(
                 (self.req_pool_size,), dtype=torch.int64, pin_memory=True
             )
