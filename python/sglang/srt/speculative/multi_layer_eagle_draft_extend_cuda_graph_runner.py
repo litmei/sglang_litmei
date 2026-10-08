@@ -493,6 +493,7 @@ class MultiLayerEagleDraftExtendCudaGraphRunner(DecodeCudaGraphRunner):
             seq_lens=buffers.seq_lens,
             seq_lens_sum=seq_lens_sum,
             seq_lens_cpu=seq_lens_cpu,
+            seq_lens_cpu_bound=getattr(self, "seq_lens_cpu_bound", None),
             encoder_lens=None,
             # per-step write target; out_cache_loc is frozen at prepare() time.
             out_cache_loc=buffers.out_cache_loc[:num_tokens],
@@ -842,6 +843,8 @@ class MultiLayerEagleMultiStepDraftExtendCudaGraphRunner:
             self.seq_lens_cpu = buffers.seq_lens_cpu
         else:
             self.seq_lens_cpu = None
+        # Same lifetime rule for the block-table-width host bound.
+        self.seq_lens_cpu_bound = getattr(forward_batch, "seq_lens_cpu_bound", None)
 
         # Reusable spec_info for per-step attention metadata.
         padded_num_tokens = bs * self.captured_req_width

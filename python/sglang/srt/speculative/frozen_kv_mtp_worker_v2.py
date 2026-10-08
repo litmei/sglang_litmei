@@ -362,6 +362,7 @@ class FrozenKVMTPDraftWorker(EagleDraftWorkerBase, TpModelWorker):
                 if forward_batch.seq_lens_cpu is not None
                 else None
             ),
+            seq_lens_cpu_bound=getattr(forward_batch, "seq_lens_cpu_bound", None),
             encoder_lens=None,
             out_cache_loc=getattr(forward_batch, "out_cache_loc", None),
             spec_info=None,
