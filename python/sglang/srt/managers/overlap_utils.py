@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import msgspec
@@ -13,6 +14,20 @@ from sglang.srt.runtime_context import (
     get_spec,
 )
 from sglang.srt.utils import is_cuda, is_hip, is_npu
+
+logger = logging.getLogger(__name__)
+
+# Debug aid for the async max-seq-len scalar mirror (SGLANG_DEBUG_SEQ_LENS_BOUND).
+_max_scalar_dbg_cnt = 0
+
+
+def _max_scalar_dbg(msg: str, always: bool = False) -> None:
+    if not envs.SGLANG_DEBUG_SEQ_LENS_BOUND.get():
+        return
+    global _max_scalar_dbg_cnt
+    _max_scalar_dbg_cnt += 1
+    if always or _max_scalar_dbg_cnt % 8 == 0:
+        logger.warning("[seq-bound-dbg] %s", msg)
 
 if TYPE_CHECKING:
     from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
@@ -297,6 +312,11 @@ class FutureMap:
         # device reduction per publish + one 8-byte D2H per round, consumed
         # via Event.query() — the host never blocks).
         self.use_seq_len_max_scalar = _is_npu and not needs_cpu_seq_lens
+        _max_scalar_dbg(
+            f"FutureMap init: use_seq_len_max_scalar={self.use_seq_len_max_scalar}, "
+            f"needs_cpu_seq_lens={needs_cpu_seq_lens}",
+            always=True,
+        )
         if _is_cuda:
             self.new_seq_lens_cpu_pinned = torch.empty(
                 (self.req_pool_size,), dtype=torch.int64, pin_memory=True
@@ -581,23 +601,36 @@ class FutureMap:
         cur = self._max_seq_len_cur
         prev = cur ^ 1
         ids = batch.req_pool_indices_cpu
-        ready = (
-            self.max_seq_len_kicked[prev]
-            and self.max_seq_len_events[prev].query()
-            and self.max_seq_len_gen[prev] + 1 == self._max_seq_len_pub_gen
-            and ids is not None
-            and self.max_seq_len_ids[prev] is not None
-            and torch.equal(self.max_seq_len_ids[prev], ids)
-            and bool(
-                torch.equal(
-                    self.max_seq_len_gens[prev][ids], self.req_generation[ids]
-                )
+        if not self.max_seq_len_kicked[prev]:
+            reason = "not kicked yet"
+        elif not self.max_seq_len_events[prev].query():
+            reason = "D2H copy incomplete"
+        elif self._max_seq_len_pub_gen != self.max_seq_len_gen[prev] + 1:
+            reason = (
+                f"publish gen mismatch (cur={self._max_seq_len_pub_gen}, "
+                f"kicked={self.max_seq_len_gen[prev]})"
             )
-        )
-        if ready:
+        elif ids is None or self.max_seq_len_ids[prev] is None:
+            reason = "batch ids unavailable"
+        elif not torch.equal(self.max_seq_len_ids[prev], ids):
+            reason = "batch composition changed"
+        elif not bool(
+            torch.equal(
+                self.max_seq_len_gens[prev][ids], self.req_generation[ids]
+            )
+        ):
+            reason = "pool slot reallocated"
+        else:
+            reason = None
+        if reason is None:
             batch.seq_lens_cpu_bound = int(self.max_seq_len_pinned[prev][0].item())
+            _max_scalar_dbg(
+                f"scalar mirror: serve bound={batch.seq_lens_cpu_bound} "
+                f"(pub_gen={self._max_seq_len_pub_gen})"
+            )
         else:
             batch.seq_lens_cpu_bound = None
+            _max_scalar_dbg(f"scalar mirror: fallback None ({reason})", always=True)
         self.fwd_prepare_d2h_stream.wait_event(self.publish_ready)
         with torch.get_device_module(self.device).stream(
             self.fwd_prepare_d2h_stream

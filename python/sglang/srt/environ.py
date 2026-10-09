@@ -324,6 +324,11 @@ class Envs:
     SGLANG_MOE_COPY_WEIGHT_VIEWS_BEFORE_H2D = EnvBool(False)
     SGLANG_LOAD_SNAPSHOT_USE_ZMQ = EnvBool(False)
     SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN = EnvBool(False)
+    # Debug aid for the DSA no-CPU-mirror seq-lens path: logs the
+    # needs_cpu_seq_lens decision, the async max-seq-len scalar mirror
+    # hand-outs, and every block-table width bound/fallback taken in
+    # AscendAttnBackend._block_table_max_len.
+    SGLANG_DEBUG_SEQ_LENS_BOUND = EnvBool(False)
     HF_HUB_DISABLE_XET = EnvBool(False)
     # In seconds. If a warmup forward batch takes longer than this, the server will crash to prevent hanging.
     # Recommend to increase warmup timeout to 1800 to accommodate some kernel JIT precache e.g. deep gemm

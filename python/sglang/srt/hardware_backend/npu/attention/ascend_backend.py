@@ -14,6 +14,7 @@ from sglang.srt.configs.model_config import (
     AttentionArch,
     is_deepseek_dsa,
 )
+from sglang.srt.environ import envs
 from sglang.srt.dllm.config import DllmConfig
 from sglang.srt.hardware_backend.npu.attention.ascend_torch_native_backend import (
     AscendTorchNativeAttnBackend,
@@ -62,6 +63,20 @@ import logging
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Debug aid for the DSA no-CPU-mirror seq-lens path (SGLANG_DEBUG_SEQ_LENS_BOUND):
+# throttled trace of which width source each round actually took.
+_seq_bound_dbg_cnt = 0
+_seq_bound_fallback_cnt = 0
+
+
+def _seq_bound_dbg(msg: str, always: bool = False) -> None:
+    if not envs.SGLANG_DEBUG_SEQ_LENS_BOUND.get():
+        return
+    global _seq_bound_dbg_cnt
+    _seq_bound_dbg_cnt += 1
+    if always or _seq_bound_dbg_cnt % 8 == 0:
+        logger.warning("[seq-bound-dbg] %s", msg)
 FULL_ATTENTION_WINDOW = 2147483647
 
 
@@ -432,6 +447,12 @@ class AscendAttnBackend(AttentionBackend):
         self.needs_cpu_seq_lens = self.is_hybrid_swa or not is_deepseek_dsa(
             model_runner.model_config.hf_config
         )
+        _seq_bound_dbg(
+            f"backend init: needs_cpu_seq_lens={self.needs_cpu_seq_lens} "
+            f"(model={getattr(model_runner.model_config.hf_config, 'model_type', '?')}, "
+            f"hybrid_swa={self.is_hybrid_swa})",
+            always=True,
+        )
         self.use_sliding_window_kv_pool = (
             isinstance(self.token_to_kv_pool, SWAKVPool)
             and self.token_to_kv_pool.swa_layer_nums > 0
@@ -555,17 +576,29 @@ class AscendAttnBackend(AttentionBackend):
         for the first couple of rounds.
         """
         if bound is None:
+            global _seq_bound_fallback_cnt
+            _seq_bound_fallback_cnt += 1
+            if _seq_bound_fallback_cnt <= 5 or _seq_bound_fallback_cnt % 64 == 0:
+                _seq_bound_dbg(
+                    f"width: FULL-WIDTH fallback #{_seq_bound_fallback_cnt} "
+                    "(scalar bound not ready)",
+                    always=True,
+                )
             return min(
                 self.req_to_token.shape[1],
                 self.max_context_len + self.page_size - 1,
             )
         spec_tokens = int(self.speculative_num_draft_tokens or 0)
         margin = 2 * spec_tokens + 2
-        return min(
+        max_len = min(
             bound + margin,
             self.req_to_token.shape[1],
             self.max_context_len + self.page_size - 1,
         )
+        _seq_bound_dbg(
+            f"width: bound={bound} + margin={margin} -> max_len={max_len}"
+        )
+        return max_len
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init the metadata for a forward pass."""
@@ -641,6 +674,10 @@ class AscendAttnBackend(AttentionBackend):
             # device (forward_batch.seq_lens is the pool-indexed relay publish,
             # gathered without sync); the sparse-attention consumers below pass
             # this to torch_npu ops that accept device tensors.
+            _seq_bound_dbg(
+                f"eager metadata: no CPU mirror, per-request lengths = device "
+                f"seq_lens (mode={forward_batch.forward_mode})"
+            )
             self.forward_metadata.seq_lens_cpu_int = forward_batch.seq_lens.int()
         # In graph mode (see _init_cuda_graph_metadata) seq_lens_cpu_int stays
         # None so forward_mtp binds seq_lens_cpu_list instead: graph.update can
@@ -992,6 +1029,10 @@ class AscendAttnBackend(AttentionBackend):
             # upper bound + constant margin (see _block_table_max_len); the
             # per-request lengths below are refreshed exactly on the device
             # (metadata.seq_lens ± draft/step), never from a host mirror.
+            _seq_bound_dbg(
+                f"graph metadata: width from scalar bound "
+                f"(mode={forward_mode}, bound={seq_lens_cpu_bound})"
+            )
             max_len = self._block_table_max_len(seq_lens_cpu_bound)
         max_seq_pages = (max_len + self.page_size - 1) // self.page_size
 
