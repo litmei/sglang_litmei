@@ -94,11 +94,7 @@ class EAGLEDraftNpuGraphRunner(EAGLEDraftCudaGraphRunner):
             # seq_lens_cpu_last mirror lag: a draft chain always follows the
             # verify publish, whose growth is accept-count dependent and at
             # most the draft width + 1; over-estimation is masked internally.
-            _slack = (
-                get_spec().speculative_num_draft_tokens + 1
-                if envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
-                else 0
-            )
+            _slack = 0  # BISECT(noslack): force raw stale mirror values
             seq_lens_for_each_draft_step = []
             for speculative_step_id in range(self.speculative_num_steps - 1):
                 seq_lens_cpu = (

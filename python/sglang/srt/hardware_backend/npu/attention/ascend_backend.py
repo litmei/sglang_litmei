@@ -523,6 +523,7 @@ class AscendAttnBackend(AttentionBackend):
         """
         if not self.use_seq_lens_cpu_last:
             return 0
+        return 0  # BISECT(noslack): force raw stale mirror values
         if forward_mode.is_target_verify():
             return 1
         if forward_mode.is_decode_or_idle() and spec_info is not None:
