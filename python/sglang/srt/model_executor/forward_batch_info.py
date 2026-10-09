@@ -598,9 +598,10 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # === Borrowed from ScheduleBatch: host metadata (CPU lists / mirrors) ===
     # Optional seq_lens on cpu (CPU mirror of seq_lens)
     seq_lens_cpu: Optional[torch.Tensor] = None
-    # Async mirror snapshot (FutureMap, SGLANG_NPU_USE_SEQ_LENS_CPU_LAST);
-    # width-bound consumers add a one-publish slack. Only in the GPU-only
-    # world (needs_cpu_seq_lens=False), where seq_lens_cpu stays None.
+    # Previous round's seq_lens_cpu, kept asynchronously (FutureMap,
+    # SGLANG_KEEP_SEQ_LENS_CPU_LAST); width-bound consumers add a one-publish
+    # slack. Only meaningful in the GPU-only world (needs_cpu_seq_lens=False),
+    # where seq_lens_cpu stays None.
     seq_lens_cpu_last: Optional[torch.Tensor] = None
     # Fresh only for non-speculative extend; speculative modes use device slots.
     req_pool_indices_cpu: Optional[torch.Tensor] = None

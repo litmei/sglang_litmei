@@ -433,11 +433,12 @@ class AscendAttnBackend(AttentionBackend):
             )
             self.needs_cpu_seq_lens = False
 
-        # SGLANG_NPU_USE_SEQ_LENS_CPU_LAST: only meaningful in the GPU-only
-        # world, where the batch's seq_lens_cpu carries the FutureMap
-        # one-publish-stale snapshot. Gates the truncation slack below; with
-        # the env off, the GPU-only branches keep copying full-width tables.
-        self.use_seq_lens_cpu_last = envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
+        # SGLANG_KEEP_SEQ_LENS_CPU_LAST: forward_batch.seq_lens_cpu_last then
+        # carries the previous round's host seq_lens, kept asynchronously by
+        # FutureMap without adding a seq_lens_cpu D2H sync. Gates the
+        # truncation slack below; the GPU-only branches use the value to
+        # truncate block tables instead of copying the full context width.
+        self.keep_seq_lens_cpu_last = envs.SGLANG_KEEP_SEQ_LENS_CPU_LAST.get()
 
         # head num padding
         self.padding_size_list = [1, 2, 4, 8, 16, 32, 64, 128]
@@ -554,7 +555,7 @@ class AscendAttnBackend(AttentionBackend):
         published last: verify always follows a draft step; the first draft
         step of a chain follows the verify.
         """
-        if not self.use_seq_lens_cpu_last:
+        if not self.keep_seq_lens_cpu_last:
             return 0
         if forward_mode.is_target_verify():
             return 1
@@ -616,7 +617,7 @@ class AscendAttnBackend(AttentionBackend):
                 )
         else:
             if (
-                self.use_seq_lens_cpu_last
+                self.keep_seq_lens_cpu_last
                 and forward_batch.seq_lens_cpu_last is not None
                 and (
                     forward_batch.forward_mode.is_decode_or_idle()
