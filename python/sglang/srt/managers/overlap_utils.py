@@ -269,6 +269,9 @@ class FutureMap:
         self.req_pool_size = req_to_token_pool.req_to_token.shape[0]
         # Kept for the mixed-tail late binding (reserved-slot gather).
         self.req_to_token = req_to_token_pool.req_to_token
+        # Host-side per-slot request ownership token (bumped on alloc_rows);
+        # used to detect slot reuse for seq_lens_cpu_last (below).
+        self.req_generation = req_to_token_pool.req_generation
 
         if _DEBUG_ASSERT:
             # Poisoned init: every row must be written before its first gather.
@@ -289,7 +292,15 @@ class FutureMap:
         # D2H pulls (gated only on publish, off the schedule stream). CUDA-only:
         # recovers occupancy lost to the WAR barrier (also CUDA-only); other
         # platforms have no barrier and use the plain .cpu() bootstrap path.
-        if _is_cuda:
+        # NPU joins when SGLANG_NPU_USE_SEQ_LENS_CPU_LAST is on: it needs the
+        # private stream to refresh seq_lens_cpu_last asynchronously (below).
+        self.use_seq_lens_cpu_last = (
+            (not _is_cuda)
+            and _is_npu
+            and needs_cpu_seq_lens
+            and envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
+        )
+        if _is_cuda or self.use_seq_lens_cpu_last:
             self.new_seq_lens_cpu_pinned = torch.empty(
                 (self.req_pool_size,), dtype=torch.int64, pin_memory=True
             )
@@ -297,6 +308,52 @@ class FutureMap:
         else:
             self.new_seq_lens_cpu_pinned = None
             self.fwd_prepare_d2h_stream = None
+        if self.use_seq_lens_cpu_last:
+            # Double-buffered host mirror of new_seq_lens_buf ("seq_lens_cpu_last").
+            # Each resolve kicks a private-stream D2H of the current publish into
+            # bufs[cur] and hands out bufs[prev], which holds the PREVIOUS
+            # publish's snapshot (one publish round stale, content otherwise
+            # exact). Hand-out never blocks the host: the snapshot's event has
+            # fired by the next resolve, because the scheduler's own result
+            # processing waits on the forward-before-last's copy_done, which is
+            # ordered after that publish. Each buffer carries the req_generation
+            # snapshot taken at kick time; a slot reallocated to another request
+            # fails the generation check and forces the exact-sync fallback, so
+            # a reused slot can never be served a previous request's lengths.
+            # Consumers of the mirror must add an analytic slack for the one
+            # publish-round lag (see the Ascend backend / NPU graph runner).
+            device_module = torch.get_device_module(self.device)
+            self.seq_lens_cpu_last_bufs = [
+                torch.empty(
+                    (self.req_pool_size,), dtype=torch.int64, pin_memory=True
+                )
+                for _ in range(2)
+            ]
+            self.seq_lens_cpu_last_events = [
+                device_module.Event() for _ in range(2)
+            ]
+            self.seq_lens_cpu_last_gens = [
+                torch.zeros(self.req_pool_size, dtype=torch.int64) for _ in range(2)
+            ]
+            self.seq_lens_cpu_last_kicked = [False, False]
+            # Provenance per buffer: only decode-family rounds (decode / idle /
+            # target_verify) may feed the mirror chain. Their per-round growth
+            # is analytic (+1 per draft step, draft-width-bounded for verify)
+            # and downstream consumers compensate for the one-round lag. An
+            # extend/prefill round's publish has data-dependent growth, so its
+            # snapshot is marked invalid and the next rounds take the exact
+            # fallback until a decode snapshot flows through.
+            self.seq_lens_cpu_last_dec = [True, True]
+            self._seq_lens_cpu_last_cur = 0
+            self._seq_lens_cpu_last_ids: Optional[torch.Tensor] = None
+        else:
+            self.seq_lens_cpu_last_bufs = None
+            self.seq_lens_cpu_last_events = None
+            self.seq_lens_cpu_last_gens = None
+            self.seq_lens_cpu_last_kicked = None
+            self.seq_lens_cpu_last_dec = None
+            self._seq_lens_cpu_last_cur = 0
+            self._seq_lens_cpu_last_ids = None
         self.need_topk = False
         self.need_hidden_states = False
         self.topk_p_buf = None
@@ -546,6 +603,10 @@ class FutureMap:
                 _assert_nonneg_and_invalidate(batch.seq_lens, self.new_seq_lens_buf, fi)
             return
 
+        if self.use_seq_lens_cpu_last:
+            self._resolve_seq_lens_cpu_last(batch)
+            return
+
         if self.fwd_prepare_d2h_stream is None or self.publish_ready is None:
             batch.seq_lens_cpu = batch.seq_lens.cpu()  # bootstrap / non-CUDA
             batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
@@ -567,6 +628,79 @@ class FutureMap:
             # After the D2H copy completed (synchronize above), so the pinned
             # mirror is not poisoned.
             _assert_nonneg_and_invalidate(batch.seq_lens, self.new_seq_lens_buf, fi)
+
+    def _resolve_seq_lens_cpu_last(self, batch: ScheduleBatch) -> None:
+        """seq_lens_cpu_last mode (SGLANG_NPU_USE_SEQ_LENS_CPU_LAST): never block
+        the host on a D2H before run_batch.
+
+        Each round:
+        1. Consume: hand out the snapshot published by the PREVIOUS forward
+           (seq_lens_cpu_last) when it is complete and the batch composition is
+           unchanged; otherwise fall back to the exact `.cpu()` sync (first
+           round of a batch, composition change, slot reuse, or a not-yet-
+           complete copy).
+        2. Save: kick an async private-stream D2H of this round's publish into
+           the other pinned buffer; it becomes the next round's
+           seq_lens_cpu_last. The copy is gated on the current publish event,
+           so it is ordered after this forward's seq_lens commit; the private
+           stream serializes successive copies into the same buffer.
+
+        The snapshot handed out is exactly one publish round stale relative to
+        the device gather above (this batch's seq_lens come from the previous
+        publish, the snapshot from the one before it). Downstream consumers on
+        NPU add an analytic slack for that lag (Ascend backend / graph runner).
+
+        Note: in this mode the CI-only consumed-rows poisoning is replaced by a
+        plain device-side assert. Scattering -1 into new_seq_lens_buf here
+        would race the in-flight async snapshot copies on the private stream.
+        """
+        cur = self._seq_lens_cpu_last_cur
+        prev = cur ^ 1
+        ids = batch.req_pool_indices_cpu
+        last_ids = self._seq_lens_cpu_last_ids
+        ready = (
+            self.seq_lens_cpu_last_kicked[prev]
+            and self.seq_lens_cpu_last_dec[prev]
+            and self.seq_lens_cpu_last_events[prev].query()
+            and last_ids is not None
+            and last_ids.shape == ids.shape
+            and bool(torch.equal(last_ids, ids))
+            and bool(
+                torch.equal(
+                    self.seq_lens_cpu_last_gens[prev][ids], self.req_generation[ids]
+                )
+            )
+        )
+        if _DEBUG_ASSERT:
+            # Gather validity check only; no consumed-rows poisoning (see doc).
+            torch._assert_async((batch.seq_lens >= 0).all())
+        if ready:
+            # seq_lens_cpu := seq_lens_cpu_last (one publish round stale).
+            batch.seq_lens_cpu = self.seq_lens_cpu_last_bufs[prev][ids]
+            batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
+        else:
+            # Exact fallback: one blocking D2H, same as the bootstrap path.
+            batch.seq_lens_cpu = batch.seq_lens.cpu()
+            batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
+        # Save this round's publish as the next round's seq_lens_cpu_last.
+        if self.publish_ready is not None:
+            self.fwd_prepare_d2h_stream.wait_event(self.publish_ready)
+            with torch.get_device_module(self.device).stream(
+                self.fwd_prepare_d2h_stream
+            ):
+                self.seq_lens_cpu_last_bufs[cur].copy_(
+                    self.new_seq_lens_buf, non_blocking=True
+                )
+            self.seq_lens_cpu_last_events[cur].record(self.fwd_prepare_d2h_stream)
+            # Ownership snapshot for the snapshot being kicked; a later alloc
+            # bumps req_generation and fails the consume check above.
+            self.seq_lens_cpu_last_gens[cur].copy_(self.req_generation)
+            self.seq_lens_cpu_last_kicked[cur] = True
+            self.seq_lens_cpu_last_dec[cur] = batch.forward_mode.is_decode_or_idle() or (
+                batch.forward_mode.is_target_verify()
+            )
+        self._seq_lens_cpu_last_cur = prev
+        self._seq_lens_cpu_last_ids = ids.clone()
 
     def publish(
         self,

@@ -23,7 +23,8 @@ from sglang.srt.configs.model_config import (
     is_deepseek_dsa,
     is_deepseek_v4,
 )
-from sglang.srt.runtime_context import get_parallel
+from sglang.srt.environ import envs
+from sglang.srt.runtime_context import get_parallel, get_spec
 from sglang.srt.speculative.eagle_draft_cuda_graph_runner import (
     EAGLEDraftCudaGraphRunner,
 )
@@ -78,22 +79,33 @@ class EAGLEDraftNpuGraphRunner(EAGLEDraftCudaGraphRunner):
         decision = torch.tensor(
             int(can_run_graph and seed_ready),
             dtype=torch.int32,
-            device=self.device,
+            device="cpu",
         )
         torch.distributed.all_reduce(
             decision,
             op=torch.distributed.ReduceOp.MIN,
-            group=get_parallel().tp_group.device_group,
+            group=get_parallel().tp_group.cpu_group,
         )
         return bool(decision.item())
 
     def _replay_graph(self, shape_key, forward_batch):
         hf_config = self.model_runner.model_config.hf_config
         if not (is_deepseek_dsa(hf_config) or is_deepseek_v4(hf_config)):
+            # seq_lens_cpu_last mirror lag: a draft chain always follows the
+            # verify publish, whose growth is accept-count dependent and at
+            # most the draft width + 1; over-estimation is masked internally.
+            _slack = (
+                get_spec().speculative_num_draft_tokens + 1
+                if envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
+                else 0
+            )
             seq_lens_for_each_draft_step = []
             for speculative_step_id in range(self.speculative_num_steps - 1):
                 seq_lens_cpu = (
-                    forward_batch.seq_lens_cpu[: self.raw_bs] + speculative_step_id + 1
+                    forward_batch.seq_lens_cpu[: self.raw_bs]
+                    + speculative_step_id
+                    + 1
+                    + _slack
                 )
                 seq_lens = seq_lens_cpu.tolist() + [0] * (self.bs - self.raw_bs)
                 seq_lens_for_each_draft_step.append(seq_lens)
