@@ -439,18 +439,21 @@ class AscendAttnBackend(AttentionBackend):
                 model_runner.token_to_kv_pool.full_to_swa_index_mapping
             )
             self.sliding_window_size = model_runner.sliding_window_size
-        # MAIN SWITCH (disabled for baseline A/B): DSA graph replay binds
-        # per-request KV lengths from the device-exact metadata.seq_lens refresh
-        # (no seq_lens_cpu D2H needed), and the block-table width comes from
-        # the async scalar bound (seq_lens_cpu_bound). With the flag removed,
-        # decide_needs_cpu_seq_lens falls back to the base-class default True:
-        # the per-round .cpu() mirror and all legacy consumers stay in effect
-        # (the feature branch becomes dead code — baseline behavior).
+        # EXPERIMENT: keep the legacy per-round seq_lens_cpu D2H mirror
+        # (needs_cpu_seq_lens stays True via the base-class default) while
+        # forcing the new scalar-bound / device-exact consumer path below.
+        # Isolates whether a perf regression comes from needs_cpu_seq_lens=False
+        # side effects (some unpatched None consumer degrading to full-width)
+        # or from the new width/per-request consumers themselves.
         # self.needs_cpu_seq_lens = self.is_hybrid_swa or not is_deepseek_dsa(
         #     model_runner.model_config.hf_config
         # )
+        self.use_scalar_bound = not self.is_hybrid_swa and is_deepseek_dsa(
+            model_runner.model_config.hf_config
+        )
         _seq_bound_dbg(
-            f"backend init: needs_cpu_seq_lens=UNSET (baseline legacy mirror) "
+            f"backend init: needs_cpu_seq_lens=UNSET (legacy mirror kept) "
+            f"use_scalar_bound={self.use_scalar_bound} "
             f"(model={getattr(model_runner.model_config.hf_config, 'model_type', '?')}, "
             f"hybrid_swa={self.is_hybrid_swa})",
             always=True,
@@ -616,6 +619,7 @@ class AscendAttnBackend(AttentionBackend):
                 seq_lens_max = (
                     forward_batch.seq_lens_cpu.max().item()
                     if forward_batch.seq_lens_cpu is not None
+                    and not self.use_scalar_bound
                     else self._block_table_max_len(forward_batch.seq_lens_cpu_bound)
                 )
             else:
@@ -628,6 +632,7 @@ class AscendAttnBackend(AttentionBackend):
                 seq_lens_max = (
                     forward_batch.seq_lens_cpu.max().item() + spec_tokens_per_req
                     if forward_batch.seq_lens_cpu is not None
+                    and not self.use_scalar_bound
                     else self._block_table_max_len(forward_batch.seq_lens_cpu_bound)
                 )
         elif (
@@ -669,7 +674,7 @@ class AscendAttnBackend(AttentionBackend):
                 self.device
             ).int()
 
-        if forward_batch.seq_lens_cpu is not None:
+        if forward_batch.seq_lens_cpu is not None and not self.use_scalar_bound:
             self.forward_metadata.seq_lens_cpu_int = forward_batch.seq_lens_cpu.int()
         else:
             # DSA no-CPU-mirror path: per-request KV lengths stay exact on the
@@ -1015,7 +1020,7 @@ class AscendAttnBackend(AttentionBackend):
         # Compute the host-side KV lengths visible to this attention step. Target
         # verify adds the draft block except for DFlash, whose seq_lens_cpu already
         # includes it; speculative decode adds tokens through the current draft step.
-        if seq_lens_cpu is not None:
+        if seq_lens_cpu is not None and not self.use_scalar_bound:
             attention_kv_lens_cpu = seq_lens_cpu[:bs].int()
             if forward_mode.is_target_verify() and not _is_dflash_verify(spec_info):
                 attention_kv_lens_cpu = (
@@ -1031,6 +1036,7 @@ class AscendAttnBackend(AttentionBackend):
             # upper bound + constant margin (see _block_table_max_len); the
             # per-request lengths below are refreshed exactly on the device
             # (metadata.seq_lens ± draft/step), never from a host mirror.
+            attention_kv_lens_cpu = None
             _seq_bound_dbg(
                 f"graph metadata: width from scalar bound "
                 f"(mode={forward_mode}, bound={seq_lens_cpu_bound})"
@@ -1095,10 +1101,10 @@ class AscendAttnBackend(AttentionBackend):
             # DCP decode/speculative paths use rank-local KV lengths and a block
             # table whose stride is page_size * dcp_world_size. Draft attention
             # uses the ordinary full-KV metadata above instead.
-            # NOTE: DSA no-CPU-mirror (seq_lens_cpu is None) + DCP is not
-            # supported yet — DCP lengths are data-dependent host values; the
+            # NOTE: DSA scalar-bound path (attention_kv_lens_cpu is None) + DCP is
+            # not supported yet — DCP lengths are data-dependent host values; the
             # captured tables stay stale instead of forcing a sync here.
-            if seq_lens_cpu is None:
+            if attention_kv_lens_cpu is None:
                 pass
             elif forward_mode.is_target_verify():
                 (

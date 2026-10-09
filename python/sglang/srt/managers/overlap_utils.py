@@ -311,7 +311,11 @@ class FutureMap:
         # carries the tiny async max-seq-len scalar mirror below (one 1-elem
         # device reduction per publish + one 8-byte D2H per round, consumed
         # via Event.query() — the host never blocks).
-        self.use_seq_len_max_scalar = _is_npu and not needs_cpu_seq_lens
+        # EXPERIMENT: run the scalar mirror unconditionally on NPU (decoupled from
+        # needs_cpu_seq_lens) so the AscendBackend can force the scalar-bound
+        # consumer path while the legacy seq_lens_cpu D2H mirror stays active.
+        # Final form should re-bind this to `not needs_cpu_seq_lens`.
+        self.use_seq_len_max_scalar = _is_npu
         _max_scalar_dbg(
             f"FutureMap init: use_seq_len_max_scalar={self.use_seq_len_max_scalar}, "
             f"needs_cpu_seq_lens={needs_cpu_seq_lens}",
@@ -670,11 +674,12 @@ class FutureMap:
                 self.publish_ready.wait()
         batch.seq_lens = self.new_seq_lens_buf[fi]
 
+        if self.use_seq_len_max_scalar:
+            self._resolve_max_seq_len_scalar(batch)
+
         if not self.needs_cpu_seq_lens:
             # GPU gather above is kept (SB.seq_lens must advance each verify);
             # skip the .cpu() D2H. Downstream takes the GPU-only path.
-            if self.use_seq_len_max_scalar:
-                self._resolve_max_seq_len_scalar(batch)
             batch.seq_lens_cpu = None
             batch.seq_lens_sum = None
             if _DEBUG_ASSERT:
