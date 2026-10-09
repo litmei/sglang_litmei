@@ -42,12 +42,12 @@ class EAGLEDraftExtendNpuGraphRunner(EAGLEDraftExtendCudaGraphRunner):
             # seq_lens_cpu_last mirror lag: draft extend follows the verify
             # publish, whose growth is accept-count dependent and at most the
             # draft width + 1; over-estimation is masked internally.
-            _slack = (
-                get_spec().speculative_num_draft_tokens + 1
-                if envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
-                else 0
-            )
-            seq_lens = (forward_batch.seq_lens_cpu + _slack).tolist() + [0] * (
+            # _slack = (
+            #     get_spec().speculative_num_draft_tokens + 1
+            #     if envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
+            #     else 0
+            # )
+            seq_lens = (forward_batch.seq_lens_cpu + 0).tolist() + [0] * (
                 self.bs - self.raw_bs
             )
             return self.backend.replay_with_input_update(

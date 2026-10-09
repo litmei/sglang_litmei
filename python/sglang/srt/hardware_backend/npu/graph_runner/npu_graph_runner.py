@@ -335,23 +335,23 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
                 # The pre-planned path skipped init_forward_metadata_out_graph;
                 # refresh attention metadata so replay reads correct KV pages.
                 _seq_slack = 0
-                if (
-                    self.use_seq_lens_cpu_last
-                    and forward_batch.seq_lens_cpu is not None
-                ):
-                    # Mirror lag compensation: verify follows a +1 draft
-                    # publish; the first decode step follows the
-                    # accept-count-dependent verify publish (at most the
-                    # draft width + 1); later steps follow a +1 publish.
-                    if forward_batch.forward_mode.is_target_verify():
-                        _seq_slack = 1
-                    else:
-                        _attn = self._replay_attn_backend()
-                        _draft_num = getattr(
-                            _attn, "speculative_num_draft_tokens", 0
-                        )
-                        _step_id = getattr(_attn, "speculative_step_id", 0)
-                        _seq_slack = (_draft_num + 1) if _step_id == 0 else 1
+                # if (
+                #     self.use_seq_lens_cpu_last
+                #     and forward_batch.seq_lens_cpu is not None
+                # ):
+                #     # Mirror lag compensation: verify follows a +1 draft
+                #     # publish; the first decode step follows the
+                #     # accept-count-dependent verify publish (at most the
+                #     # draft width + 1); later steps follow a +1 publish.
+                #     if forward_batch.forward_mode.is_target_verify():
+                #         _seq_slack = 1
+                #     else:
+                #         _attn = self._replay_attn_backend()
+                #         _draft_num = getattr(
+                #             _attn, "speculative_num_draft_tokens", 0
+                #         )
+                #         _step_id = getattr(_attn, "speculative_step_id", 0)
+                #         _seq_slack = (_draft_num + 1) if _step_id == 0 else 1
                 self.buffers.seq_lens[: self.raw_bs].copy_(
                     forward_batch.seq_lens_cpu[: self.raw_bs] + _seq_slack
                 )
@@ -413,19 +413,19 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
                     # already includes the draft block for DFlash); do not
                     # recompute and double-add here.
                     seq_lens = list(_meta_list)
-                elif (
-                    self.use_seq_lens_cpu_last
-                    and forward_batch.seq_lens_cpu is not None
-                ):
-                    # seq_lens_cpu_last mirror: verify always follows a draft
-                    # step, whose publish grows exactly +1 per request, so
-                    # mirror + 1 + draft width recovers the exact KV span.
-                    seq_lens_cpu = (
-                        forward_batch.seq_lens_cpu[: self.raw_bs]
-                        + 1
-                        + self.captured_req_width
-                    )
-                    seq_lens = seq_lens_cpu.tolist() + [0] * (self.bs - self.raw_bs)
+                # elif (
+                #     self.use_seq_lens_cpu_last
+                #     and forward_batch.seq_lens_cpu is not None
+                # ):
+                #     # seq_lens_cpu_last mirror: verify always follows a draft
+                #     # step, whose publish grows exactly +1 per request, so
+                #     # mirror + 1 + draft width recovers the exact KV span.
+                #     seq_lens_cpu = (
+                #         forward_batch.seq_lens_cpu[: self.raw_bs]
+                #         + 1
+                #         + self.captured_req_width
+                #     )
+                #     seq_lens = seq_lens_cpu.tolist() + [0] * (self.bs - self.raw_bs)
                 else:
                     # Wrapper backends (e.g. hybrid linear attention) keep
                     # forward_metadata only on their children, so it stays
@@ -435,22 +435,22 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
                     )
                     seq_lens = seq_lens_cpu.tolist() + [0] * (self.bs - self.raw_bs)
             else:
-                if (
-                    self.use_seq_lens_cpu_last
-                    and forward_batch.spec_info is not None
-                    and forward_batch.seq_lens_cpu is not None
-                ):
-                    # Draft decode step: the first step of a chain follows the
-                    # verify publish (accept count is data-dependent, at most
-                    # the draft width + 1 margin); later steps follow a +1
-                    # draft publish.
-                    _attn = self._replay_attn_backend()
-                    _draft_num = getattr(_attn, "speculative_num_draft_tokens", 0)
-                    _step_id = getattr(_attn, "speculative_step_id", 0)
-                    _slack = (_draft_num + 1) if _step_id == 0 else 1
-                    seq_lens_cpu = forward_batch.seq_lens_cpu[: self.raw_bs] + _slack
-                    seq_lens = seq_lens_cpu.tolist() + [0] * (self.bs - self.raw_bs)
-                else:
+                # if (
+                #     self.use_seq_lens_cpu_last
+                #     and forward_batch.spec_info is not None
+                #     and forward_batch.seq_lens_cpu is not None
+                # ):
+                #     # Draft decode step: the first step of a chain follows the
+                #     # verify publish (accept count is data-dependent, at most
+                #     # the draft width + 1 margin); later steps follow a +1
+                #     # draft publish.
+                #     _attn = self._replay_attn_backend()
+                #     _draft_num = getattr(_attn, "speculative_num_draft_tokens", 0)
+                #     _step_id = getattr(_attn, "speculative_step_id", 0)
+                #     _slack = (_draft_num + 1) if _step_id == 0 else 1
+                #     seq_lens_cpu = forward_batch.seq_lens_cpu[: self.raw_bs] + _slack
+                #     seq_lens = seq_lens_cpu.tolist() + [0] * (self.bs - self.raw_bs)
+                # else:
                     seq_lens = forward_batch.seq_lens.cpu().tolist() + [0] * (
                         self.bs - self.raw_bs
                     )
