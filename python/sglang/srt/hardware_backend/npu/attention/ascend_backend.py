@@ -433,6 +433,12 @@ class AscendAttnBackend(AttentionBackend):
             )
             self.needs_cpu_seq_lens = False
 
+        # SGLANG_NPU_USE_SEQ_LENS_CPU_LAST: only meaningful in the GPU-only
+        # world, where the batch's seq_lens_cpu carries the FutureMap
+        # one-publish-stale snapshot. Gates the truncation slack below; with
+        # the env off, the GPU-only branches keep copying full-width tables.
+        self.use_seq_lens_cpu_last = envs.SGLANG_NPU_USE_SEQ_LENS_CPU_LAST.get()
+
         # head num padding
         self.padding_size_list = [1, 2, 4, 8, 16, 32, 64, 128]
         self.q_head_num_padding = None
@@ -534,7 +540,29 @@ class AscendAttnBackend(AttentionBackend):
             spec_info=forward_batch.spec_info,
             out_cache_loc=forward_batch.out_cache_loc,
             origin_out_cache_loc=getattr(forward_batch, "origin_out_cache_loc", None),
+            seq_lens_cpu_last=getattr(forward_batch, "seq_lens_cpu_last", None),
         )
+
+    def _seq_lens_cpu_last_slack(self, forward_mode, spec_info) -> int:
+        """Extra per-request growth slack for the seq_lens_cpu_last mirror.
+
+        The snapshot lags the exact device value by exactly one publish round,
+        so width-bound consumers must add the previous publish's growth: a
+        draft step publishes +1 per request (uniform), a target verify
+        publishes up to draft_token_num (+1 margin, accept count is
+        data-dependent). The current round type determines which forward
+        published last: verify always follows a draft step; the first draft
+        step of a chain follows the verify.
+        """
+        if not self.use_seq_lens_cpu_last:
+            return 0
+        if forward_mode.is_target_verify():
+            return 1
+        if forward_mode.is_decode_or_idle() and spec_info is not None:
+            if self.speculative_step_id == 0:
+                return self.speculative_num_draft_tokens + 1
+            return 1
+        return 0
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init the metadata for a forward pass."""
@@ -587,12 +615,43 @@ class AscendAttnBackend(AttentionBackend):
                     .contiguous()
                 )
         else:
-            self.forward_metadata.block_tables = (
-                self.req_to_token_pool.req_to_token[
-                    forward_batch.req_pool_indices, :: self.page_size
-                ]
-                // self.page_size
-            )
+            if (
+                self.use_seq_lens_cpu_last
+                and forward_batch.seq_lens_cpu_last is not None
+                and (
+                    forward_batch.forward_mode.is_decode_or_idle()
+                    or forward_batch.forward_mode.is_target_verify()
+                )
+            ):
+                # Mirror snapshot (seq_lens_cpu_last): truncate like the exact
+                # branch (width only needs an upper bound; slack covers the
+                # one-publish lag). Without this the GPU-only path copies the
+                # full context width every round -- dominant in the later
+                # steps of long sequences.
+                seq_lens_max = forward_batch.seq_lens_cpu_last.max().item()
+                if forward_batch.forward_mode.is_target_verify():
+                    seq_lens_max += int(forward_batch.spec_info.draft_token_num)
+                elif forward_batch.spec_info is not None:
+                    seq_lens_max += self.speculative_step_id + 1
+                else:
+                    # Plain decode: the mirror lags one +1 publish.
+                    seq_lens_max += 1
+                seq_lens_max += self._seq_lens_cpu_last_slack(
+                    forward_batch.forward_mode, forward_batch.spec_info
+                )
+                self.forward_metadata.block_tables = (
+                    self.req_to_token_pool.req_to_token[
+                        forward_batch.req_pool_indices, :seq_lens_max
+                    ][:, :: self.page_size]
+                    // self.page_size
+                )
+            else:
+                self.forward_metadata.block_tables = (
+                    self.req_to_token_pool.req_to_token[
+                        forward_batch.req_pool_indices, :: self.page_size
+                    ]
+                    // self.page_size
+                )
         if forward_batch.extend_seq_lens is not None:
             self.forward_metadata.extend_seq_lens = forward_batch.extend_seq_lens
             self.forward_metadata.extend_seq_lens_cpu_int = (
@@ -925,6 +984,7 @@ class AscendAttnBackend(AttentionBackend):
         spec_info: Optional[SpecInput],
         out_cache_loc: Optional[torch.Tensor] = None,
         origin_out_cache_loc: Optional[torch.Tensor] = None,
+        seq_lens_cpu_last: Optional[torch.Tensor] = None,
     ):
         """Shared capture+replay body for the cuda-graph init path.
 
@@ -994,18 +1054,55 @@ class AscendAttnBackend(AttentionBackend):
 
             metadata.block_tables[:bs, max_seq_pages:].fill_(0)
         else:
-            total_pages = min(
-                metadata.block_tables.shape[1],
-                (self.req_to_token.shape[1] + self.page_size - 1) // self.page_size,
-            )
-            metadata.block_tables[:bs, :total_pages].copy_(
-                self.req_to_token[
-                    req_pool_indices[:bs],
-                    0 : total_pages * self.page_size : self.page_size,
-                ]
-                // self.page_size
-            )
-            metadata.block_tables[:bs, total_pages:].fill_(0)
+            if seq_lens_cpu_last is not None and (
+                forward_mode.is_decode_or_idle() or forward_mode.is_target_verify()
+            ):
+                # Mirror snapshot (seq_lens_cpu_last): truncate like the exact
+                # branch (width only needs an upper bound; slack covers the
+                # one-publish lag).
+                attention_kv_lens_cpu = seq_lens_cpu_last[:bs].int()
+                if forward_mode.is_target_verify() and not _is_dflash_verify(
+                    spec_info
+                ):
+                    attention_kv_lens_cpu = (
+                        attention_kv_lens_cpu + self.speculative_num_draft_tokens
+                    )
+                elif forward_mode.is_decode_or_idle() and spec_info is not None:
+                    attention_kv_lens_cpu = (
+                        attention_kv_lens_cpu + self.speculative_step_id + 1
+                    )
+                else:
+                    # Plain decode: the mirror lags one +1 publish.
+                    attention_kv_lens_cpu = attention_kv_lens_cpu + 1
+                attention_kv_lens_cpu = attention_kv_lens_cpu + self._seq_lens_cpu_last_slack(
+                    forward_mode, spec_info
+                )
+                max_len = attention_kv_lens_cpu.max().item()
+                max_seq_pages = min(
+                    metadata.block_tables.shape[1],
+                    (max_len + self.page_size - 1) // self.page_size,
+                )
+                metadata.block_tables[:bs, :max_seq_pages].copy_(
+                    self.req_to_token[
+                        req_pool_indices[:bs], 0 : max_len : self.page_size
+                    ]
+                    // self.page_size
+                )
+                metadata.block_tables[:bs, max_seq_pages:].fill_(0)
+            else:
+                total_pages = min(
+                    metadata.block_tables.shape[1],
+                    (self.req_to_token.shape[1] + self.page_size - 1)
+                    // self.page_size,
+                )
+                metadata.block_tables[:bs, :total_pages].copy_(
+                    self.req_to_token[
+                        req_pool_indices[:bs],
+                        0 : total_pages * self.page_size : self.page_size,
+                    ]
+                    // self.page_size
+                )
+                metadata.block_tables[:bs, total_pages:].fill_(0)
 
         if get_parallel().dcp_enabled and not self.is_draft_worker:
             if "dcp_origin_out_cache_loc" in self.graph_metadata:

@@ -1025,6 +1025,13 @@ class Envs:
     SGLANG_ZBAL_BOOTSTRAP_URL = EnvStr("")
     # Set to 0 to allow AscendAttnBackend to set needs_cpu_seq_lens to False for dsa models.
     SGLANG_NPU_ATTN_BACKEND_NEEDS_CPU_SEQ_LENS = EnvBool(True)
+    # With needs_cpu_seq_lens=False the resolve path skips the per-round host
+    # seq_lens D2H and the backend's GPU-only branches copy the full-width
+    # block table every round. Set to 1 to serve a one-publish-round-stale
+    # seq_lens_cpu snapshot (seq_lens_cpu_last, never blocking the host) so
+    # those branches can truncate the table to an analytic upper bound again;
+    # see FutureMap.resolve_seq_lens_cpu and AscendAttnBackend.
+    SGLANG_NPU_USE_SEQ_LENS_CPU_LAST = EnvBool(False)
 
     # ===================================================================
     # MUSA

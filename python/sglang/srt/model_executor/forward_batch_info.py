@@ -598,6 +598,10 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # === Borrowed from ScheduleBatch: host metadata (CPU lists / mirrors) ===
     # Optional seq_lens on cpu (CPU mirror of seq_lens)
     seq_lens_cpu: Optional[torch.Tensor] = None
+    # Async mirror snapshot (FutureMap, SGLANG_NPU_USE_SEQ_LENS_CPU_LAST);
+    # width-bound consumers add a one-publish slack. Only in the GPU-only
+    # world (needs_cpu_seq_lens=False), where seq_lens_cpu stays None.
+    seq_lens_cpu_last: Optional[torch.Tensor] = None
     # Fresh only for non-speculative extend; speculative modes use device slots.
     req_pool_indices_cpu: Optional[torch.Tensor] = None
 
@@ -977,6 +981,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         # copy by Scheduler.run_batch under overlap mode (see save/restore
         # block there). Use it directly.
         seq_lens_cpu = batch.seq_lens_cpu
+        seq_lens_cpu_last = getattr(batch, "seq_lens_cpu_last", None)
 
         # TODO(seq-lens-removal): the whole ScheduleBatch seq_lens family
         # (incl. seq_lens_sum) is slated for removal in favor of kv-committed
@@ -996,6 +1001,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             seq_lens_sum=batch.seq_lens_sum,
             # Inputs aliased by reference from ScheduleBatch
             seq_lens_cpu=seq_lens_cpu,
+            seq_lens_cpu_last=seq_lens_cpu_last,
             req_pool_indices_cpu=(
                 getattr(batch, "req_pool_indices_cpu", None)
                 if batch.forward_mode.is_extend_without_speculative()
@@ -2139,6 +2145,7 @@ def build_inner_fb_view(
         seq_lens=forward_batch.seq_lens,
         seq_lens_sum=forward_batch.seq_lens_sum,
         seq_lens_cpu=forward_batch.seq_lens_cpu,
+        seq_lens_cpu_last=getattr(forward_batch, "seq_lens_cpu_last", None),
         encoder_lens=encoder_lens,
         out_cache_loc=getattr(forward_batch, "out_cache_loc", None),
         # A caller may hand in another view that does not carry this field.

@@ -2485,6 +2485,11 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
     # === Host metadata crossing to ForwardBatch (CPU lists / mirrors) ===
     seq_lens_cpu: torch.Tensor = None  # shape: [b], int64
+    # Async mirror snapshot (FutureMap, SGLANG_NPU_USE_SEQ_LENS_CPU_LAST).
+    # Only set in the GPU-only world (needs_cpu_seq_lens=False), where
+    # seq_lens_cpu itself stays None by contract; width-bound consumers
+    # (block-table truncation) read this instead and add a one-publish slack.
+    seq_lens_cpu_last: torch.Tensor = None  # shape: [b], int64
 
     # For multimodal inputs
     multimodal_inputs: Optional[List] = None
