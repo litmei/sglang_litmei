@@ -728,7 +728,9 @@ class FutureMap:
         if self.use_seq_len_max_scalar:
             # Tiny device reduction: keep only the batch max for the async
             # host scalar mirror (consumed by resolve_seq_lens_cpu).
-            self.max_seq_len_buf[0].copy_(
+            # Copy buffer-to-buffer ([1] <- [1]); buf[0] is a 0-dim view and
+            # copy_ rejects the shape mismatch.
+            self.max_seq_len_buf.copy_(
                 self.new_seq_lens_buf[indices].max().view(1)
             )
             self._max_seq_len_pub_gen += 1
