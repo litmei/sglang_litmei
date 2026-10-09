@@ -616,7 +616,7 @@ class FutureMap:
             reason = "batch composition changed"
         elif not bool(
             torch.equal(
-                self.max_seq_len_gens[prev][ids], self.req_generation[ids]
+                self.max_seq_len_gens[prev], self.req_generation[ids]
             )
         ):
             reason = "pool slot reallocated"
