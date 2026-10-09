@@ -18,6 +18,7 @@ from sglang.srt.layers.attention.dsa.utils import dsa_use_prefill_cp
 from sglang.srt.model_executor.forward_context import get_req_to_token_pool
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.utils import is_cuda, is_hip
+from sglang.srt.utils.common import pinned_h2d
 
 if TYPE_CHECKING:
     from sglang.srt.layers.attention.dsa.dsa_topk_backend import TopkTransformMethod
@@ -302,17 +303,16 @@ def _kpool_plan_to_gpu(
 
     i64_total = 4 * n_pool + 2 * n_tail
     if i64_total > 0:
-        i64_cpu = torch.tensor(
+        i64_gpu = pinned_h2d(
             cpu.pool_req
             + cpu.pool_pool_id
             + cpu.pool_chunk_src
             + cpu.pool_batch_idx
             + cpu.tail_req
             + cpu.tail_chunk_src,
-            dtype=torch.int64,
-            pin_memory=True,
+            torch.int64,
+            device,
         )
-        i64_gpu = i64_cpu.to(device, non_blocking=True)
         c = 0
         pool_req_t = i64_gpu[c : c + n_pool]
         c += n_pool
@@ -332,7 +332,7 @@ def _kpool_plan_to_gpu(
 
     i32_total = 2 * n_pool + 2 * n_tail + 4 * n_rag
     if i32_total > 0:
-        i32_cpu = torch.tensor(
+        i32_gpu = pinned_h2d(
             cpu.pool_n_from_tail
             + cpu.pool_tail_logical_base
             + cpu.tail_dst_logical_start
@@ -341,10 +341,9 @@ def _kpool_plan_to_gpu(
             + cpu.ragged_q_len
             + cpu.cu_pages_excl
             + cpu.cu_q_len_excl,
-            dtype=torch.int32,
-            pin_memory=True,
+            torch.int32,
+            device,
         )
-        i32_gpu = i32_cpu.to(device, non_blocking=True)
         c = 0
         pool_n_from_tail_t = i32_gpu[c : c + n_pool]
         c += n_pool

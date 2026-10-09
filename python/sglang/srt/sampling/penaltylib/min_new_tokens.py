@@ -1,7 +1,7 @@
 import torch
 
 from sglang.srt.sampling.penaltylib.orchestrator import _BatchedPenalizer
-from sglang.srt.utils.common import is_pin_memory_available
+from sglang.srt.utils.common import is_pin_memory_available, pinned_h2d
 
 
 class BatchedMinNewTokensPenalizer(_BatchedPenalizer):
@@ -53,10 +53,8 @@ class BatchedMinNewTokensPenalizer(_BatchedPenalizer):
             batch_first=True,
             padding_value=self.orchestrator.vocab_size,
         )
-        if pin_memory:
-            padded_stop_token_ids_cpu = padded_stop_token_ids_cpu.pin_memory()
-        padded_stop_token_ids = padded_stop_token_ids_cpu.to(
-            self.orchestrator.device, non_blocking=True
+        padded_stop_token_ids = pinned_h2d(
+            padded_stop_token_ids_cpu, torch.int64, self.orchestrator.device
         )
         self.stop_token_penalties = torch.zeros(
             size=(len(self.orchestrator.reqs()), self.orchestrator.vocab_size + 1),

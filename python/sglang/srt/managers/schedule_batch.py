@@ -2192,13 +2192,8 @@ def set_mamba_track_indices_from_reqs(
     ]
     batch.mamba_track_buffer_indices = list(track_positions)
     idx = (
-        torch.tensor(
-            track_positions,
-            dtype=torch.int64,
-            pin_memory=True,
-        )
+        pinned_h2d(track_positions, torch.int64, all_buffers.device)
         .unsqueeze(1)
-        .to(device=all_buffers.device, non_blocking=True)
     )
     batch.mamba_track_indices = (
         torch.gather(all_buffers, 1, idx).squeeze(1).to(torch.int64)
@@ -3612,8 +3607,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                 req.decode_batch_idx for req in self.reqs
             ]
             # async H2D
-            self.mamba_track_mask = track_mask_cpu.pin_memory().to(
-                device=self.device, non_blocking=True
+            self.mamba_track_mask = pinned_h2d(
+                track_mask_cpu, torch.bool, self.device
             )
 
     def filter_batch(
