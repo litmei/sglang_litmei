@@ -439,16 +439,18 @@ class AscendAttnBackend(AttentionBackend):
                 model_runner.token_to_kv_pool.full_to_swa_index_mapping
             )
             self.sliding_window_size = model_runner.sliding_window_size
-        # DSA graph replay binds per-request KV lengths from the device-exact
-        # metadata.seq_lens refresh (no seq_lens_cpu D2H needed), and the
-        # block-table width comes from the async scalar bound (seq_lens_cpu_bound).
-        # Opt DSA out of the per-round CPU mirror; hybrid-SWA backends keep it
-        # (their SWA mask/page tables are built from host values).
-        self.needs_cpu_seq_lens = self.is_hybrid_swa or not is_deepseek_dsa(
-            model_runner.model_config.hf_config
-        )
+        # MAIN SWITCH (disabled for baseline A/B): DSA graph replay binds
+        # per-request KV lengths from the device-exact metadata.seq_lens refresh
+        # (no seq_lens_cpu D2H needed), and the block-table width comes from
+        # the async scalar bound (seq_lens_cpu_bound). With the flag removed,
+        # decide_needs_cpu_seq_lens falls back to the base-class default True:
+        # the per-round .cpu() mirror and all legacy consumers stay in effect
+        # (the feature branch becomes dead code — baseline behavior).
+        # self.needs_cpu_seq_lens = self.is_hybrid_swa or not is_deepseek_dsa(
+        #     model_runner.model_config.hf_config
+        # )
         _seq_bound_dbg(
-            f"backend init: needs_cpu_seq_lens={self.needs_cpu_seq_lens} "
+            f"backend init: needs_cpu_seq_lens=UNSET (baseline legacy mirror) "
             f"(model={getattr(model_runner.model_config.hf_config, 'model_type', '?')}, "
             f"hybrid_swa={self.is_hybrid_swa})",
             always=True,
