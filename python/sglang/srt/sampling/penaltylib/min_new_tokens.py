@@ -54,9 +54,13 @@ class BatchedMinNewTokensPenalizer(_BatchedPenalizer):
             padding_value=self.orchestrator.vocab_size,
         )
         if pin_memory:
+            # BISECT(pin-off): route through the global switch to test the
+            # suspected temp-pinned lifetime race on NPU.
+            pin_memory = is_pin_memory_available(self.orchestrator.device)
+        if pin_memory:
             padded_stop_token_ids_cpu = padded_stop_token_ids_cpu.pin_memory()
         padded_stop_token_ids = padded_stop_token_ids_cpu.to(
-            self.orchestrator.device, non_blocking=True
+            self.orchestrator.device, non_blocking=pin_memory
         )
         self.stop_token_penalties = torch.zeros(
             size=(len(self.orchestrator.reqs()), self.orchestrator.vocab_size + 1),

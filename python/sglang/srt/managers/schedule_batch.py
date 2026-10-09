@@ -2190,14 +2190,11 @@ def set_mamba_track_indices_from_reqs(
         i for i, req in enumerate(batch.reqs) if req.kv.mamba_next_track_idx is None
     ]
     batch.mamba_track_buffer_indices = list(track_positions)
+    _pin = is_pin_memory_available(all_buffers.device)
     idx = (
-        torch.tensor(
-            track_positions,
-            dtype=torch.int64,
-            pin_memory=True,
-        )
+        torch.tensor(track_positions, dtype=torch.int64, pin_memory=_pin)
         .unsqueeze(1)
-        .to(device=all_buffers.device, non_blocking=True)
+        .to(device=all_buffers.device, non_blocking=_pin)
     )
     batch.mamba_track_indices = (
         torch.gather(all_buffers, 1, idx).squeeze(1).to(torch.int64)
@@ -3618,9 +3615,13 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                 req.decode_batch_idx for req in self.reqs
             ]
             # async H2D
-            self.mamba_track_mask = track_mask_cpu.pin_memory().to(
-                device=self.device, non_blocking=True
-            )
+            _pin = is_pin_memory_available(self.device)
+            if _pin:
+                self.mamba_track_mask = track_mask_cpu.pin_memory().to(
+                    device=self.device, non_blocking=True
+                )
+            else:
+                self.mamba_track_mask = track_mask_cpu.to(device=self.device)
 
     def filter_batch(
         self,

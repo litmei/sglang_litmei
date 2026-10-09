@@ -581,6 +581,12 @@ def get_available_gpu_memory(
 
 
 def is_pin_memory_available(device=None) -> bool:
+    # BISECT(pin-off): NPU temp-pinned + async-H2D lifetime race suspected
+    # (corrupted gather indices in verify_tree_greedy). Disable ALL pinned
+    # staging on NPU; pageable H2D synchronizes the stream first (slow but
+    # safe). Revert once the race is confirmed.
+    if is_npu():
+        return False
     return current_platform.is_pin_memory_available(device)
 
 
