@@ -1,7 +1,7 @@
 import contextlib
 import logging
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 
@@ -596,7 +596,18 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                 f"avail mem={after_mem:.2f} GB.",
             )
 
-    def draft(self, batch: ScheduleBatch, *, with_topology: bool = False):
+    def _run_draft(
+        self, batch: ScheduleBatch
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """Run the draft decode forward for ``batch`` (graph replay or eager).
+
+        Returns (parent_list, top_scores_index, draft_tokens, draft_probs) in
+        the exact layout ``build_eagle_verify_input`` consumes.
+
+        Shared by draft() and draft_prefetch(): the prefetch pass replays the
+        next round's draft on a disguised batch, so it must execute this same
+        path bit-for-bit.
+        """
         draft_input: EagleDraftInput = batch.spec_info
         forward_batch, can_run_decode_cuda_graph = prepare_for_draft(
             draft_input,
@@ -651,6 +662,13 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                     self.draft_forward(forward_batch)
                 )
 
+        return parent_list, top_scores_index, draft_tokens, draft_probs
+
+    def draft(self, batch: ScheduleBatch, *, with_topology: bool = False):
+        draft_input: EagleDraftInput = batch.spec_info
+        parent_list, top_scores_index, draft_tokens, draft_probs = self._run_draft(
+            batch
+        )
         verify_input = build_eagle_verify_input(
             batch,
             draft_input,
@@ -885,18 +903,16 @@ class EagleDraftWorker(EagleDraftWorkerBase):
 
     def _pad_topk_for_draft_prefetch(self, topk_p, topk_index):
         """Pad the prefill-side topk to the draft-prefetch candidate width
-        (steps * topk): every decode round concatenates [seed | steps-1
-        predictions] into a buffer of exactly that width, and the overlap
-        relay buffer's shape is fixed by this first (prefill) stash.
+        (steps * topk): the round-1 verify chain reuses the prefill seed, and
+        the overlap relay buffer's shape is fixed by this first (prefill) stash.
 
-        The padded slots REPEAT the last (for topk=1: the only) candidate
-        instead of zero-padding: the first decode round then verifies a
-        chain of the real prefill token -- a valid chain, of which the
-        target may accept any prefix -- rather than one built on an
-        arbitrary token id 0. Also maps the prefill seed to the TARGET id
-        space here: the concatenated buffer is consumed directly by
-        prepare_verify_input_for_draft_prefetch, which skips
-        draft_forward's hot_token_id mapping.
+        The padded slots REPEAT the seed instead of zero-padding: the first
+        decode round then verifies a chain of the real prefill token -- a
+        valid chain, of which the target accepts any prefix -- rather than
+        one built on an arbitrary token id 0. Also maps the seed to the
+        TARGET id space here: prepare_verify_input_for_draft_prefetch
+        consumes the buffer directly, skipping draft_forward's hot_token_id
+        mapping.
         """
         # [bs, topk] -> [bs, num_steps * topk]  (topk=1: [bs,1] -> [bs,N])
         if self.enable_draft_prefetch and self.speculative_num_steps > 1:
@@ -916,33 +932,25 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         self, batch: ScheduleBatch
     ) -> EagleVerifyInput:
         """Draft-prefetch decode entry: build the EagleVerifyInput from the
-        pre-concatenated topk without running the draft model. The draft GPU
-        work already happened inside the previous round's draft_prefetch."""
+        chain draft_prefetch stashed into batch.spec_info, without running the
+        draft model.
+
+        The stashed topk_index is already the position-ordered (bs, num_steps)
+        chain that draft_forward's topk=1 path would have returned (seed at
+        column 0), so the verify-input assembly reuses the same static chain
+        topology draft_forward uses for topk=1 instead of re-deriving it.
+        """
         assert self.speculative_num_steps > 1, (
             "draft-prefetch requires num_steps > 1; _check_draft_prefetch "
             "enforces this at startup"
         )
         draft_input: EagleDraftInput = batch.spec_info
-        topk_p = draft_input.topk_p
-        topk_index = draft_input.topk_index
-        parent_list = self._topk1_parents_prealloc[: topk_p.shape[0]]
-
-        # The buffer width is exactly num_draft_tokens - 1 (draft_prefetch
-        # concatenates [seed | N-1 predictions]; prefill pads to the same
-        # width), so this topk selects EVERY candidate. The sort restores
-        # chain order: topk returns score-ranked indices (all 1.0 in steady
-        # state, tie order arbitrary), while parent_list assumes position
-        # order.
-        top_scores = torch.topk(topk_p, self.speculative_num_draft_tokens - 1, dim=-1)
-        top_scores_index = torch.sort(top_scores.indices).values
-        maybe_detect_oob(
-            top_scores_index,
-            0,
-            topk_index.shape[1],
-            "prepare_verify_input_for_draft_prefetch: top_scores_index OOB "
-            "for gather on topk_index",
-        )
-        draft_tokens = torch.gather(topk_index, index=top_scores_index, dim=1)
+        bs = draft_input.topk_index.shape[0]
+        parent_list = self._topk1_parents_prealloc[:bs]
+        top_scores_index = self._topk1_score_indices_prealloc[:bs]
+        # Same chain layout draft_forward's topk=1 path returns; consumed by
+        # build_eagle_verify_input's chain fast path as-is.
+        draft_tokens = draft_input.topk_index
 
         return build_eagle_verify_input(
             batch,
@@ -965,8 +973,9 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         batch_output: GenerationBatchResult,
     ) -> None:
         """Draft-prefetch: pre-run the next round's draft right after this round's
-        draft_extend, and pre-concatenate its per-step topk into
-        batch_output.next_draft_input.
+        draft_extend, and stash the resulting chain into
+        batch_output.next_draft_input; the next round's prepare consumes it
+        without re-running the draft model.
 
         Runs on the forward stream, back-to-back with draft_extend, so the GPU
         never idles waiting for the scheduler to re-dispatch the draft. No new
@@ -1028,65 +1037,22 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                     bs, dtype=torch.int64, device=batch.device
                 )
 
-            forward_batch, can_run_decode_cuda_graph = prepare_for_draft(
-                next_draft_input,
-                self.req_to_token_pool,
-                batch,
-                self.cuda_graph_runner,
-                self.draft_runner,
-                self.topk,
-                self.speculative_num_steps,
-            )
-
-            if (
-                can_run_decode_cuda_graph
-                and not batch.forward_mode.is_idle()
-                and self.seed_dsa_topk_from_draft_extend
-                and next_draft_input.dsa_topk_indices is None
-            ):
-                can_run_decode_cuda_graph = False
-
             with spec_stage_span("draft_prefetch"):
-                if can_run_decode_cuda_graph:
-                    _parent_list, _tsi, draft_tokens, _draft_probs = (
-                        self.cuda_graph_runner.execute(forward_batch)
-                    )
-                else:
-                    if not batch.forward_mode.is_idle():
-                        self.draft_attn_backend.init_forward_metadata(forward_batch)
-                        forward_batch.mark_forward_metadata_ready()
-                    _parent_list, _tsi, draft_tokens, _draft_probs = self.draft_forward(
-                        forward_batch
-                    )
+                _parent_list, _tsi, draft_tokens, _draft_probs = self._run_draft(
+                    batch
+                )
 
             if not batch.forward_mode.is_idle():
-                # topk=1: draft_tokens is already the full chain
-                # [seed, t1, ..., t(N-1)] in TARGET id space -- the seed
-                # column is mapped inside draft_forward -- and is already
-                # num_draft_tokens - 1 wide; the next round consumes it via
-                # prepare_verify_input_for_draft_prefetch without re-running
-                # the draft model. clone() detaches it from the graph
-                # runner's static output buffer, which the next replay
-                # overwrites. Intentional cross-round mutation:
-                # next_draft_input flows to the next round via batch_output
-                # and is NOT restored by the finally block below.
+                # draft_tokens is the position-ordered chain ([seed, t1, ...])
+                # in TARGET id space -- draft_forward maps the seed column --
+                # in exactly the layout the next round's
+                # prepare_verify_input_for_draft_prefetch consumes directly.
+                # clone() detaches it from the graph runner's static output
+                # buffer, which the next replay overwrites. Intentional
+                # cross-round mutation: next_draft_input flows to the next
+                # round via batch_output and is NOT restored by the finally
+                # block below.
                 next_draft_input.topk_index = draft_tokens.clone()
-
-                # Greedy chain has no real branch scores; 1.0 matches the
-                # draft_extend seed convention. Keeps the seed's
-                # probability at slot 0 and pads the width-1 seed p to the
-                # chain width.
-                next_draft_input.topk_p = torch.cat(
-                    [
-                        next_draft_input.topk_p,
-                        torch.ones(
-                            (bs, self.speculative_num_steps - 1),
-                            dtype=next_draft_input.topk_p.dtype,
-                            device=next_draft_input.topk_p.device,
-                        ),
-                    ],
-                    dim=1,
-                )
         finally:
             (
                 batch.forward_mode,
