@@ -966,8 +966,7 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         input and restores them all afterwards.
         """
         assert self.speculative_num_steps > 1, (
-            "draft_prefetch requires num_steps > 1; _check_draft_prefetch "
-            "enforces this at startup"
+            "draft_prefetch requires num_steps > 1"
         )
         bs = batch.seq_lens.shape[0]
         saved_state = (
@@ -1001,6 +1000,12 @@ class EagleDraftWorker(EagleDraftWorkerBase):
                 ):
                     # Replay paths that still read exact seq_lens_cpu sync here to stay
                     # correct, at a higher cost than not using draft_prefetch.
+                    if not getattr(self, "_warned_draft_prefetch_sync", False):
+                        self._warned_draft_prefetch_sync = True
+                        logger.warning(
+                            "draft_prefetch does not suit this model: draft graph replay "
+                            "needs exact seq_lens_cpu. Consider disabling --enable-draft-prefetch."
+                        )
                     batch.seq_lens_cpu = new_seq_lens.to("cpu")
                     batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
 
