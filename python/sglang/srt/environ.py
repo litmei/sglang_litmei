@@ -329,6 +329,13 @@ class Envs:
     # hand-outs, and every block-table width bound/fallback taken in
     # AscendAttnBackend._block_table_max_len.
     SGLANG_DEBUG_SEQ_LENS_BOUND = EnvBool(False)
+    # Manual switch for the DSA seq-lens-bound feature (Ascend NPU):
+    #   0 = off (baseline: per-round seq_lens_cpu D2H, legacy consumers)
+    #   1 = on  (needs_cpu_seq_lens=False for DSA, async scalar width bound,
+    #            device-exact per-request KV lengths)
+    #   2 = isolation test (keep the legacy D2H mirror but force the new
+    #            scalar-bound / device-exact consumer path)
+    SGLANG_NPU_SEQ_LENS_BOUND_MODE = EnvInt(2)
     HF_HUB_DISABLE_XET = EnvBool(False)
     # In seconds. If a warmup forward batch takes longer than this, the server will crash to prevent hanging.
     # Recommend to increase warmup timeout to 1800 to accommodate some kernel JIT precache e.g. deep gemm

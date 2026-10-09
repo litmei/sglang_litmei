@@ -311,11 +311,14 @@ class FutureMap:
         # carries the tiny async max-seq-len scalar mirror below (one 1-elem
         # device reduction per publish + one 8-byte D2H per round, consumed
         # via Event.query() — the host never blocks).
-        # EXPERIMENT: run the scalar mirror unconditionally on NPU (decoupled from
-        # needs_cpu_seq_lens) so the AscendBackend can force the scalar-bound
-        # consumer path while the legacy seq_lens_cpu D2H mirror stays active.
-        # Final form should re-bind this to `not needs_cpu_seq_lens`.
-        self.use_seq_len_max_scalar = _is_npu
+        # Manual switch (SGLANG_NPU_SEQ_LENS_BOUND_MODE, see environ.py):
+        # mode 0 = baseline (mirror off); modes 1/2 = scalar mirror on. Mode 2
+        # keeps the legacy per-round seq_lens_cpu D2H (needs_cpu_seq_lens=True)
+        # while the AscendBackend forces the scalar-bound consumer path — perf
+        # isolation for the needs_cpu_seq_lens=False suspicion.
+        self.use_seq_len_max_scalar = (
+            _is_npu and envs.SGLANG_NPU_SEQ_LENS_BOUND_MODE.get() >= 1
+        )
         _max_scalar_dbg(
             f"FutureMap init: use_seq_len_max_scalar={self.use_seq_len_max_scalar}, "
             f"needs_cpu_seq_lens={needs_cpu_seq_lens}",

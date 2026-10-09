@@ -439,21 +439,21 @@ class AscendAttnBackend(AttentionBackend):
                 model_runner.token_to_kv_pool.full_to_swa_index_mapping
             )
             self.sliding_window_size = model_runner.sliding_window_size
-        # EXPERIMENT: keep the legacy per-round seq_lens_cpu D2H mirror
-        # (needs_cpu_seq_lens stays True via the base-class default) while
-        # forcing the new scalar-bound / device-exact consumer path below.
-        # Isolates whether a perf regression comes from needs_cpu_seq_lens=False
-        # side effects (some unpatched None consumer degrading to full-width)
-        # or from the new width/per-request consumers themselves.
-        # self.needs_cpu_seq_lens = self.is_hybrid_swa or not is_deepseek_dsa(
-        #     model_runner.model_config.hf_config
-        # )
-        self.use_scalar_bound = not self.is_hybrid_swa and is_deepseek_dsa(
-            model_runner.model_config.hf_config
+        # SGLANG_NPU_SEQ_LENS_BOUND_MODE manual switch for the DSA seq-lens-bound
+        # feature (see environ.py): 0 = baseline, 1 = full feature (DSA opts
+        # out of the CPU mirror), 2 = keep the legacy mirror but force the new
+        # scalar-bound / device-exact consumer path (isolation test).
+        _bound_mode = envs.SGLANG_NPU_SEQ_LENS_BOUND_MODE.get()
+        _dsa_model = is_deepseek_dsa(model_runner.model_config.hf_config)
+        self.use_scalar_bound = (
+            _bound_mode >= 1 and not self.is_hybrid_swa and _dsa_model
         )
+        if _bound_mode == 1 and self.use_scalar_bound:
+            self.needs_cpu_seq_lens = False
         _seq_bound_dbg(
-            f"backend init: needs_cpu_seq_lens=UNSET (legacy mirror kept) "
+            f"backend init: bound_mode={_bound_mode} "
             f"use_scalar_bound={self.use_scalar_bound} "
+            f"needs_cpu_seq_lens={getattr(self, 'needs_cpu_seq_lens', 'unset(True)')} "
             f"(model={getattr(model_runner.model_config.hf_config, 'model_type', '?')}, "
             f"hybrid_swa={self.is_hybrid_swa})",
             always=True,
