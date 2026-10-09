@@ -329,14 +329,24 @@ class NPUGraphRunner(DecodeCudaGraphRunner):
 
                 # The pre-planned path skipped init_forward_metadata_out_graph;
                 # refresh attention metadata so replay reads correct KV pages.
-                self.buffers.seq_lens[: self.raw_bs].copy_(
-                    forward_batch.seq_lens_cpu[: self.raw_bs]
-                )
+                # needs_cpu_seq_lens=False backends (DSA) carry no host mirror —
+                # fall back to the device tensor (exact, no sync).
+                if forward_batch.seq_lens_cpu is not None:
+                    self.buffers.seq_lens[: self.raw_bs].copy_(
+                        forward_batch.seq_lens_cpu[: self.raw_bs]
+                    )
+                    self.buffers.seq_lens_cpu[: self.raw_bs].copy_(
+                        forward_batch.seq_lens_cpu[: self.raw_bs]
+                    )
+                else:
+                    self.buffers.seq_lens[: self.raw_bs].copy_(
+                        forward_batch.seq_lens[: self.raw_bs]
+                    )
+                    self.buffers.seq_lens_cpu[: self.raw_bs].copy_(
+                        forward_batch.seq_lens[: self.raw_bs]
+                    )
                 self.buffers.seq_lens[self.raw_bs : self.bs].fill_(
                     self.seq_len_fill_value
-                )
-                self.buffers.seq_lens_cpu[: self.raw_bs].copy_(
-                    forward_batch.seq_lens_cpu[: self.raw_bs]
                 )
                 self.buffers.seq_lens_cpu[self.raw_bs : self.bs].fill_(
                     self.seq_len_fill_value

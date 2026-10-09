@@ -2485,6 +2485,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
     # === Host metadata crossing to ForwardBatch (CPU lists / mirrors) ===
     seq_lens_cpu: torch.Tensor = None  # shape: [b], int64
+    # DSA no-CPU-mirror path: async scalar upper bound of the committed max
+    # seq len (see FutureMap max_seq_len mirror); used ONLY to clip the
+    # block-table width. None means "not ready yet" -> full-width fallback.
+    seq_lens_cpu_bound: Optional[int] = None
 
     # For multimodal inputs
     multimodal_inputs: Optional[List] = None

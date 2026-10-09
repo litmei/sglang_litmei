@@ -10,7 +10,10 @@ from sgl_kernel_npu.attention.sinks_attention import (
     attention_sinks_triton,
 )
 
-from sglang.srt.configs.model_config import AttentionArch
+from sglang.srt.configs.model_config import (
+    AttentionArch,
+    is_deepseek_dsa,
+)
 from sglang.srt.dllm.config import DllmConfig
 from sglang.srt.hardware_backend.npu.attention.ascend_torch_native_backend import (
     AscendTorchNativeAttnBackend,
@@ -421,6 +424,14 @@ class AscendAttnBackend(AttentionBackend):
                 model_runner.token_to_kv_pool.full_to_swa_index_mapping
             )
             self.sliding_window_size = model_runner.sliding_window_size
+        # DSA graph replay binds per-request KV lengths from the device-exact
+        # metadata.seq_lens refresh (no seq_lens_cpu D2H needed), and the
+        # block-table width comes from the async scalar bound (seq_lens_cpu_bound).
+        # Opt DSA out of the per-round CPU mirror; hybrid-SWA backends keep it
+        # (their SWA mask/page tables are built from host values).
+        self.needs_cpu_seq_lens = self.is_hybrid_swa or not is_deepseek_dsa(
+            model_runner.model_config.hf_config
+        )
         self.use_sliding_window_kv_pool = (
             isinstance(self.token_to_kv_pool, SWAKVPool)
             and self.token_to_kv_pool.swa_layer_nums > 0
@@ -527,6 +538,33 @@ class AscendAttnBackend(AttentionBackend):
             spec_info=forward_batch.spec_info,
             out_cache_loc=forward_batch.out_cache_loc,
             origin_out_cache_loc=getattr(forward_batch, "origin_out_cache_loc", None),
+            seq_lens_cpu_bound=getattr(forward_batch, "seq_lens_cpu_bound", None),
+        )
+
+    def _block_table_max_len(self, bound: Optional[int]) -> int:
+        """Host upper bound for the block-table width with no CPU mirror.
+
+        DSA (needs_cpu_seq_lens=False) keeps per-request KV lengths exact on
+        the device; only the table WIDTH needs a host scalar. The async
+        scalar mirror (forward_batch.seq_lens_cpu_bound) lags one publish
+        round, so add a constant margin covering the worst one-round growth
+        (speculative_num_draft_tokens + 1) plus this round's own draft block.
+        It is never used as a per-request length, so a stale value can only
+        widen the table by a page, never read past written cells. None
+        (bootstrap rounds) falls back to the full row: correct, just slower
+        for the first couple of rounds.
+        """
+        if bound is None:
+            return min(
+                self.req_to_token.shape[1],
+                self.max_context_len + self.page_size - 1,
+            )
+        spec_tokens = int(self.speculative_num_draft_tokens or 0)
+        margin = 2 * spec_tokens + 2
+        return min(
+            bound + margin,
+            self.req_to_token.shape[1],
+            self.max_context_len + self.page_size - 1,
         )
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
@@ -540,7 +578,11 @@ class AscendAttnBackend(AttentionBackend):
             ):
                 # dflash_worker_v2 already publishes seq_lens_cpu as prefix +
                 # one verify block, which already covers the draft block.
-                seq_lens_max = forward_batch.seq_lens_cpu.max().item()
+                seq_lens_max = (
+                    forward_batch.seq_lens_cpu.max().item()
+                    if forward_batch.seq_lens_cpu is not None
+                    else self._block_table_max_len(forward_batch.seq_lens_cpu_bound)
+                )
             else:
                 # Overlap scheduling can publish the CPU sequence length one
                 # step ahead of the device tensor. FIA consumes seq_lens_cpu
@@ -550,6 +592,8 @@ class AscendAttnBackend(AttentionBackend):
                 spec_tokens_per_req = int(forward_batch.spec_info.draft_token_num)
                 seq_lens_max = (
                     forward_batch.seq_lens_cpu.max().item() + spec_tokens_per_req
+                    if forward_batch.seq_lens_cpu is not None
+                    else self._block_table_max_len(forward_batch.seq_lens_cpu_bound)
                 )
         elif (
             forward_batch.forward_mode.is_decode_or_idle()
@@ -590,7 +634,14 @@ class AscendAttnBackend(AttentionBackend):
                 self.device
             ).int()
 
-        self.forward_metadata.seq_lens_cpu_int = forward_batch.seq_lens_cpu.int()
+        if forward_batch.seq_lens_cpu is not None:
+            self.forward_metadata.seq_lens_cpu_int = forward_batch.seq_lens_cpu.int()
+        else:
+            # DSA no-CPU-mirror path: per-request KV lengths stay exact on the
+            # device (forward_batch.seq_lens is the pool-indexed relay publish,
+            # gathered without sync); the sparse-attention consumers below pass
+            # this to torch_npu ops that accept device tensors.
+            self.forward_metadata.seq_lens_cpu_int = forward_batch.seq_lens.int()
         # In graph mode (see _init_cuda_graph_metadata) seq_lens_cpu_int stays
         # None so forward_mtp binds seq_lens_cpu_list instead: graph.update can
         # only rebind the Host-side IntArray when captured as a Python list.
@@ -907,6 +958,7 @@ class AscendAttnBackend(AttentionBackend):
         spec_info: Optional[SpecInput],
         out_cache_loc: Optional[torch.Tensor] = None,
         origin_out_cache_loc: Optional[torch.Tensor] = None,
+        seq_lens_cpu_bound: Optional[int] = None,
     ):
         """Shared capture+replay body for the cuda-graph init path.
 
@@ -924,14 +976,23 @@ class AscendAttnBackend(AttentionBackend):
         # Compute the host-side KV lengths visible to this attention step. Target
         # verify adds the draft block except for DFlash, whose seq_lens_cpu already
         # includes it; speculative decode adds tokens through the current draft step.
-        attention_kv_lens_cpu = seq_lens_cpu[:bs].int()
-        if forward_mode.is_target_verify() and not _is_dflash_verify(spec_info):
-            attention_kv_lens_cpu = (
-                attention_kv_lens_cpu + self.speculative_num_draft_tokens
-            )
-        elif forward_mode.is_decode_or_idle() and spec_info is not None:
-            attention_kv_lens_cpu = attention_kv_lens_cpu + self.speculative_step_id + 1
-        max_len = attention_kv_lens_cpu.max().item()
+        if seq_lens_cpu is not None:
+            attention_kv_lens_cpu = seq_lens_cpu[:bs].int()
+            if forward_mode.is_target_verify() and not _is_dflash_verify(spec_info):
+                attention_kv_lens_cpu = (
+                    attention_kv_lens_cpu + self.speculative_num_draft_tokens
+                )
+            elif forward_mode.is_decode_or_idle() and spec_info is not None:
+                attention_kv_lens_cpu = (
+                    attention_kv_lens_cpu + self.speculative_step_id + 1
+                )
+            max_len = attention_kv_lens_cpu.max().item()
+        else:
+            # DSA no-CPU-mirror path: the width comes from the async scalar
+            # upper bound + constant margin (see _block_table_max_len); the
+            # per-request lengths below are refreshed exactly on the device
+            # (metadata.seq_lens ± draft/step), never from a host mirror.
+            max_len = self._block_table_max_len(seq_lens_cpu_bound)
         max_seq_pages = (max_len + self.page_size - 1) // self.page_size
 
         if self.is_hybrid_swa:
@@ -991,7 +1052,12 @@ class AscendAttnBackend(AttentionBackend):
             # DCP decode/speculative paths use rank-local KV lengths and a block
             # table whose stride is page_size * dcp_world_size. Draft attention
             # uses the ordinary full-KV metadata above instead.
-            if forward_mode.is_target_verify():
+            # NOTE: DSA no-CPU-mirror (seq_lens_cpu is None) + DCP is not
+            # supported yet — DCP lengths are data-dependent host values; the
+            # captured tables stay stale instead of forcing a sync here.
+            if seq_lens_cpu is None:
+                pass
+            elif forward_mode.is_target_verify():
                 (
                     metadata.dcp_spec_seq_lens_cpu_int,
                     dcp_spec_block_tables,
@@ -3438,6 +3504,12 @@ class AscendAttnMultiStepDraftBackend:
             self.attn_backends.append(
                 AscendAttnBackend(model_runner, speculative_step_id=step_id)
             )
+        # decide_needs_cpu_seq_lens ORs over this wrapper (spec_v2_attn_backends);
+        # propagate the inner backends' DSA opt-out so the FutureMap skips the
+        # per-round seq_lens_cpu D2H for the whole spec path.
+        self.needs_cpu_seq_lens = any(
+            b.needs_cpu_seq_lens for b in self.attn_backends
+        )
 
     def common_template(self, forward_batch: ForwardBatch, call_fn: int):
         assert forward_batch.spec_info is not None

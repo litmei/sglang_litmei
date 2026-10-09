@@ -185,6 +185,8 @@ def build_replay_fb_view(
         seq_lens_cpu=(
             None if forward_batch.seq_lens_cpu is None else buffers.seq_lens_cpu[:bs]
         ),
+        # DSA no-CPU-mirror width bound (block-table clipping upper bound).
+        seq_lens_cpu_bound=getattr(forward_batch, "seq_lens_cpu_bound", None),
         num_padding=bs - raw_bs,
         encoder_lens=buffers.encoder_lens[:bs] if is_encoder_decoder else None,
         out_cache_loc=getattr(forward_batch, "out_cache_loc", None),

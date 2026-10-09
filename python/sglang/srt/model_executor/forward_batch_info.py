@@ -598,6 +598,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # === Borrowed from ScheduleBatch: host metadata (CPU lists / mirrors) ===
     # Optional seq_lens on cpu (CPU mirror of seq_lens)
     seq_lens_cpu: Optional[torch.Tensor] = None
+    # Async scalar upper bound of the committed max seq len for the DSA
+    # no-CPU-mirror path; clips block-table width only (see AscendAttnBackend).
+    seq_lens_cpu_bound: Optional[int] = None
     # Fresh only for non-speculative extend; speculative modes use device slots.
     req_pool_indices_cpu: Optional[torch.Tensor] = None
 
@@ -996,6 +999,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             seq_lens_sum=batch.seq_lens_sum,
             # Inputs aliased by reference from ScheduleBatch
             seq_lens_cpu=seq_lens_cpu,
+            seq_lens_cpu_bound=getattr(batch, "seq_lens_cpu_bound", None),
             req_pool_indices_cpu=(
                 getattr(batch, "req_pool_indices_cpu", None)
                 if batch.forward_mode.is_extend_without_speculative()

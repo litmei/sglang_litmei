@@ -269,6 +269,9 @@ class FutureMap:
         self.req_pool_size = req_to_token_pool.req_to_token.shape[0]
         # Kept for the mixed-tail late binding (reserved-slot gather).
         self.req_to_token = req_to_token_pool.req_to_token
+        # Host-side per-slot ownership token (bumped on alloc); the async
+        # max-seq-len scalar mirror uses it to detect slot reuse (DSA path).
+        self.req_generation = req_to_token_pool.req_generation
 
         if _DEBUG_ASSERT:
             # Poisoned init: every row must be written before its first gather.
@@ -289,7 +292,21 @@ class FutureMap:
         # D2H pulls (gated only on publish, off the schedule stream). CUDA-only:
         # recovers occupancy lost to the WAR barrier (also CUDA-only); other
         # platforms have no barrier and use the plain .cpu() bootstrap path.
+        # NPU DSA (needs_cpu_seq_lens=False) needs the private stream too: it
+        # carries the tiny async max-seq-len scalar mirror below (one 1-elem
+        # device reduction per publish + one 8-byte D2H per round, consumed
+        # via Event.query() — the host never blocks).
+        self.use_seq_len_max_scalar = _is_npu and not needs_cpu_seq_lens
         if _is_cuda:
+            self.new_seq_lens_cpu_pinned = torch.empty(
+                (self.req_pool_size,), dtype=torch.int64, pin_memory=True
+            )
+            self.fwd_prepare_d2h_stream = torch.get_device_module(self.device).Stream()
+        elif self.use_seq_len_max_scalar:
+            # NPU DSA: the max-seq-len scalar mirror needs the private stream
+            # (for its async D2H). Keep the full pinned buffer too: mixed
+            # prefill+decode batches route resolve_mixed_spec_tails through
+            # the private-stream path (with a sync, fine on prefill turns).
             self.new_seq_lens_cpu_pinned = torch.empty(
                 (self.req_pool_size,), dtype=torch.int64, pin_memory=True
             )
@@ -297,6 +314,37 @@ class FutureMap:
         else:
             self.new_seq_lens_cpu_pinned = None
             self.fwd_prepare_d2h_stream = None
+        if self.use_seq_len_max_scalar:
+            self.max_seq_len_buf = torch.zeros(
+                1, dtype=torch.int64, device=self.device
+            )
+            self.max_seq_len_pinned = [
+                torch.zeros(1, dtype=torch.int64, pin_memory=True) for _ in range(2)
+            ]
+            self.max_seq_len_events = [
+                torch.get_device_module(self.device).Event() for _ in range(2)
+            ]
+            self.max_seq_len_kicked = [False, False]
+            # Validity bookkeeping per buffer (mirrors the full seq_lens_cpu
+            # mirror): the snapshot may be served only if (a) no publish
+            # happened after it was kicked or newer (one-round lag exactly),
+            # (b) the batch composition is unchanged, and (c) no pool slot was
+            # reallocated. Any violation -> None (full-width fallback).
+            self._max_seq_len_pub_gen = 0
+            self.max_seq_len_gen = [0, 0]  # publish gen at kick time
+            self.max_seq_len_ids = [None, None]
+            self.max_seq_len_gens = [None, None]
+            self._max_seq_len_cur = 0
+        else:
+            self.max_seq_len_buf = None
+            self.max_seq_len_pinned = None
+            self.max_seq_len_events = None
+            self.max_seq_len_kicked = None
+            self.max_seq_len_gen = None
+            self.max_seq_len_ids = None
+            self.max_seq_len_gens = None
+            self._max_seq_len_pub_gen = 0
+            self._max_seq_len_cur = 0
         self.need_topk = False
         self.need_hidden_states = False
         self.topk_p_buf = None
@@ -510,6 +558,61 @@ class FutureMap:
             int(x) for x in fresh_cpu.tolist()
         ]
 
+    def _resolve_max_seq_len_scalar(self, batch: ScheduleBatch) -> None:
+        """Hand out the async scalar upper bound of the committed max seq len.
+
+        Consume: the snapshot kicked at the PREVIOUS resolve, only after its
+        event fired (Event.query(), never blocks). It holds the publish from
+        right before that kick — exactly one round lagging. Validity guards
+        (publish generation, batch composition, slot reallocation) mirror the
+        full seq_lens_cpu mirror: any violation hands out None and consumers
+        fall back to the full block-table width — correct, just slower.
+        Save: kick a private-stream D2H of the current publish's max into the
+        other buffer, gated on the current publish event.
+
+        Consumers must treat a served value as an UPPER BOUND with a constant
+        margin (max one-round growth = speculative_num_draft_tokens + 1); it
+        is never used as a per-request length, so nothing can read past the
+        written region of req_to_token.
+        """
+        if self.publish_ready is None:
+            batch.seq_lens_cpu_bound = None
+            return
+        cur = self._max_seq_len_cur
+        prev = cur ^ 1
+        ids = batch.req_pool_indices_cpu
+        ready = (
+            self.max_seq_len_kicked[prev]
+            and self.max_seq_len_events[prev].query()
+            and self.max_seq_len_gen[prev] + 1 == self._max_seq_len_pub_gen
+            and ids is not None
+            and self.max_seq_len_ids[prev] is not None
+            and torch.equal(self.max_seq_len_ids[prev], ids)
+            and bool(
+                torch.equal(
+                    self.max_seq_len_gens[prev][ids], self.req_generation[ids]
+                )
+            )
+        )
+        if ready:
+            batch.seq_lens_cpu_bound = int(self.max_seq_len_pinned[prev][0].item())
+        else:
+            batch.seq_lens_cpu_bound = None
+        self.fwd_prepare_d2h_stream.wait_event(self.publish_ready)
+        with torch.get_device_module(self.device).stream(
+            self.fwd_prepare_d2h_stream
+        ):
+            self.max_seq_len_pinned[cur].copy_(
+                self.max_seq_len_buf, non_blocking=True
+            )
+        self.max_seq_len_events[cur].record(self.fwd_prepare_d2h_stream)
+        self.max_seq_len_kicked[cur] = True
+        self.max_seq_len_gen[cur] = self._max_seq_len_pub_gen
+        if ids is not None:
+            self.max_seq_len_ids[cur] = ids.clone()
+            self.max_seq_len_gens[cur] = self.req_generation[ids].clone()
+        self._max_seq_len_cur = prev
+
     def resolve_seq_lens_cpu(self, batch: ScheduleBatch) -> None:
         # Lazy pull from new_seq_lens_buf for spec_v2 (accept_lens not known to
         # schedule). The CPU mirror is gated by needs_cpu_seq_lens; backends that
@@ -537,6 +640,8 @@ class FutureMap:
         if not self.needs_cpu_seq_lens:
             # GPU gather above is kept (SB.seq_lens must advance each verify);
             # skip the .cpu() D2H. Downstream takes the GPU-only path.
+            if self.use_seq_len_max_scalar:
+                self._resolve_max_seq_len_scalar(batch)
             batch.seq_lens_cpu = None
             batch.seq_lens_sum = None
             if _DEBUG_ASSERT:
@@ -587,6 +692,13 @@ class FutureMap:
                 self.publish_ready = torch.get_device_module(self.device).Event()
             self.publish_ready.record()
             self._publish_fresh = True
+        if self.use_seq_len_max_scalar:
+            # Tiny device reduction: keep only the batch max for the async
+            # host scalar mirror (consumed by resolve_seq_lens_cpu).
+            self.max_seq_len_buf[0].copy_(
+                self.new_seq_lens_buf[indices].max().view(1)
+            )
+            self._max_seq_len_pub_gen += 1
         if publish_confidence:
             self.confidence_relay.issue_ring_copy(
                 stream=self.fwd_prepare_d2h_stream,
