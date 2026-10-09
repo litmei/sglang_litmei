@@ -49,7 +49,7 @@ import types
 import uuid
 import warnings
 from array import array
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
@@ -591,6 +591,12 @@ def async_h2d(args: List, *, dtype: torch.dtype, device: torch.device) -> torch.
     return torch.tensor(args, dtype=dtype, pin_memory=pin).to(device, non_blocking=pin)
 
 
+# NPU: host sources of in-flight pinned H2D copies, kept until the stream has
+# passed the copy. FIFO reap is valid because copies on a stream complete in
+# order.
+_PENDING_H2D_SOURCES: deque = deque()
+
+
 def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
     """Safe temp host->device copy of a small batch-publish tensor.
 
@@ -599,12 +605,17 @@ def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
     recycles the freed pinned block immediately (its copy path, unlike
     at::native::copy_kernel_cuda, records no event into the allocator),
     so a later same-size host allocation clobbers the DMA source while
-    the H2D is still queued. Here the returned device tensor pins its
-    host source: every caller stores the result in the ForwardBatch,
-    which the scheduler only releases after that batch's result has been
-    processed — i.e. after ``copy_done.synchronize()`` — while this copy
-    is stream-ordered BEFORE the forward that consumes it. The source
-    therefore always outlives its DMA, with no events, rings or drains.
+    the H2D is still queued.
+
+    Protection must not rely on caller lifetime: many call sites are
+    transients (gather indices consumed inline) whose returned tensor
+    dies before the copy executes, and views/ops on it (unsqueeze,
+    slicing) do not carry the ``_sglang_pinned_source`` attribute. So on
+    NPU the source is additionally fenced: an event recorded on the
+    stream right after the copy keeps the source referenced in
+    ``_PENDING_H2D_SOURCES`` until the event fires, i.e. until the DMA
+    has landed. Entries are reaped opportunistically on each call.
+
     Once torch_npu's host allocator records events on the copy path
     (parity with CUDA), this helper can be dropped for the bare copy.
 
@@ -630,6 +641,12 @@ def pinned_h2d(data, dtype: torch.dtype, device) -> torch.Tensor:
 
     dev = torch.empty(host.shape, dtype=dtype, device=device)
     dev.copy_(host, non_blocking=True)
+    dev_module = get_device_module()
+    fence = dev_module.Event()
+    fence.record(dev_module.current_stream(device))
+    _PENDING_H2D_SOURCES.append((fence, host))
+    while _PENDING_H2D_SOURCES and _PENDING_H2D_SOURCES[0][0].query():
+        _PENDING_H2D_SOURCES.popleft()
     dev._sglang_pinned_source = host
     return dev
 
