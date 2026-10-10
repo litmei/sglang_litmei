@@ -336,7 +336,9 @@ class AscendDSAAttnBackend(AscendAttnBackend):
 
     def _cache_seqlens_cpu_max(self, forward_batch: ForwardBatch) -> int:
         """Return the effective maximum KV length from the existing CPU mirror."""
-        assert forward_batch.seq_lens_cpu is not None
+        if not self.needs_cpu_seq_lens:
+            return int(self.req_to_token_pool.req_to_token.shape[1])
+
         seq_lens_cpu = forward_batch.seq_lens_cpu[: forward_batch.batch_size]
         max_seq_len = int(seq_lens_cpu.max().item()) if seq_lens_cpu.numel() > 0 else 0
         if forward_batch.forward_mode.is_target_verify():
