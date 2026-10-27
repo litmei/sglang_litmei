@@ -48,6 +48,7 @@ from sglang.srt.mem_cache.base_prefix_cache import (
 from sglang.srt.mem_cache.memory_pool import HybridReqToTokenPool
 from sglang.srt.mem_cache.radix_cache import RadixKey
 from sglang.srt.server_args import get_global_server_args
+from sglang.srt.utils.common import is_cpu_920f
 
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
@@ -57,6 +58,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_is_cpu_920f = is_cpu_920f()
 
 class TreeNode:
 
@@ -427,7 +429,12 @@ class MambaRadixCache(BasePrefixCache):
         self.disable = params.disable
         self.enable_mamba_extra_buffer = params.enable_mamba_extra_buffer
 
-        if not self.enable_mamba_extra_buffer:
+        if _is_cpu_920f:
+            logger.warning(
+                "Kunpeng CPU: allow page_size > 1 (page-aligned prefix matching). Mamba "
+                "state is cached at mamba_cache_chunk_size ( = max(FLA_CHUNK_SIZE, page_size))"
+            )
+        elif not self.enable_mamba_extra_buffer:
             assert (
                 self.page_size == 1
             ), f"Page size must be 1 for MambaRadixCache v1, got {self.page_size}"
@@ -542,9 +549,17 @@ class MambaRadixCache(BasePrefixCache):
                 page_aligned_len = len(kv_indices)
                 page_aligned_kv_indices = kv_indices.to(dtype=torch.int64, copy=True)
 
-            assert (
-                cache_len == page_aligned_len
-            ), f"It is required {cache_len=}, {page_aligned_len=}, {kv_committed_len=}, {len(req.origin_input_ids)=}, {len(req.output_ids)=} ping @yizhang2077 if you see this"
+
+            if  _is_cpu_920f:
+                # Kunpeng CPU: the radix tree stores page-aligned tokens only;
+                # release the non-page-aligned tail that has no radix reference.
+                self.token_to_kv_pool_allocator.free(
+                    kv_indices[page_aligned_len:]
+                )
+            else:
+                assert (
+                    cache_len == page_aligned_len
+                ), f"It is required {cache_len=}, {page_aligned_len=}, {kv_committed_len=}, {len(req.origin_input_ids)=}, {len(req.output_ids)=} ping @yizhang2077 if you see this"
 
             # Radix Cache takes one ref in memory pool
             # insert the token_ids and kv_indices into the radix tree
@@ -626,9 +641,12 @@ class MambaRadixCache(BasePrefixCache):
             page_aligned_len = len(kv_indices)
             page_aligned_kv_indices = kv_indices.to(dtype=torch.int64, copy=True)
 
-        assert page_aligned_len == len(
-            kv_indices
-        ), f"page_aligned_len != len(kv_indices), {page_aligned_len=}, {len(kv_indices)=}, {cache_len=}, {self.page_size=}, {FLA_CHUNK_SIZE=}"
+        # Kunpeng CPU: the non-page-aligned tail is kept in request-local KV
+        # cache and concatenated back into prefix_indices below.
+        if not _is_cpu_920f:
+            assert page_aligned_len == len(
+                kv_indices
+            ), f"page_aligned_len != len(kv_indices), {page_aligned_len=}, {len(kv_indices)=}, {cache_len=}, {self.page_size=}, {FLA_CHUNK_SIZE=}"
 
         page_aligned_token_ids = token_ids[:page_aligned_len]
 

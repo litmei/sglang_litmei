@@ -80,6 +80,7 @@ from sglang.utils import is_in_ci
 
 logger = logging.getLogger(__name__)
 
+_is_cpu_920f = is_cpu_920f()
 _is_kunpeng_binary_launch = is_kunpeng_binary_launch()
 _is_tokenizer_separate = is_tokenizer_separate()
 
@@ -2432,12 +2433,21 @@ class ServerArgs:
                 ), f"For SSM models with extra buffer, either FLA_CHUNK_SIZE or page_size must be divisible by the other, got {FLA_CHUNK_SIZE=}, {self.page_size=}"
         elif not self.disable_radix_cache:  # no_buffer
             if self.page_size is not None and self.page_size != 1:
-                logger.warning(
-                    f"{model_arch} with radix cache requires page_size=1 in the current "
-                    f"Mamba scheduling mode (no_buffer), but got {self.page_size}. "
-                    "Automatically setting page_size=1."
-                )
-                self.page_size = 1
+                if _is_cpu_920f:
+                    logger.warning(
+                        f"{model_arch} with radix cache in Mamba no_buffer mode with "
+                        f"page_size={self.page_size}. "
+                        "Kunpeng CPU: page_size > 1 is supported experimentally; "
+                        "Mamba state is cached at mamba_cache_chunk_size alignment "
+                        "(page_aligned prefix hits only)."
+                    )
+                else:
+                    logger.warning(
+                        f"{model_arch} with radix cache requires page_size=1 in the current "
+                        f"Mamba scheduling mode (no_buffer), but got {self.page_size}. "
+                        "Automatically setting page_size=1."
+                    )
+                    self.page_size = 1
             if self.speculative_algorithm is None:
                 logger.warning(
                     "Disabling overlap schedule since mamba no_buffer is not compatible with "
