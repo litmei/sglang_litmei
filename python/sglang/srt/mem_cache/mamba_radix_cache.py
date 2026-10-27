@@ -20,6 +20,7 @@ The radix tree data structure for managing the hybrid (full and Mamba) KV cache.
 """
 
 import heapq
+import os
 from collections import defaultdict
 from functools import lru_cache
 from typing import TYPE_CHECKING, List, Optional, Tuple
@@ -59,6 +60,31 @@ import logging
 logger = logging.getLogger(__name__)
 
 _is_cpu_920f = is_cpu_920f()
+
+# Opt-in diagnostics for prefix-cache/mamba-state lifetime questions:
+#   SGLANG_MAMBA_CACHE_DEBUG=1
+# Prints insert/skip decisions, mamba-state tombstones and match results.
+_debug_cache = os.environ.get("SGLANG_MAMBA_CACHE_DEBUG", "0") == "1"
+
+
+def _dbg_node_len(node) -> int:
+    """Absolute prefix length covered by `node` (root excluded)."""
+    total = 0
+    while node is not None and node.parent is not None:
+        total += len(node.key)
+        node = node.parent
+    return total
+
+
+def _dbg_rid(req) -> str:
+    return str(getattr(req, "rid", "?"))[:8]
+
+
+def _dbg_mamba_free(tree_cache) -> str:
+    try:
+        return str(tree_cache.req_to_token_pool.mamba_pool.free_slots.numel())
+    except Exception:  # pragma: no cover - diagnostics only
+        return "?"
 
 
 class TreeNode:
@@ -562,6 +588,13 @@ class MambaRadixCache(BasePrefixCache):
                 # runs past the page-aligned radix key. Caching it would let a later
                 # prefix hit resume from an over-advanced SSM/conv state, so skip the
                 # insert and release the request-owned KV instead.
+                if _debug_cache:
+                    print(
+                        f"[mamba-cache] finish req={_dbg_rid(req)} SKIP insert: "
+                        f"cache_len={cache_len} page_aligned={page_aligned_len} "
+                        f"page_size={self.page_size} free_mamba={_dbg_mamba_free(self)}",
+                        flush=True,
+                    )
                 self.token_to_kv_pool_allocator.free(
                     kv_indices[req.cache_protected_len :]
                 )
@@ -601,6 +634,14 @@ class MambaRadixCache(BasePrefixCache):
                 )
             )
             mamba_exist = result.mamba_exist
+            if _debug_cache:
+                print(
+                    f"[mamba-cache] finish req={_dbg_rid(req)} INSERT "
+                    f"key_len={page_aligned_len} tree_prefix={result.prefix_len} "
+                    f"mamba_exist={mamba_exist} page_size={self.page_size} "
+                    f"free_mamba={_dbg_mamba_free(self)}",
+                    flush=True,
+                )
         else:
             self.token_to_kv_pool_allocator.free(kv_indices[req.cache_protected_len :])
             mamba_exist = True
@@ -660,6 +701,13 @@ class MambaRadixCache(BasePrefixCache):
             # does not line up with a page-aligned radix key. Skip the tree insert and
             # keep the KV request-local so a later prefix hit cannot reuse a state
             # that has already consumed tokens beyond the matched prefix.
+            if _debug_cache:
+                print(
+                    f"[mamba-cache] unfinished req={_dbg_rid(req)} SKIP insert: "
+                    f"cache_len={cache_len} page_aligned={page_aligned_len} "
+                    f"page_size={self.page_size} free_mamba={_dbg_mamba_free(self)}",
+                    flush=True,
+                )
             return _skip_cache_unfinished_req(req)
 
         assert page_aligned_len == len(
@@ -689,6 +737,13 @@ class MambaRadixCache(BasePrefixCache):
 
         # if alloc mamba cache failed, do evict and alloc again
         if mamba_value_forked is None:
+            if _debug_cache:
+                print(
+                    f"[mamba-cache] unfinished req={_dbg_rid(req)} fork_from FAILED "
+                    f"(key_len={page_aligned_len}), evicting 1 mamba slot. "
+                    f"free_mamba={_dbg_mamba_free(self)}",
+                    flush=True,
+                )
             self.evict(EvictParams(num_tokens=0, mamba_num=1))
             mamba_value_forked = self.req_to_token_pool.mamba_pool.fork_from(
                 mamba_value
@@ -704,6 +759,14 @@ class MambaRadixCache(BasePrefixCache):
             )
         )
         new_prefix_len, mamba_exist = result.prefix_len, result.mamba_exist
+        if _debug_cache:
+            print(
+                f"[mamba-cache] unfinished req={_dbg_rid(req)} INSERT "
+                f"key_len={page_aligned_len} tree_prefix={new_prefix_len} "
+                f"mamba_exist={mamba_exist} page_size={self.page_size} "
+                f"free_mamba={_dbg_mamba_free(self)}",
+                flush=True,
+            )
         # there is a mamba cache in radix cache, release it
         if mamba_exist:
             self.req_to_token_pool.mamba_pool.free(mamba_value_forked)
@@ -990,12 +1053,19 @@ class MambaRadixCache(BasePrefixCache):
         """
         node = self.root_node
         child_key = key.child_key(self.page_size)
+        key_len = len(key) if _debug_cache else 0
 
         value: List[torch.Tensor] = []
         best_value_len = 0
         best_last_node = node
         while len(key) > 0 and child_key in node.children.keys():
             child = node.children[child_key]
+            if _debug_cache:
+                print(
+                    f"[mamba-cache]   match walk node_len={_dbg_node_len(child)} "
+                    f"mamba={'yes' if child.mamba_value is not None else 'NO'}",
+                    flush=True,
+                )
             # update best_value_len and best_last_node if needed
             if node.mamba_value is not None:
                 best_value_len = len(value)
@@ -1019,6 +1089,14 @@ class MambaRadixCache(BasePrefixCache):
             best_value_len = len(value)
             best_last_node = node
 
+        if _debug_cache:
+            print(
+                f"[mamba-cache] match key={key_len} "
+                f"kv_matched={sum(len(v) for v in value)} reusable={best_value_len} "
+                f"last_node_len={_dbg_node_len(best_last_node)} "
+                f"last_node_mamba={'yes' if best_last_node.mamba_value is not None else 'NO'}",
+                flush=True,
+            )
         return value, best_last_node, best_value_len
 
     def _match_pre_processor(self, params: MatchPrefixParams) -> Optional[RadixKey]:
@@ -1243,6 +1321,12 @@ class MambaRadixCache(BasePrefixCache):
 
     def _tombstone_internal_node(self, node: TreeNode) -> None:
         assert len(node.children) != 0, f"Cannot tombstone a leaf node, {node.id=}"
+        if _debug_cache:
+            print(
+                f"[mamba-cache] TOMBSTONE mamba state at prefix_len={_dbg_node_len(node)} "
+                f"(children={len(node.children)}) free_mamba={_dbg_mamba_free(self)}",
+                flush=True,
+            )
         self.mamba_evictable_size_ -= len(node.mamba_value)
         node.mamba_value = None
 
@@ -1251,6 +1335,12 @@ class MambaRadixCache(BasePrefixCache):
             node.mamba_value is None
         ), f"Deleting a unexpected non-tombstone leaf node, {node.id=}"
         assert len(node.children) == 0, f"leaf node has children, {node.id=}"
+        if _debug_cache:
+            print(
+                f"[mamba-cache] DELETE tombstone leaf at prefix_len={_dbg_node_len(node)} "
+                f"(kv tokens={len(node.key)})",
+                flush=True,
+            )
         key = node.key.child_key(self.page_size)
         v = node.parent.children.pop(key, None)
         assert v == node, f"parent does not have child key, {key}"
