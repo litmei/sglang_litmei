@@ -77,50 +77,6 @@ _graph_profile_dir: Optional[str] = None
 _graph_profile_records: list = []
 _graph_profile_runners = weakref.WeakSet()
 
-# Debug aid for "why did this batch miss the graph cache". The cache key embeds
-# the provider binding signature, whose fixed entries carry storage pointers, so
-# one unstable buffer forces a re-capture per forward. Enable with
-# SGLANG_KUNPENG_GRAPH_KEY_DEBUG=1 and read the "[graph] key miss" lines.
-_graph_key_debug = os.environ.get("SGLANG_KUNPENG_GRAPH_KEY_DEBUG", "0") not in (
-    "",
-    "0",
-)
-_GRAPH_KEY_FIELDS = (
-    "mode",
-    "total_tokens",
-    "batch_size",
-    "is_pp_graph",
-    "attn_backend",
-    "absorbed_prefill",
-    "all_padding",
-    "mtp_carry",
-)
-
-
-def _graph_signature_diff(old_signature, new_signature) -> str:
-    """Name the binding groups that differ between two graph key signatures."""
-    if old_signature == new_signature:
-        return "signature identical"
-    if (
-        not isinstance(old_signature, tuple)
-        or not isinstance(new_signature, tuple)
-        or len(old_signature) != 4
-        or len(new_signature) != 4
-    ):
-        return "signature layout differs"
-    diffs = []
-    if old_signature[0] != new_signature[0]:
-        diffs.append("contract")
-    for idx, label in ((1, "input"), (2, "fixed")):
-        old_entries = {entry[0]: entry[1:] for entry in old_signature[idx]}
-        new_entries = {entry[0]: entry[1:] for entry in new_signature[idx]}
-        for name in sorted(set(old_entries) | set(new_entries)):
-            if old_entries.get(name) != new_entries.get(name):
-                diffs.append(f"{label}:{name}")
-    if old_signature[3] != new_signature[3]:
-        diffs.append("static")
-    return ", ".join(diffs) or "unknown"
-
 
 class KunpengGraphRunner:
     """Manages Kunpeng CPU 920F specific functionality:
@@ -1810,30 +1766,6 @@ class KunpengGraphRunner:
                 (int(total_tokens), int(forward_batch.batch_size))
             ]
         if graph_cache_key not in self._sglang_graph_cache:
-            if _graph_key_debug:
-                comparable = next(
-                    (
-                        key
-                        for key in reversed(self._sglang_graph_cache)
-                        if len(key) == len(graph_cache_key) > len(_GRAPH_KEY_FIELDS)
-                        and key[: len(_GRAPH_KEY_FIELDS)]
-                        == graph_cache_key[: len(_GRAPH_KEY_FIELDS)]
-                    ),
-                    None,
-                )
-                if comparable is None:
-                    logger.info(
-                        "[graph] key miss: no comparable key, mode=%s total_tokens=%s",
-                        forward_batch.forward_mode.name,
-                        total_tokens,
-                    )
-                else:
-                    logger.info(
-                        "[graph] key miss: %s | mode=%s total_tokens=%s",
-                        _graph_signature_diff(comparable[-1], graph_cache_key[-1]),
-                        forward_batch.forward_mode.name,
-                        total_tokens,
-                    )
             if prefill_coverage is not None:
                 prefill_coverage["cache_misses"] += 1
             if decode_coverage is not None:
