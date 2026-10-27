@@ -48,6 +48,7 @@ from sglang.srt.mem_cache.base_prefix_cache import (
 from sglang.srt.mem_cache.memory_pool import HybridReqToTokenPool
 from sglang.srt.mem_cache.radix_cache import RadixKey
 from sglang.srt.server_args import get_global_server_args
+from sglang.srt.utils.common import is_cpu_920f
 
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
@@ -56,6 +57,8 @@ if TYPE_CHECKING:
 import logging
 
 logger = logging.getLogger(__name__)
+
+_is_cpu_920f = is_cpu_920f()
 
 
 class TreeNode:
@@ -428,9 +431,19 @@ class MambaRadixCache(BasePrefixCache):
         self.enable_mamba_extra_buffer = params.enable_mamba_extra_buffer
 
         if not self.enable_mamba_extra_buffer:
-            assert (
-                self.page_size == 1
-            ), f"Page size must be 1 for MambaRadixCache v1, got {self.page_size}"
+            if _is_cpu_920f:
+                if self.page_size != 1:
+                    logger.warning(
+                        "Kunpeng CPU: allowing page_size=%d for MambaRadixCache. Radix "
+                        "keys are page-aligned, so only prefixes ending on a page "
+                        "boundary are cached (the no_buffer mamba state is captured at "
+                        "the request length and must match the cached prefix length).",
+                        self.page_size,
+                    )
+            else:
+                assert (
+                    self.page_size == 1
+                ), f"Page size must be 1 for MambaRadixCache v1, got {self.page_size}"
 
         if self.token_to_kv_pool_allocator:
             self.device = self.token_to_kv_pool_allocator.device
@@ -542,6 +555,20 @@ class MambaRadixCache(BasePrefixCache):
                 page_aligned_len = len(kv_indices)
                 page_aligned_kv_indices = kv_indices.to(dtype=torch.int64, copy=True)
 
+            if _is_cpu_920f and not self.enable_mamba_extra_buffer and (
+                page_aligned_len != len(kv_indices)
+            ):
+                # Kunpeng CPU no_buffer: the mamba state lives at `cache_len`, which
+                # runs past the page-aligned radix key. Caching it would let a later
+                # prefix hit resume from an over-advanced SSM/conv state, so skip the
+                # insert and release the request-owned KV instead.
+                self.token_to_kv_pool_allocator.free(
+                    kv_indices[req.cache_protected_len :]
+                )
+                self.req_to_token_pool.free_mamba_cache(req)
+                self.dec_lock_ref(req.last_node)
+                return
+
             assert (
                 cache_len == page_aligned_len
             ), f"It is required {cache_len=}, {page_aligned_len=}, {kv_committed_len=}, {len(req.origin_input_ids)=}, {len(req.output_ids)=} ping @yizhang2077 if you see this"
@@ -625,6 +652,15 @@ class MambaRadixCache(BasePrefixCache):
         else:
             page_aligned_len = len(kv_indices)
             page_aligned_kv_indices = kv_indices.to(dtype=torch.int64, copy=True)
+
+        if _is_cpu_920f and not self.enable_mamba_extra_buffer and (
+            page_aligned_len != len(kv_indices)
+        ):
+            # Kunpeng CPU no_buffer: the forked mamba state is at `cache_len`, which
+            # does not line up with a page-aligned radix key. Skip the tree insert and
+            # keep the KV request-local so a later prefix hit cannot reuse a state
+            # that has already consumed tokens beyond the matched prefix.
+            return _skip_cache_unfinished_req(req)
 
         assert page_aligned_len == len(
             kv_indices
