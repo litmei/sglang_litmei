@@ -16,7 +16,7 @@
 
 import logging
 from contextlib import ExitStack
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -134,6 +134,10 @@ class Qwen3_5ForCausalLMMTP(nn.Module):
         if embed.is_cuda:
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+
+    def set_eagle3_layers_to_capture(self, layer_ids: Optional[List[int]] = None):
+        """MTP 草稿层不做 aux hidden 捕获：EAGLE3 的辅助隐状态只在 target 侧产生。"""
+        return
 
     @torch.no_grad()
     def forward(
