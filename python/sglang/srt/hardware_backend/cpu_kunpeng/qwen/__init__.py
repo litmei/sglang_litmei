@@ -42,14 +42,12 @@ def validate_config(runner):
         # Validate execution capabilities before allocating components. The
         # checkpoint loader subsequently checks names, geometry and shards.
         from sglang.srt.model_executor.model_capabilities import (
-            initial_policy_from_spec,
+            resolve_initial_policy,
             validate_startup_capabilities,
         )
 
-        policy = (
-            initial_policy_from_spec(spec)
-            if spec is not None
-            else {"language": True, "vision": False, "mtp": False}
+        policy = resolve_initial_policy(
+            spec, runner.server_args.speculative_algorithm is not None
         )
         validate_startup_capabilities(policy, runner.server_args)
 

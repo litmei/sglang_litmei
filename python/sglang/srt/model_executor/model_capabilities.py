@@ -14,6 +14,11 @@ ATTACHED_MTP_COMPONENT_POLICY = {
 # Generic SGLang metadata registry; no model/native class is imported here.
 MODEL_COMPONENT_POLICIES = {"Qwen3_5ForConditionalGeneration": STAGE_COMPONENT_POLICY}
 
+# 本地开发临时开关：跳过部署清单（checkpoint_loader_spec）与能力校验。
+# 置为 True 时不需要在 config.json 中提供清单，也不再执行启动期/请求期校验。
+# 正式部署请置回 False。
+DEV_SKIP_CAPABILITY_CHECKS = True
+
 
 class ModelCapabilityError(ValueError):
     pass
@@ -123,8 +128,17 @@ def initial_policy_from_spec(spec):
     return {name: row["execution_enabled"] for name, row in policy.items()}
 
 
+def resolve_initial_policy(spec, speculative_enabled=False):
+    """模型侧策略解析：有清单按清单；开发模式下无清单时按是否启用投机决定 mtp。"""
+    if spec is not None:
+        return initial_policy_from_spec(spec)
+    if DEV_SKIP_CAPABILITY_CHECKS:
+        return {"language": True, "vision": False, "mtp": bool(speculative_enabled)}
+    return {"language": True, "vision": False, "mtp": False}
+
+
 def validate_startup_capabilities(policy, server_args):
-    if policy is None:
+    if DEV_SKIP_CAPABILITY_CHECKS or policy is None:
         return
     if getattr(server_args, "language_only", False) or getattr(
         server_args, "encoder_only", False
@@ -175,6 +189,9 @@ def validate_request_capabilities(policy, request):
 def initial_policy_for_model_config(model_config):
     import os
 
+    if DEV_SKIP_CAPABILITY_CHECKS:
+        # 开发模式：不读取部署清单，返回 None 即跳过启动期与请求期校验。
+        return None
     spec = getattr(model_config.hf_config, "checkpoint_loader_spec", None)
     if spec is not None:
         return initial_policy_from_spec(spec)
