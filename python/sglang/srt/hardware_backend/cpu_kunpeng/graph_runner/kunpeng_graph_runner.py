@@ -1083,7 +1083,7 @@ class KunpengGraphRunner:
             if coverage is not None:
                 coverage["eager"] += 1
             # Eager fallback – plain model.forward
-            with self._forward_hbw_scope():
+            with pp_span("eager_forward"), self._forward_hbw_scope():
                 return self.model_runner.model.forward(
                     forward_batch.input_ids,
                     forward_batch.positions,
@@ -1148,7 +1148,7 @@ class KunpengGraphRunner:
             if row is not None:
                 row["eager"] += 1
                 row["reasons"][reason] = row["reasons"].get(reason, 0) + 1
-            with self._forward_hbw_scope():
+            with pp_span("eager_forward"), self._forward_hbw_scope():
                 return self.model_runner.model.forward(
                     forward_batch.input_ids,
                     forward_batch.positions,
@@ -1158,7 +1158,8 @@ class KunpengGraphRunner:
 
         if row is not None:
             row["supported"] += 1
-        inputs = self._build_kunpeng_graph_inputs(forward_batch, kwargs)
+        with pp_span("build_graph_inputs"):
+            inputs = self._build_kunpeng_graph_inputs(forward_batch, kwargs)
         return self._graph_forward(
             forward_batch,
             inputs,

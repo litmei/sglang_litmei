@@ -32,6 +32,11 @@ from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
 from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, ForwardBatch
 from sglang.srt.server_args import ServerArgs
+from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import (
+    pp_perf_decode_enabled,
+    pp_perf_event,
+    pp_span,
+)
 from sglang.srt.speculative.base_spec_worker import BaseDraftWorker, BaseSpecWorker
 from sglang.srt.speculative.draft_utils import DraftBackendFactory
 from sglang.srt.speculative.eagle_draft_cuda_graph_runner import (
@@ -75,6 +80,27 @@ _is_musa = is_musa()
 _is_hip = is_hip()
 
 logger = logging.getLogger(__name__)
+
+
+def _pp_log_accept_stats(worker, batch_output) -> None:
+    """Log drafted/accepted tokens per decode step under pp_perf profiling.
+
+    ``accept_lens`` includes the bonus token, i.e. accepted drafts + 1 per req.
+    """
+    if not pp_perf_decode_enabled():
+        return
+    accept_lens = getattr(batch_output, "accept_lens", None)
+    if accept_lens is None or accept_lens.numel() == 0:
+        return
+    bs = int(accept_lens.numel())
+    out_tokens = int(accept_lens.sum().item())
+    drafted = bs * worker.speculative_num_draft_tokens
+    accepted = out_tokens - bs
+    pp_perf_event(
+        f"[tp{worker.target_worker.tp_rank}][spec] bs={bs} drafted={drafted} "
+        f"accepted={accepted} accept_rate={accepted / max(drafted, 1):.3f} "
+        f"out_tokens={out_tokens} avg_out_len={out_tokens / bs:.2f}"
+    )
 
 
 def _get_plan_stream(
@@ -452,9 +478,10 @@ class EagleDraftWorker(BaseDraftWorker):
             spec_info.hidden_states = hidden_states
 
             # Run forward
-            logits_output = self.draft_runner.forward(
-                forward_batch, skip_attn_backend_init=True
-            ).logits_output
+            with pp_span("spec.draft_step"):
+                logits_output = self.draft_runner.forward(
+                    forward_batch, skip_attn_backend_init=True
+                ).logits_output
             maybe_detect_nan(logits_output.next_token_logits, f"draft_forward step {i}")
             probs = torch.softmax(logits_output.next_token_logits, dim=-1)
             topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
@@ -735,9 +762,10 @@ class EAGLEWorkerV2(BaseSpecWorker):
             with self.draft_worker.draft_tp_context(
                 self.draft_worker.draft_runner.tp_group
             ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
-                verify_input: EagleVerifyInput = self.draft_worker.draft(
-                    model_worker_batch
-                )
+                with pp_span("spec.draft"):
+                    verify_input: EagleVerifyInput = self.draft_worker.draft(
+                        model_worker_batch
+                    )
             assert verify_input.is_verify_input()
             # Record a CUDA event after draft() GPU work is dispatched.
             # This event will be waited on by plan_stream in verify()
@@ -747,13 +775,16 @@ class EAGLEWorkerV2(BaseSpecWorker):
                 self._draft_done_event = torch.get_device_module(self.device).Event()
                 self._draft_done_event.record()
             model_worker_batch.spec_info = verify_input
-            batch_output = self.verify(model_worker_batch)
+            with pp_span("spec.verify"):
+                batch_output = self.verify(model_worker_batch)
+            _pp_log_accept_stats(self, batch_output)
             with self.draft_worker.draft_tp_context(
                 self.draft_worker.draft_runner.tp_group
             ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
-                self.draft_worker._draft_extend_for_decode(
-                    model_worker_batch, batch_output
-                )
+                with pp_span("spec.draft_extend"):
+                    self.draft_worker._draft_extend_for_decode(
+                        model_worker_batch, batch_output
+                    )
             return batch_output
 
     def verify(self, batch: ModelWorkerBatch):
@@ -843,11 +874,12 @@ class EAGLEWorkerV2(BaseSpecWorker):
 
         # Sample
         maybe_detect_nan(logits_output.next_token_logits, "verify: target model logits")
-        (
-            predict,
-            accept_lens,
-            accept_index,
-        ) = verify_input.sample(batch, logits_output, vocab_mask)
+        with pp_span("spec.verify_sample"):
+            (
+                predict,
+                accept_lens,
+                accept_index,
+            ) = verify_input.sample(batch, logits_output, vocab_mask)
         new_seq_lens = batch.seq_lens + accept_lens
 
         # Update mamba state for hybrid GDN models after verification
