@@ -84,7 +84,11 @@ from sglang.srt.observability.req_time_stats import (
 )
 from sglang.srt.utils import get_num_new_pages, is_cpu_920f
 from sglang.srt.utils.network import NetworkAddress
-from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import Kunpeng_PP_Profiler
+from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import (
+    Kunpeng_PP_Profiler,
+    pp_perf_report,
+    pp_perf_start,
+)
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 
 logger = logging.getLogger(__name__)
@@ -1502,11 +1506,14 @@ class SchedulerDisaggregationDecodeMixin:
         """A normal scheduler loop for decode worker in disaggregation mode."""
 
         while True:
+            # No-op unless SGLANG_KUNPENG_DECODE_PROFILE / _PP_PROFILE is on.
+            pp_perf_start("decode", tag=f"tp{self.tp_rank}")
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
             self.process_decode_queue()
             if self._engine_paused:
+                pp_perf_report(print_report=False)
                 continue
 
             # Get the next batch to run
@@ -1523,6 +1530,7 @@ class SchedulerDisaggregationDecodeMixin:
 
             # Update last_batch
             self.last_batch = batch
+            pp_perf_report(print_report=batch is not None)
 
     @torch.no_grad()
     def event_loop_overlap_disagg_decode(self: Scheduler):
@@ -1530,11 +1538,14 @@ class SchedulerDisaggregationDecodeMixin:
         self.last_batch: Optional[ScheduleBatch] = None
 
         while True:
+            # No-op unless SGLANG_KUNPENG_DECODE_PROFILE / _PP_PROFILE is on.
+            pp_perf_start("decode", tag=f"tp{self.tp_rank}")
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
             self.process_decode_queue()
             if self._engine_paused:
+                pp_perf_report(print_report=False)
                 continue
 
             # Get the next batch to run
@@ -1561,6 +1572,7 @@ class SchedulerDisaggregationDecodeMixin:
 
             # Update last_batch
             self.last_batch = batch
+            pp_perf_report(print_report=batch is not None)
 
     def _run_batch_prebuilt(
         self: Scheduler, batch: ScheduleBatch

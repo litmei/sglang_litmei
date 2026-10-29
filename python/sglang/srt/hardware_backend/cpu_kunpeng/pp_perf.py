@@ -16,6 +16,10 @@
 
 Controlled by the environment variable ``SGLANG_KUNPENG_PP_PROFILE``
 (default ``"0"`` = off; set ``export SGLANG_KUNPENG_PP_PROFILE=1`` to enable).
+The decode-only switch ``SGLANG_KUNPENG_DECODE_PROFILE=1`` enables the same
+instrumentation for the non-PP decode loops
+(``event_loop_overlap_disagg_decode`` / ``event_loop_normal_disagg_decode``),
+which frame one window per decode step.
 
 Two kinds of API are provided:
 
@@ -60,6 +64,9 @@ logger.setLevel(logging.INFO)
 # Read once at import time.  As long as the flag is off the decorators are
 # stripped to the bare function, so there is no measurable overhead.
 _PP_PROFILE = os.environ.get("SGLANG_KUNPENG_PP_PROFILE", "0") == "1"
+# Decode-only switch: profiles the non-PP decode event loops without touching
+# the prefill side.
+_DECODE_PROFILE = os.environ.get("SGLANG_KUNPENG_DECODE_PROFILE", "0") == "1"
 
 # Thresholds for the synthetic "[self]" row.  A [self] row is only meaningful
 # when this span owns recorded sub-spans that don't add up to its total; a bare
@@ -77,7 +84,7 @@ _tls.win = None
 
 
 def _enabled() -> bool:
-    return _PP_PROFILE
+    return _PP_PROFILE or _DECODE_PROFILE
 
 
 class _Window:
