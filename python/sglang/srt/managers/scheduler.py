@@ -250,7 +250,12 @@ from sglang.srt.utils.numa_utils import (
     zmq_context_core_binding,
     ZmqOffset,
 )
-from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import Kunpeng_PP_Profiler
+from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import (
+    Kunpeng_PP_Profiler,
+    pp_perf_is_decode_batch,
+    pp_perf_report,
+    pp_perf_start,
+)
 from sglang.srt.utils.tensor_bridge import use_mlx
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
@@ -1696,10 +1701,13 @@ class Scheduler(
     def event_loop_normal(self):
         """A normal scheduler loop."""
         while True:
+            # No-op unless SGLANG_KUNPENG_DECODE_PROFILE / _PP_PROFILE is on.
+            pp_perf_start("decode", tag=f"tp{self.tp_rank}")
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
             if self._engine_paused:
+                pp_perf_report(print_report=False)
                 continue
 
             # Get the next batch to run
@@ -1720,6 +1728,7 @@ class Scheduler(
 
             # Update last_batch
             self.last_batch = batch
+            pp_perf_report(print_report=pp_perf_is_decode_batch(batch))
             if envs.SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_BUSY.get():
                 self.self_check_during_busy()
 
@@ -1736,10 +1745,13 @@ class Scheduler(
             self.process_batch_result(tmp_batch, tmp_result)
 
         while True:
+            # No-op unless SGLANG_KUNPENG_DECODE_PROFILE / _PP_PROFILE is on.
+            pp_perf_start("decode", tag=f"tp{self.tp_rank}")
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
             if self._engine_paused:
+                pp_perf_report(print_report=False)
                 continue
 
             # Get the next batch to run
@@ -1774,6 +1786,7 @@ class Scheduler(
 
             # Update last_batch
             self.last_batch = batch
+            pp_perf_report(print_report=pp_perf_is_decode_batch(batch))
 
             if envs.SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_BUSY.get():
                 self.self_check_during_busy()

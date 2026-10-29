@@ -17,9 +17,9 @@
 Controlled by the environment variable ``SGLANG_KUNPENG_PP_PROFILE``
 (default ``"0"`` = off; set ``export SGLANG_KUNPENG_PP_PROFILE=1`` to enable).
 The decode-only switch ``SGLANG_KUNPENG_DECODE_PROFILE=1`` enables the same
-instrumentation for the non-PP decode loops
-(``event_loop_overlap_disagg_decode`` / ``event_loop_normal_disagg_decode``),
-which frame one window per decode step.
+instrumentation for the decode loops (disaggregated decode and collocated
+``event_loop_overlap`` / ``event_loop_normal``), which frame one window per
+decode step.
 
 Two kinds of API are provided:
 
@@ -269,6 +269,18 @@ def pp_perf_start(root="pp_mb", tag=""):
         return
     _tls.win = _Window(root, tag)
     _tls.stack = []
+
+
+def pp_perf_is_decode_batch(batch) -> bool:
+    """Whether ``batch`` is decode work worth printing a pp_perf frame for.
+
+    Collocated loops also run prefill batches; only decode-style batches
+    (DECODE, plus TARGET_VERIFY for speculative decoding) are reported.
+    """
+    if batch is None:
+        return False
+    mode = batch.forward_mode
+    return mode.is_decode() or mode.is_target_verify()
 
 
 def _current_cpu():
