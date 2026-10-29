@@ -10,6 +10,7 @@ from sgl_kernel import common_ops
 
 from sglang.srt.graph import is_capturing, ops
 from sglang.srt.graph.torch_capture import install_boxed_bridge, register_native_shape
+from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import pp_span
 from sglang.srt.layers.attention.fla.layernorm_gated import RMSNorm, rms_norm_ref
 from sglang.srt.layers.attention.linear.kernels.kernel_backend import (
     LinearAttnKernelBase,
@@ -107,41 +108,42 @@ class QwenGemmaRMSNorm(GemmaRMSNorm):
     def forward_cpu(
         self, x, residual=None, post_residual_addition=None, quantize=False
     ):
-        emit_quantized = quantize or getattr(self, "_kunpeng_int8_consumer", False)
-        if emit_quantized:
-            # The public DeepSeek norm-quant algebra measures the F32 weighted
-            # max before normalizing, then quantizes from the BF16 residual.
-            # It intentionally does not materialize a BF16 norm-output tensor.
-            flat_x = x.reshape(-1, x.shape[-1])
-            if residual is None:
-                return ops.rmsnorm_quant_kunpeng(
-                    flat_x, self.gemma_weight, self.variance_epsilon
+        with pp_span("norm.rmsnorm"):
+            emit_quantized = quantize or getattr(self, "_kunpeng_int8_consumer", False)
+            if emit_quantized:
+                # The public DeepSeek norm-quant algebra measures the F32 weighted
+                # max before normalizing, then quantizes from the BF16 residual.
+                # It intentionally does not materialize a BF16 norm-output tensor.
+                flat_x = x.reshape(-1, x.shape[-1])
+                if residual is None:
+                    return ops.rmsnorm_quant_kunpeng(
+                        flat_x, self.gemma_weight, self.variance_epsilon
+                    )
+                if post_residual_addition is not None:
+                    residual = residual + post_residual_addition
+                q, scale = ops.fused_add_rmsnorm_quant_kunpeng(
+                    flat_x,
+                    residual.reshape(-1, residual.shape[-1]),
+                    self.gemma_weight,
+                    self.variance_epsilon,
                 )
-            if post_residual_addition is not None:
-                residual = residual + post_residual_addition
-            q, scale = ops.fused_add_rmsnorm_quant_kunpeng(
-                flat_x,
-                residual.reshape(-1, residual.shape[-1]),
-                self.gemma_weight,
-                self.variance_epsilon,
-            )
-            if quantize:
-                # Match the common RMSNorm explicit quantize=True protocol.
-                return q, scale, residual
-            return (q, scale), residual
-        if residual is not None:
-            if post_residual_addition is not None:
-                residual = residual + post_residual_addition
-            out = ops.fused_add_rmsnorm_kunpeng(
-                x.reshape(-1, x.shape[-1]),
-                residual.reshape(-1, residual.shape[-1]),
-                self.gemma_weight,
-                self.variance_epsilon,
-            )
-            return out.reshape_as(x), residual
-        return ops.rmsnorm_kunpeng(
-            x.reshape(-1, x.shape[-1]), self.gemma_weight, self.variance_epsilon
-        ).reshape_as(x)
+                if quantize:
+                    # Match the common RMSNorm explicit quantize=True protocol.
+                    return q, scale, residual
+                return (q, scale), residual
+            if residual is not None:
+                if post_residual_addition is not None:
+                    residual = residual + post_residual_addition
+                out = ops.fused_add_rmsnorm_kunpeng(
+                    x.reshape(-1, x.shape[-1]),
+                    residual.reshape(-1, residual.shape[-1]),
+                    self.gemma_weight,
+                    self.variance_epsilon,
+                )
+                return out.reshape_as(x), residual
+            return ops.rmsnorm_kunpeng(
+                x.reshape(-1, x.shape[-1]), self.gemma_weight, self.variance_epsilon
+            ).reshape_as(x)
 
 
 def _prefill_gated_rms_norm_capture_ref(x, weight, z, eps):
@@ -165,39 +167,40 @@ def _prefill_gated_rms_norm_capture_ref(x, weight, z, eps):
 
 class QwenGatedRMSNorm(RMSNorm):
     def forward(self, x, z=None):
-        if (
-            z is not None
-            and x.ndim == 2
-            and x.shape == z.shape
-            and 1 <= x.shape[0] <= 96
-        ):
-            return ops.qwen_gated_norm(
-                x.contiguous(), self.weight, z.contiguous(), self.eps
+        with pp_span("gdn.norm_gate"):
+            if (
+                z is not None
+                and x.ndim == 2
+                and x.shape == z.shape
+                and 1 <= x.shape[0] <= 96
+            ):
+                return ops.qwen_gated_norm(
+                    x.contiguous(), self.weight, z.contiguous(), self.eps
+                )
+            if (
+                is_capturing()
+                and os.environ.get("SGLANG_KUNPENG_ENABLE_PREFILL_GRAPH", "0") == "1"
+                and z is not None
+                and x.ndim == 2
+                and x.shape == z.shape
+                and 1 <= x.shape[0] <= 3 * 4096
+                and x.shape[0] % 3 == 0
+                and x.shape[1] == self.weight.numel() == 128
+                and x.device.type == z.device.type == self.weight.device.type == "cpu"
+                and x.dtype == z.dtype == torch.bfloat16
+            ):
+                # Local HV3 unfolds each legal C1 prefill M into 3*M rows of128.
+                # Eager and the established <=96-row native path stay unchanged.
+                return _prefill_gated_rms_norm_capture_ref(x, self.weight, z, self.eps)
+            return rms_norm_ref(
+                x=x,
+                weight=self.weight,
+                bias=None,
+                z=z,
+                eps=self.eps,
+                group_size=None,
+                norm_before_gate=True,
             )
-        if (
-            is_capturing()
-            and os.environ.get("SGLANG_KUNPENG_ENABLE_PREFILL_GRAPH", "0") == "1"
-            and z is not None
-            and x.ndim == 2
-            and x.shape == z.shape
-            and 1 <= x.shape[0] <= 3 * 4096
-            and x.shape[0] % 3 == 0
-            and x.shape[1] == self.weight.numel() == 128
-            and x.device.type == z.device.type == self.weight.device.type == "cpu"
-            and x.dtype == z.dtype == torch.bfloat16
-        ):
-            # Local HV3 unfolds each legal C1 prefill M into 3*M rows of128.
-            # Eager and the established <=96-row native path stay unchanged.
-            return _prefill_gated_rms_norm_capture_ref(x, self.weight, z, self.eps)
-        return rms_norm_ref(
-            x=x,
-            weight=self.weight,
-            bias=None,
-            z=z,
-            eps=self.eps,
-            group_size=None,
-            norm_before_gate=True,
-        )
 
 
 class QwenGDNKernel(LinearAttnKernelBase):
@@ -279,20 +282,24 @@ class QwenGDNKernel(LinearAttnKernelBase):
         )
         # Keep short tails serial. Larger chunks reuse each worker's state
         # slice across the token recurrence, with one pool launch per layer.
-        rc = kernel(
-            *(t.data_ptr() for t in (q, k, v, g, beta, state, query_start_loc, output)),
-            query_start_loc.numel() - 1,
-            q.shape[1],
-            q.shape[2],
-            v.shape[2],
-            q.shape[3],
-            v.shape[3],
-            *([grain] if parallel else []),
-            workspace.data_ptr(),
-            workspace.numel(),
-        )
-        if rc:
-            raise RuntimeError(f"Qwen GDN prefill failed: {rc}")
+        with pp_span("gdn.chunk_delta"):
+            rc = kernel(
+                *(
+                    t.data_ptr()
+                    for t in (q, k, v, g, beta, state, query_start_loc, output)
+                ),
+                query_start_loc.numel() - 1,
+                q.shape[1],
+                q.shape[2],
+                v.shape[2],
+                q.shape[3],
+                v.shape[3],
+                *([grain] if parallel else []),
+                workspace.data_ptr(),
+                workspace.numel(),
+            )
+            if rc:
+                raise RuntimeError(f"Qwen GDN prefill failed: {rc}")
         return output, state, None
 
     def target_verify(
@@ -455,7 +462,8 @@ def compact_weight_loaders(module):
 
 
 def qkv_layout(qkv):
-    q, gate, k, v = ops.qwen_qkv_layout(qkv)
+    with pp_span("attn.qkv_layout"):
+        q, gate, k, v = ops.qwen_qkv_layout(qkv)
     return q, k, v, gate
 
 
@@ -473,16 +481,17 @@ def native_rope_cache(module):
 
 def qknorm_rope(module, positions, q, k):
     cache = native_rope_cache(module)
-    return ops.qwen_qknorm_rope(
-        q,
-        k,
-        module.q_norm.gemma_weight,
-        module.k_norm.gemma_weight,
-        cache,
-        positions,
-        float(module.q_norm.variance_epsilon),
-        0,
-    )
+    with pp_span("attn.qknorm_rope"):
+        return ops.qwen_qknorm_rope(
+            q,
+            k,
+            module.q_norm.gemma_weight,
+            module.k_norm.gemma_weight,
+            cache,
+            positions,
+            float(module.q_norm.variance_epsilon),
+            0,
+        )
 
 
 # The native collective request and its eager SHM caches are process-global.
@@ -491,6 +500,11 @@ _allreduce_cache_lock = threading.Lock()
 
 
 def allreduce(tensor):
+    with pp_span("comm.allreduce"):
+        return _allreduce_shm(tensor)
+
+
+def _allreduce_shm(tensor):
     if not _allreduce_cache_lock.acquire(blocking=False):
         raise RuntimeError(
             "Qwen allreduce is already using the native collective/cache"

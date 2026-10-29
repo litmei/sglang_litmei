@@ -106,6 +106,7 @@ _is_gfx95 = is_gfx95_supported()
 _is_hip = is_hip()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _is_amx_available = cpu_has_amx_support()
+from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import pp_span
 from sglang.srt.hardware_backend.cpu_kunpeng.qwen import enabled as qwen_kunpeng_enabled
 
 _use_kunpeng_qwen = qwen_kunpeng_enabled()
@@ -477,156 +478,160 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         2. Core attention (custom op)
         3. Output projection
         """
-        projected_states_qkvz, projected_states_ba = self._forward_input_proj(
-            hidden_states
-        )
-
-        if (
-            self.num_v_heads // self.num_k_heads in [1, 2, 4]
-            and not _is_cpu
-            and not _is_npu
-        ):
-            mixed_qkv, z, b, a = fused_qkvzba_split_reshape_cat_contiguous(
-                projected_states_qkvz,
-                projected_states_ba,
-                triton.cdiv(self.num_k_heads, self.attn_tp_size),
-                triton.cdiv(self.num_v_heads, self.attn_tp_size),
-                self.head_k_dim,
-                self.head_v_dim,
+        with pp_span("gdn.in_proj"):
+            projected_states_qkvz, projected_states_ba = self._forward_input_proj(
+                hidden_states
             )
-        elif _use_kunpeng_qwen and 1 <= projected_states_qkvz.shape[0] <= 4096:
-            num_k_heads = self.num_k_heads // self.attn_tp_size
-            num_v_heads = self.num_v_heads // self.attn_tp_size
-            k_width = num_k_heads * self.head_k_dim
-            v_width = num_v_heads * self.head_v_dim
-            qkv_width = 2 * k_width + v_width
-            rows = projected_states_qkvz.shape[0]
-            if not (
-                projected_states_qkvz.ndim == projected_states_ba.ndim == 2
-                and projected_states_qkvz.shape == (rows, qkv_width + v_width)
-                and projected_states_ba.shape == (rows, 2 * num_v_heads)
-                and projected_states_qkvz.device.type
-                == projected_states_ba.device.type
-                == "cpu"
-                and projected_states_qkvz.dtype == projected_states_ba.dtype
-                and projected_states_qkvz.dtype in (torch.float16, torch.bfloat16)
-                and projected_states_qkvz.is_contiguous()
-                and projected_states_ba.is_contiguous()
-            ):
-                raise ValueError("Kunpeng QKVZ/BA contiguous layout contract mismatch")
-            if rows == 1:
-                # Consumers only read these disjoint partitions. The graph must
-                # retain each producer storage through its last alias consumer.
-                qkvz_offset = projected_states_qkvz.storage_offset()
-                ba_offset = projected_states_ba.storage_offset()
-                mixed_qkv = projected_states_qkvz.as_strided(
-                    (1, qkv_width), (qkv_width, 1), qkvz_offset
-                )
-                z = projected_states_qkvz.as_strided(
-                    (1, num_v_heads, self.head_v_dim),
-                    (v_width, self.head_v_dim, 1),
-                    qkvz_offset + qkv_width,
-                )
-                b = projected_states_ba.as_strided(
-                    (1, num_v_heads), (num_v_heads, 1), ba_offset
-                )
-                a = projected_states_ba.as_strided(
-                    (1, num_v_heads), (num_v_heads, 1), ba_offset + num_v_heads
-                )
-            else:
-                from sglang.srt.graph import ops as kunpeng_graph_ops
 
-                # Native conv/GDN/norm consumers require dense rows. Read each
-                # strided producer partition once into graph-owned storage;
-                # replace the parent cat/contiguous/reshape temporaries and boxed copy-out.
-                qkvz_stride = projected_states_qkvz.stride(0)
-                ba_stride = projected_states_ba.stride(0)
-                qkvz_offset = projected_states_qkvz.storage_offset()
-                ba_offset = projected_states_ba.storage_offset()
-                mixed_qkv_src = projected_states_qkvz.as_strided(
-                    (rows, qkv_width), (qkvz_stride, 1), qkvz_offset
-                )
-                z_src = projected_states_qkvz.as_strided(
-                    (rows, num_v_heads, self.head_v_dim),
-                    (qkvz_stride, self.head_v_dim, 1),
-                    qkvz_offset + qkv_width,
-                )
-                b_src = projected_states_ba.as_strided(
-                    (rows, num_v_heads), (ba_stride, 1), ba_offset
-                )
-                a_src = projected_states_ba.as_strided(
-                    (rows, num_v_heads), (ba_stride, 1), ba_offset + num_v_heads
-                )
-                # Four disjoint dense regions share one allocation. Its real
-                # storage survives through the last region's consumer.
-                qkv_numel = rows * qkv_width
-                z_numel = rows * v_width
-                ba_numel = rows * num_v_heads
-                packed = kunpeng_graph_ops.alloc_buffer(
-                    qkv_numel + z_numel + 2 * ba_numel,
-                    dtype=projected_states_qkvz.dtype,
-                )
-                mixed_qkv = packed.narrow(0, 0, qkv_numel).view(rows, qkv_width)
-                z = packed.narrow(0, qkv_numel, z_numel).view(
-                    rows, num_v_heads, self.head_v_dim
-                )
-                b = packed.narrow(0, qkv_numel + z_numel, ba_numel).view(
-                    rows, num_v_heads
-                )
-                a = packed.narrow(0, qkv_numel + z_numel + ba_numel, ba_numel).view(
-                    rows, num_v_heads
-                )
-                mixed_qkv.copy_(mixed_qkv_src)
-                z.copy_(z_src)
-                b.copy_(b_src)
-                a.copy_(a_src)
-        elif _is_cpu and _is_amx_available:
-            mixed_qkv, z, b, a = (
-                torch.ops.sgl_kernel.fused_qkvzba_split_reshape_cat_contiguous_cpu(
+        with pp_span("gdn.split"):
+            if (
+                self.num_v_heads // self.num_k_heads in [1, 2, 4]
+                and not _is_cpu
+                and not _is_npu
+            ):
+                mixed_qkv, z, b, a = fused_qkvzba_split_reshape_cat_contiguous(
                     projected_states_qkvz,
                     projected_states_ba,
-                    self.num_k_heads // self.attn_tp_size,
-                    self.num_v_heads // self.attn_tp_size,
+                    triton.cdiv(self.num_k_heads, self.attn_tp_size),
+                    triton.cdiv(self.num_v_heads, self.attn_tp_size),
                     self.head_k_dim,
                     self.head_v_dim,
                 )
+            elif _use_kunpeng_qwen and 1 <= projected_states_qkvz.shape[0] <= 4096:
+                num_k_heads = self.num_k_heads // self.attn_tp_size
+                num_v_heads = self.num_v_heads // self.attn_tp_size
+                k_width = num_k_heads * self.head_k_dim
+                v_width = num_v_heads * self.head_v_dim
+                qkv_width = 2 * k_width + v_width
+                rows = projected_states_qkvz.shape[0]
+                if not (
+                    projected_states_qkvz.ndim == projected_states_ba.ndim == 2
+                    and projected_states_qkvz.shape == (rows, qkv_width + v_width)
+                    and projected_states_ba.shape == (rows, 2 * num_v_heads)
+                    and projected_states_qkvz.device.type
+                    == projected_states_ba.device.type
+                    == "cpu"
+                    and projected_states_qkvz.dtype == projected_states_ba.dtype
+                    and projected_states_qkvz.dtype in (torch.float16, torch.bfloat16)
+                    and projected_states_qkvz.is_contiguous()
+                    and projected_states_ba.is_contiguous()
+                ):
+                    raise ValueError("Kunpeng QKVZ/BA contiguous layout contract mismatch")
+                if rows == 1:
+                    # Consumers only read these disjoint partitions. The graph must
+                    # retain each producer storage through its last alias consumer.
+                    qkvz_offset = projected_states_qkvz.storage_offset()
+                    ba_offset = projected_states_ba.storage_offset()
+                    mixed_qkv = projected_states_qkvz.as_strided(
+                        (1, qkv_width), (qkv_width, 1), qkvz_offset
+                    )
+                    z = projected_states_qkvz.as_strided(
+                        (1, num_v_heads, self.head_v_dim),
+                        (v_width, self.head_v_dim, 1),
+                        qkvz_offset + qkv_width,
+                    )
+                    b = projected_states_ba.as_strided(
+                        (1, num_v_heads), (num_v_heads, 1), ba_offset
+                    )
+                    a = projected_states_ba.as_strided(
+                        (1, num_v_heads), (num_v_heads, 1), ba_offset + num_v_heads
+                    )
+                else:
+                    from sglang.srt.graph import ops as kunpeng_graph_ops
+
+                    # Native conv/GDN/norm consumers require dense rows. Read each
+                    # strided producer partition once into graph-owned storage;
+                    # replace the parent cat/contiguous/reshape temporaries and boxed copy-out.
+                    qkvz_stride = projected_states_qkvz.stride(0)
+                    ba_stride = projected_states_ba.stride(0)
+                    qkvz_offset = projected_states_qkvz.storage_offset()
+                    ba_offset = projected_states_ba.storage_offset()
+                    mixed_qkv_src = projected_states_qkvz.as_strided(
+                        (rows, qkv_width), (qkvz_stride, 1), qkvz_offset
+                    )
+                    z_src = projected_states_qkvz.as_strided(
+                        (rows, num_v_heads, self.head_v_dim),
+                        (qkvz_stride, self.head_v_dim, 1),
+                        qkvz_offset + qkv_width,
+                    )
+                    b_src = projected_states_ba.as_strided(
+                        (rows, num_v_heads), (ba_stride, 1), ba_offset
+                    )
+                    a_src = projected_states_ba.as_strided(
+                        (rows, num_v_heads), (ba_stride, 1), ba_offset + num_v_heads
+                    )
+                    # Four disjoint dense regions share one allocation. Its real
+                    # storage survives through the last region's consumer.
+                    qkv_numel = rows * qkv_width
+                    z_numel = rows * v_width
+                    ba_numel = rows * num_v_heads
+                    packed = kunpeng_graph_ops.alloc_buffer(
+                        qkv_numel + z_numel + 2 * ba_numel,
+                        dtype=projected_states_qkvz.dtype,
+                    )
+                    mixed_qkv = packed.narrow(0, 0, qkv_numel).view(rows, qkv_width)
+                    z = packed.narrow(0, qkv_numel, z_numel).view(
+                        rows, num_v_heads, self.head_v_dim
+                    )
+                    b = packed.narrow(0, qkv_numel + z_numel, ba_numel).view(
+                        rows, num_v_heads
+                    )
+                    a = packed.narrow(0, qkv_numel + z_numel + ba_numel, ba_numel).view(
+                        rows, num_v_heads
+                    )
+                    mixed_qkv.copy_(mixed_qkv_src)
+                    z.copy_(z_src)
+                    b.copy_(b_src)
+                    a.copy_(a_src)
+            elif _is_cpu and _is_amx_available:
+                mixed_qkv, z, b, a = (
+                    torch.ops.sgl_kernel.fused_qkvzba_split_reshape_cat_contiguous_cpu(
+                        projected_states_qkvz,
+                        projected_states_ba,
+                        self.num_k_heads // self.attn_tp_size,
+                        self.num_v_heads // self.attn_tp_size,
+                        self.head_k_dim,
+                        self.head_v_dim,
+                    )
+                )
+            else:
+                query, key, value, z, b, a = self.fix_query_key_value_ordering(
+                    projected_states_qkvz, projected_states_ba
+                )
+                b = b.contiguous()
+                a = a.contiguous()
+
+                query, key, value = map(
+                    lambda x: x.reshape(x.shape[0], -1), (query, key, value)
+                )
+                mixed_qkv = torch.cat((query, key, value), dim=-1)
+
+        with pp_span("gdn.core"):
+            core_attn_out = self.attn(
+                forward_batch,
+                mixed_qkv=mixed_qkv,
+                a=a,
+                b=b,
             )
-        else:
-            query, key, value, z, b, a = self.fix_query_key_value_ordering(
-                projected_states_qkvz, projected_states_ba
-            )
-            b = b.contiguous()
-            a = a.contiguous()
 
-            query, key, value = map(
-                lambda x: x.reshape(x.shape[0], -1), (query, key, value)
-            )
-            mixed_qkv = torch.cat((query, key, value), dim=-1)
+        with pp_span("gdn.out_proj"):
+            z_shape_og = z.shape
+            # reshape input data into 2D tensor
+            core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
+            z = z.reshape(-1, z.shape[-1])
 
-        core_attn_out = self.attn(
-            forward_batch,
-            mixed_qkv=mixed_qkv,
-            a=a,
-            b=b,
-        )
+            # Add padding for DP-Attn
+            if core_attn_out.shape != z.shape:
+                core_attn_out_pad = torch.zeros_like(z)
+                core_attn_out_pad[: core_attn_out.shape[0], :] = core_attn_out
+                core_attn_out = core_attn_out_pad
 
-        z_shape_og = z.shape
-        # reshape input data into 2D tensor
-        core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
-        z = z.reshape(-1, z.shape[-1])
+            core_attn_out = self.norm(core_attn_out, z)
+            core_attn_out = core_attn_out.reshape(z_shape_og)
+            core_attn_out = core_attn_out.reshape(*core_attn_out.shape[:-2], -1)
 
-        # Add padding for DP-Attn
-        if core_attn_out.shape != z.shape:
-            core_attn_out_pad = torch.zeros_like(z)
-            core_attn_out_pad[: core_attn_out.shape[0], :] = core_attn_out
-            core_attn_out = core_attn_out_pad
-
-        core_attn_out = self.norm(core_attn_out, z)
-        core_attn_out = core_attn_out.reshape(z_shape_og)
-        core_attn_out = core_attn_out.reshape(*core_attn_out.shape[:-2], -1)
-
-        output, _ = self.out_proj(core_attn_out)
-        return output
+            output, _ = self.out_proj(core_attn_out)
+            return output
 
 
 class Qwen3_5LinearDecoderLayer(nn.Module):
@@ -723,10 +728,11 @@ class Qwen3_5LinearDecoderLayer(nn.Module):
         )
 
         if not forward_batch.forward_mode.is_idle():
-            hidden_states = self.linear_attn(
-                hidden_states,
-                forward_batch,
-            )
+            with pp_span("layer.attn"):
+                hidden_states = self.linear_attn(
+                    hidden_states,
+                    forward_batch,
+                )
 
         # Fully Connected
         hidden_states, residual = self.layer_communicator.prepare_mlp(
@@ -742,17 +748,18 @@ class Qwen3_5LinearDecoderLayer(nn.Module):
                 forward_batch
             )
         )
-        if isinstance(self.mlp, Qwen2MoeSparseMoeBlock):
-            hidden_states = self.mlp(
-                hidden_states,
-                forward_batch,
-                use_reduce_scatter,
-                should_allreduce_fusion,
-            )
-        else:
-            hidden_states = self.mlp(
-                hidden_states, should_allreduce_fusion, use_reduce_scatter
-            )
+        with pp_span("layer.mlp"):
+            if isinstance(self.mlp, Qwen2MoeSparseMoeBlock):
+                hidden_states = self.mlp(
+                    hidden_states,
+                    forward_batch,
+                    use_reduce_scatter,
+                    should_allreduce_fusion,
+                )
+            else:
+                hidden_states = self.mlp(
+                    hidden_states, should_allreduce_fusion, use_reduce_scatter
+                )
         if should_allreduce_fusion:
             hidden_states._sglang_needs_allreduce_fusion = True
         else:
@@ -951,7 +958,8 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
         """Full attention forward pass."""
-        qkv, _ = self.qkv_proj(hidden_states)
+        with pp_span("attn.qkv"):
+            qkv, _ = self.qkv_proj(hidden_states)
 
         use_native_batch = (
             _use_kunpeng_qwen
@@ -960,32 +968,37 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
             and self.attn_output_gate
             and not forward_batch.contains_image_inputs()
         )
-        if use_native_batch:
-            q, k, v, gate = qkv_layout(qkv)
-        elif self.attn_output_gate:
-            q_gate, k, v = qkv.split(
-                [self.q_size * 2, self.kv_size, self.kv_size], dim=-1
-            )
-            orig_shape = q_gate.shape[:-1]
-            q_gate = q_gate.view(*orig_shape, self.num_heads, -1)
-            q, gate = torch.chunk(q_gate, 2, dim=-1)
-            q = q.reshape(*orig_shape, -1)
-            gate = gate.reshape(*orig_shape, -1)
-        else:
-            q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        with pp_span("attn.qk_rope"):
+            if use_native_batch:
+                q, k, v, gate = qkv_layout(qkv)
+            elif self.attn_output_gate:
+                q_gate, k, v = qkv.split(
+                    [self.q_size * 2, self.kv_size, self.kv_size], dim=-1
+                )
+                orig_shape = q_gate.shape[:-1]
+                q_gate = q_gate.view(*orig_shape, self.num_heads, -1)
+                q, gate = torch.chunk(q_gate, 2, dim=-1)
+                q = q.reshape(*orig_shape, -1)
+                gate = gate.reshape(*orig_shape, -1)
+            else:
+                q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
 
-        if use_native_batch:
-            q, k = qknorm_rope(self, positions, q, k)
-        else:
-            q, k = self._apply_qk_norm(q, k)
-            q, k = self.rotary_emb(positions, q, k)
-        attn_output = self.attn(q, k, v, forward_batch)
+            if use_native_batch:
+                q, k = qknorm_rope(self, positions, q, k)
+            else:
+                q, k = self._apply_qk_norm(q, k)
+                q, k = self.rotary_emb(positions, q, k)
 
-        if self.attn_output_gate:
-            gate = torch.sigmoid(gate)
-            attn_output = attn_output * gate
+        with pp_span("attn.core"):
+            attn_output = self.attn(q, k, v, forward_batch)
 
-        output, _ = self.o_proj(attn_output)
+        with pp_span("attn.out_gate"):
+            if self.attn_output_gate:
+                gate = torch.sigmoid(gate)
+                attn_output = attn_output * gate
+
+        with pp_span("attn.o_proj"):
+            output, _ = self.o_proj(attn_output)
         return output
 
     def forward(
@@ -1007,11 +1020,12 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
         )
 
         if not forward_batch.forward_mode.is_idle():
-            hidden_states = self.self_attention(
-                positions=positions,
-                hidden_states=hidden_states,
-                forward_batch=forward_batch,
-            )
+            with pp_span("layer.attn"):
+                hidden_states = self.self_attention(
+                    positions=positions,
+                    hidden_states=hidden_states,
+                    forward_batch=forward_batch,
+                )
 
         # Fully Connected
         hidden_states, residual = self.layer_communicator.prepare_mlp(
@@ -1026,17 +1040,18 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
                 forward_batch
             )
         )
-        if isinstance(self.mlp, Qwen2MoeSparseMoeBlock):
-            hidden_states = self.mlp(
-                hidden_states,
-                forward_batch,
-                use_reduce_scatter,
-                should_allreduce_fusion,
-            )
-        else:
-            hidden_states = self.mlp(
-                hidden_states, should_allreduce_fusion, use_reduce_scatter
-            )
+        with pp_span("layer.mlp"):
+            if isinstance(self.mlp, Qwen2MoeSparseMoeBlock):
+                hidden_states = self.mlp(
+                    hidden_states,
+                    forward_batch,
+                    use_reduce_scatter,
+                    should_allreduce_fusion,
+                )
+            else:
+                hidden_states = self.mlp(
+                    hidden_states, should_allreduce_fusion, use_reduce_scatter
+                )
         if should_allreduce_fusion:
             hidden_states._sglang_needs_allreduce_fusion = True
         else:
@@ -1215,10 +1230,11 @@ class Qwen3_5ForCausalLM(nn.Module):
     ) -> Union[torch.Tensor, PPProxyTensors]:
         # Initialize hidden states
         if self.pp_group.is_first_rank:
-            if input_embeds is None:
-                hidden_states = self.embed_tokens(input_ids)
-            else:
-                hidden_states = input_embeds
+            with pp_span("model.embed"):
+                if input_embeds is None:
+                    hidden_states = self.embed_tokens(input_ids)
+                else:
+                    hidden_states = input_embeds
             residual = None
         else:
             assert pp_proxy_tensors is not None
@@ -1227,33 +1243,34 @@ class Qwen3_5ForCausalLM(nn.Module):
 
         aux_hidden_states = []
         # Pass through decoder layers
-        for layer_idx in range(self.start_layer, self.end_layer):
-            layer = self.layers[layer_idx]
-            with get_global_expert_distribution_recorder().with_current_layer(
-                layer_idx
-            ):
-                hidden_states, residual = layer(
-                    positions=positions,
-                    hidden_states=hidden_states,
-                    residual=residual,
-                    forward_batch=forward_batch,
-                    captured_last_layer_outputs=(
-                        aux_hidden_states
-                        if getattr(layer, "_is_layer_to_capture", False)
-                        else None
-                    ),
-                )
+        with pp_span("model.layers"):
+            for layer_idx in range(self.start_layer, self.end_layer):
+                layer = self.layers[layer_idx]
+                with get_global_expert_distribution_recorder().with_current_layer(
+                    layer_idx
+                ):
+                    hidden_states, residual = layer(
+                        positions=positions,
+                        hidden_states=hidden_states,
+                        residual=residual,
+                        forward_batch=forward_batch,
+                        captured_last_layer_outputs=(
+                            aux_hidden_states
+                            if getattr(layer, "_is_layer_to_capture", False)
+                            else None
+                        ),
+                    )
 
-            # Process deepstack embeddings if provided
-            if (
-                input_deepstack_embeds is not None
-                and input_deepstack_embeds.numel() > 0
-                and layer_idx < 3
-            ):
-                sep = self.hidden_size * layer_idx
-                hidden_states.add_(
-                    input_deepstack_embeds[:, sep : sep + self.hidden_size]
-                )
+                # Process deepstack embeddings if provided
+                if (
+                    input_deepstack_embeds is not None
+                    and input_deepstack_embeds.numel() > 0
+                    and layer_idx < 3
+                ):
+                    sep = self.hidden_size * layer_idx
+                    hidden_states.add_(
+                        input_deepstack_embeds[:, sep : sep + self.hidden_size]
+                    )
 
         # Return intermediate tensors for pipeline parallelism
         if not self.pp_group.is_last_rank:
@@ -1265,11 +1282,12 @@ class Qwen3_5ForCausalLM(nn.Module):
             )
 
         # Apply final normalization
-        if hidden_states.shape[0] != 0:
-            if residual is None:
-                hidden_states = self.norm(hidden_states)
-            else:
-                hidden_states, _ = self.norm(hidden_states, residual)
+        with pp_span("model.final_norm"):
+            if hidden_states.shape[0] != 0:
+                if residual is None:
+                    hidden_states = self.norm(hidden_states)
+                else:
+                    hidden_states, _ = self.norm(hidden_states, residual)
 
         if len(aux_hidden_states) == 0:
             return hidden_states

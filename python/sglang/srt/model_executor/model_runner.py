@@ -214,6 +214,8 @@ from sglang.srt.utils.patch_torch import (
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import (
     Kunpeng_PP_Profiler,
+    pp_perf_active,
+    pp_perf_window,
     pp_span,
 )
 from sglang.srt.utils.weight_checker import WeightChecker
@@ -3238,13 +3240,29 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 forward_batch,
             ) as recorder_outputs,
         ):
-            output = self._forward_raw(
-                forward_batch,
-                skip_attn_backend_init,
-                pp_proxy_tensors,
-                reinit_attn_backend,
-                split_forward_count,
+            # One flat window per prefill forward: every span is aggregated by
+            # name across all layers, so the per-layer trees do not explode.
+            # Skipped when the outer PP micro-batch loop already owns a window.
+            # TARGET_VERIFY is a decode-side step, not prefill.
+            prefill_window = (
+                pp_perf_window(
+                    "prefill",
+                    tag=f"tp{self.tp_rank}",
+                    flat=True,
+                )
+                if forward_batch.forward_mode.is_extend(include_draft_extend_v2=True)
+                and not forward_batch.forward_mode.is_target_verify()
+                and not pp_perf_active()
+                else contextlib.nullcontext()
             )
+            with prefill_window:
+                output = self._forward_raw(
+                    forward_batch,
+                    skip_attn_backend_init,
+                    pp_proxy_tensors,
+                    reinit_attn_backend,
+                    split_forward_count,
+                )
             if self.enable_elastic_ep:
                 output = self._maybe_rebalance_after_rank_fault(
                     output,

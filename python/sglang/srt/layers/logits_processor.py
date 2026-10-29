@@ -60,6 +60,7 @@ from sglang.srt.model_executor.forward_batch_info import (
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils.common import is_cpu_920f, is_npu, use_intel_amx_backend
 from sglang.srt.graph import ops as kunpeng
+from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import pp_span
 
 logger = logging.getLogger(__name__)
 
@@ -866,7 +867,8 @@ class LogitsProcessor(nn.Module):
             hidden_states, logits_metadata
         )
 
-        logits = self._compute_lm_head(hidden_states, lm_head, embedding_bias)
+        with pp_span("model.lm_head"):
+            logits = self._compute_lm_head(hidden_states, lm_head, embedding_bias)
 
         if self.logit_scale is not None:
             logits.mul_(self.logit_scale)

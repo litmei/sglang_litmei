@@ -19,7 +19,9 @@ Controlled by the environment variable ``SGLANG_KUNPENG_PP_PROFILE``
 The decode-only switch ``SGLANG_KUNPENG_DECODE_PROFILE=1`` enables the same
 instrumentation for the decode loops (disaggregated decode and collocated
 ``event_loop_overlap`` / ``event_loop_normal``), which frame one window per
-decode step.
+decode step.  ``SGLANG_KUNPENG_PREFILL_PROFILE=1`` enables the prefill window:
+one flat window per extend/draft-extend forward (see ``pp_perf_window``), where
+every span is aggregated by name across all layers.
 
 Two kinds of API are provided:
 
@@ -42,6 +44,7 @@ decorator returns the original function UNCHANGED, so there is *zero* runtime
 overhead in the hot path.  The two framing calls become trivial no-ops too.
 Only when the flag is set do the wrapping/timing/logging paths run.
 """
+import contextlib
 import functools
 import logging
 import os
@@ -64,9 +67,11 @@ logger.setLevel(logging.INFO)
 # Read once at import time.  As long as the flag is off the decorators are
 # stripped to the bare function, so there is no measurable overhead.
 _PP_PROFILE = os.environ.get("SGLANG_KUNPENG_PP_PROFILE", "0") == "1"
-# Decode-only switch: profiles the non-PP decode event loops without touching
-# the prefill side.
+# Decode-only switch: profiles the decode event loops without touching the
+# prefill side.
 _DECODE_PROFILE = os.environ.get("SGLANG_KUNPENG_DECODE_PROFILE", "0") == "1"
+# Prefill-only switch: opens a flat window around each extend forward.
+_PREFILL_PROFILE = os.environ.get("SGLANG_KUNPENG_PREFILL_PROFILE", "0") == "1"
 
 # Thresholds for the synthetic "[self]" row.  A [self] row is only meaningful
 # when this span owns recorded sub-spans that don't add up to its total; a bare
@@ -84,17 +89,29 @@ _tls.win = None
 
 
 def _enabled() -> bool:
-    return _PP_PROFILE or _DECODE_PROFILE
+    return _PP_PROFILE or _DECODE_PROFILE or _PREFILL_PROFILE
 
 
 class _Window:
-    __slots__ = ("tag", "root", "root_start", "root_abs", "children", "next_id")
+    __slots__ = (
+        "tag",
+        "root",
+        "root_start",
+        "root_abs",
+        "children",
+        "next_id",
+        "flat",
+    )
 
-    def __init__(self, root, tag):
+    def __init__(self, root, tag, flat=False):
         self.tag = tag
         self.root = root
         self.root_start = time.perf_counter()
         self.root_abs = time.time()
+        # Flat mode records every span as a direct child of the root, so the
+        # report aggregates by name across all layers instead of printing one
+        # subtree per layer. Used by the non-PP (incl. PD) prefill window.
+        self.flat = flat
         # parent_span_id -> list of (span_id, name, ms, cpu_ms, abs_start).
         # keyed by span instance (not by name) so distinct instances of a
         # same-named span (e.g. several commit_comm_work calls) stay separate.
@@ -172,7 +189,7 @@ class Kunpeng_PP_Profiler:
                 ms = (time.perf_counter() - frame["start"]) * 1000.0
                 cpu_ms = (time.thread_time() - frame["cpu"]) * 1000.0
                 stack.pop()
-                parent_id = stack[-1]["id"] if stack else 0
+                parent_id = 0 if win.flat else (stack[-1]["id"] if stack else 0)
                 win.children.setdefault(parent_id, []).append(
                     (frame["id"], display, ms, cpu_ms, frame["abs"])
                 )
@@ -242,7 +259,7 @@ class _SpanCtx:
             return False
         ms = (time.perf_counter() - frame["start"]) * 1000.0
         cpu_ms = (time.thread_time() - frame["cpu"]) * 1000.0
-        parent_id = stack[-1]["id"] if stack else 0
+        parent_id = 0 if win.flat else (stack[-1]["id"] if stack else 0)
         win.children.setdefault(parent_id, []).append(
             (frame["id"], frame["name"], ms, cpu_ms, frame["abs"])
         )
@@ -263,12 +280,44 @@ def pp_span(name, depth=0):
     return _SpanCtx(name, depth)
 
 
-def pp_perf_start(root="pp_mb", tag=""):
+def pp_perf_active() -> bool:
+    """Whether a profiling window is already open on this thread."""
+    return _win() is not None
+
+
+def pp_perf_decode_enabled() -> bool:
+    """Whether the decode event loops should open their per-step window."""
+    return _PP_PROFILE or _DECODE_PROFILE
+
+
+def pp_perf_prefill_enabled() -> bool:
+    """Whether a per-prefill-forward window should be opened."""
+    return _PP_PROFILE or _PREFILL_PROFILE
+
+
+def pp_perf_start(root="pp_mb", tag="", flat=False):
     """Open a measurement window at the top of each mb iteration."""
     if not _enabled():
         return
-    _tls.win = _Window(root, tag)
+    _tls.win = _Window(root, tag, flat=flat)
     _tls.stack = []
+
+
+@contextlib.contextmanager
+def pp_perf_window(root="prefill", tag="", flat=True):
+    """Open/close a window around one prefill forward.
+
+    No-op when profiling is off or a window is already open (e.g. the PP
+    micro-batch loop owns the outer window, or a decode loop is profiling).
+    """
+    if not pp_perf_prefill_enabled() or pp_perf_active():
+        yield
+        return
+    pp_perf_start(root, tag, flat=flat)
+    try:
+        yield
+    finally:
+        pp_perf_report()
 
 
 def pp_perf_is_decode_batch(batch) -> bool:
@@ -415,6 +464,20 @@ def _print_node(win, lines, indent, pfx, records):
                 )
 
 
+# Serializes whole reports inside one process.  Every TP rank writes to the
+# same stderr/log sink from its own process, so emitting line by line lets the
+# trees of different ranks interleave; one emit per report keeps each rank's
+# block contiguous (a single write() is atomic for O_APPEND files and, up to
+# PIPE_BUF = 4 KiB, for pipes).
+_REPORT_LOCK = threading.Lock()
+
+
+def _emit_block(lines):
+    """Emit a whole report as ONE log record instead of one per line."""
+    with _REPORT_LOCK:
+        logger.info("\n".join(lines))
+
+
 def pp_perf_report(print_report=True):
     """Close the window and, if it did real work, print the whole tree."""
     win = _win()
@@ -430,8 +493,7 @@ def pp_perf_report(print_report=True):
         root_records = win.children.get(0, [])
         _print_node(win, lines, "", pfx, root_records)
         lines.append(f"[{_fmt_abs(time.time())}] {pfx} loop end")
-        for line in lines:
-            logger.info(line)
+        _emit_block(lines)
     _tls.win = None
     _tls.stack = []
     return total

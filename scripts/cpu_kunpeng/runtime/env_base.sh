@@ -131,7 +131,8 @@ export SGLANG_USE_CPU_920F=1
 export TOKENIZER_WORKER_NUM=1
 export SGLANG_KUNPENG_PROFILE=0
 export SGLANG_KUNPENG_PP_PROFILE=0  # 1 = enable decode pipeline profiling
-export SGLANG_KUNPENG_DECODE_PROFILE=0  # 1 = per-step pp_perf timing for the non-PP decode loop
+export SGLANG_KUNPENG_DECODE_PROFILE=0  # 1 = per-step pp_perf timing for the decode loop
+export SGLANG_KUNPENG_PREFILL_PROFILE=0  # 1 = flat pp_perf timing for each prefill forward
 export SGLANG_ENABLE_BINARY_LAUNCH=1
 export SGLANG_ENABLE_NUMA_DUPLICATION=1
 export SGLANG_KUNPENG_DISABLE_MLA_ALL2ALL=0

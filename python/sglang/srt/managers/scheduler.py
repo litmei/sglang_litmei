@@ -252,6 +252,7 @@ from sglang.srt.utils.numa_utils import (
 )
 from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import (
     Kunpeng_PP_Profiler,
+    pp_perf_decode_enabled,
     pp_perf_is_decode_batch,
     pp_perf_report,
     pp_perf_start,
@@ -1702,7 +1703,8 @@ class Scheduler(
         """A normal scheduler loop."""
         while True:
             # No-op unless SGLANG_KUNPENG_DECODE_PROFILE / _PP_PROFILE is on.
-            pp_perf_start("decode", tag=f"tp{self.tp_rank}")
+            if pp_perf_decode_enabled():
+                pp_perf_start("decode", tag=f"tp{self.tp_rank}")
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
@@ -1746,7 +1748,8 @@ class Scheduler(
 
         while True:
             # No-op unless SGLANG_KUNPENG_DECODE_PROFILE / _PP_PROFILE is on.
-            pp_perf_start("decode", tag=f"tp{self.tp_rank}")
+            if pp_perf_decode_enabled():
+                pp_perf_start("decode", tag=f"tp{self.tp_rank}")
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)

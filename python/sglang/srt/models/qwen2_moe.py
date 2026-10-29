@@ -50,6 +50,7 @@ from sglang.srt.layers.dp_attention import (
     get_attention_tp_size,
     is_dp_attention_enabled,
 )
+from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import pp_span
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import (
     MergedColumnParallelLinear,
@@ -382,22 +383,23 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
 
     def _forward_shared_experts(self, hidden_states: torch.Tensor):
         shared_output = None
-        if self.shared_expert is not None:
-            shared_output = self.shared_expert(hidden_states)
-            if self.shared_expert_gate is not None:
-                if use_intel_amx_backend(self.shared_expert_gate):
-                    shared_output = torch.ops.sgl_kernel.fused_linear_sigmoid_mul(
-                        hidden_states,
-                        self.shared_expert_gate.weight,
-                        self.shared_expert_gate.bias,
-                        True,
-                        shared_output,
-                    )
-                else:
-                    shared_output = (
-                        F.sigmoid(self.shared_expert_gate(hidden_states))
-                        * shared_output
-                    )
+        with pp_span("moe.shared_expert"):
+            if self.shared_expert is not None:
+                shared_output = self.shared_expert(hidden_states)
+                if self.shared_expert_gate is not None:
+                    if use_intel_amx_backend(self.shared_expert_gate):
+                        shared_output = torch.ops.sgl_kernel.fused_linear_sigmoid_mul(
+                            hidden_states,
+                            self.shared_expert_gate.weight,
+                            self.shared_expert_gate.bias,
+                            True,
+                            shared_output,
+                        )
+                    else:
+                        shared_output = (
+                            F.sigmoid(self.shared_expert_gate(hidden_states))
+                            * shared_output
+                        )
 
         return shared_output
 
@@ -433,13 +435,16 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
 
     def _forward_router_experts(self, hidden_states: torch.Tensor):
         # router_logits: (num_tokens, n_experts)
-        router_logits, _ = self.gate(hidden_states)
-        topk_output = self.topk(hidden_states, router_logits)
+        with pp_span("moe.gate"):
+            router_logits, _ = self.gate(hidden_states)
+        with pp_span("moe.topk"):
+            topk_output = self.topk(hidden_states, router_logits)
         if self.enable_shared_expert_fusion and TopKOutputChecker.format_is_standard(
             topk_output
         ):
             topk_output = self._append_shared_to_topk_output(topk_output, hidden_states)
-        return self.experts(hidden_states, topk_output)
+        with pp_span("moe.experts"):
+            return self.experts(hidden_states, topk_output)
 
     def forward_normal_dual_stream(
         self,
@@ -487,12 +492,18 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
             # An out-of-place add would allocate a new tensor outside symm
             # memory, breaking subsequent symmetric collective operations.
             final_hidden_states += shared_output
-        if self.tp_size > 1 and not should_skip_post_experts_all_reduce(
-            is_tp_path=True,
-            use_reduce_scatter=use_reduce_scatter,
-            should_allreduce_fusion=should_allreduce_fusion,
+        if (
+            self.tp_size > 1
+            and not should_skip_post_experts_all_reduce(
+                is_tp_path=True,
+                use_reduce_scatter=use_reduce_scatter,
+                should_allreduce_fusion=should_allreduce_fusion,
+            )
         ):
-            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+            with pp_span("moe.allreduce"):
+                final_hidden_states = tensor_model_parallel_all_reduce(
+                    final_hidden_states
+                )
 
         return final_hidden_states.view(num_tokens, hidden_dim)
 
