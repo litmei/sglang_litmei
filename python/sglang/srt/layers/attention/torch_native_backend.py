@@ -31,16 +31,23 @@ class TorchNativeAttnBackend(AttentionBackend):
             self.kunpeng_qwen = QwenAttention()
 
     def get_kunpeng_graph_provider(self, runner):
-        if getattr(runner, "borrowed_qwen_target_runner", None) is not None:
-            # The 64-layer target provider does not describe the attached draft.
-            return None
-        if self.kunpeng_qwen is not None:
-            from sglang.srt.hardware_backend.cpu_kunpeng.qwen.graph_provider import (
-                QwenHybridGraphProvider,
-            )
+        from sglang.srt.hardware_backend.cpu_kunpeng.qwen import enabled
 
-            return QwenHybridGraphProvider(runner)
-        return None
+        if not enabled() or self.kunpeng_qwen is None:
+            return None
+        from sglang.srt.hardware_backend.cpu_kunpeng.qwen.graph_provider import (
+            QwenAttachedMTPGraphProvider,
+            QwenHybridGraphProvider,
+            draft_graph_capture_enabled,
+        )
+
+        if getattr(runner, "borrowed_qwen_target_runner", None) is not None:
+            # The 64-layer target provider does not describe the attached
+            # draft; a decode-chain-only provider does (opt-in).
+            if not draft_graph_capture_enabled():
+                return None
+            return QwenAttachedMTPGraphProvider(runner)
+        return QwenHybridGraphProvider(runner)
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init the metadata for a forward pass."""

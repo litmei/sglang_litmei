@@ -295,3 +295,40 @@ class QwenHybridGraphProvider:
             print(
                 f"[QwenRegisteredGraph] planned_contiguous_clones={count}", flush=True
             )
+
+
+def draft_graph_capture_enabled() -> bool:
+    """Whether the attached MTP draft decode chain may be captured."""
+    return os.environ.get("SGLANG_KUNPENG_DRAFT_GRAPH_CAPTURE", "0") == "1"
+
+
+class QwenAttachedMTPGraphProvider(QwenHybridGraphProvider):
+    """Capture provider for the attached one-layer MTP draft.
+
+    Unlike the target provider this only declares the chained draft *decode*
+    steps (one token per sequence, per-step attention backend).  Draft-extend
+    keeps the eager path: its extend branch consumes the prefill/kutacc shared
+    workspaces, which the draft does not own yet.
+
+    Enabled by ``SGLANG_KUNPENG_DRAFT_GRAPH_CAPTURE=1``.
+    """
+
+    def unsupported_reason(self, fb, kwargs):
+        if not fb.forward_mode.is_decode():
+            return "forward_mode"
+        if not 1 <= fb.batch_size <= 32:
+            return "batch_outside_1_32"
+        if fb.input_ids.numel() != fb.batch_size:
+            return "draft_decode_token_batch_mismatch"
+        spec_info = fb.spec_info
+        if spec_info is None or getattr(spec_info, "hidden_states", None) is None:
+            return "draft_hidden_states_missing"
+        if fb.contains_image_inputs():
+            return "image_inputs"
+        if fb.return_logprob:
+            return "return_logprob"
+        if kwargs.get("pp_proxy_tensors") is not None:
+            return "pp_proxy_tensors"
+        if kwargs.get("get_embedding", False):
+            return "get_embedding"
+        return None
