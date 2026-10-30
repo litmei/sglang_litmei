@@ -313,6 +313,23 @@ class QwenAttachedMTPGraphProvider(QwenHybridGraphProvider):
     Enabled by ``SGLANG_KUNPENG_DRAFT_GRAPH_CAPTURE=1``.
     """
 
+    def bind(self, runner, fb, kwargs):
+        if self.decompose_dense and not any(
+            getattr(module, "_kunpeng_bf16_weight_packed", False)
+            for module in runner.model.modules()
+        ):
+            # The borrowed MTP component keeps its dense projections on the
+            # plain F.linear path (never prepacked), so there is nothing to
+            # decompose. ATen capture records those linear/matmul ops
+            # directly instead.
+            self.decompose_dense = False
+            print(
+                "[QwenAttachedMTPGraph] dense decomposition disabled: "
+                "no packed dense weights in the draft component",
+                flush=True,
+            )
+        return super().bind(runner, fb, kwargs)
+
     def unsupported_reason(self, fb, kwargs):
         if not fb.forward_mode.is_decode():
             return "forward_mode"

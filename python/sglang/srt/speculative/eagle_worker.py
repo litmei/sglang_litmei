@@ -68,6 +68,11 @@ from sglang.srt.speculative.spec_utils import (
     select_top_k_tokens,
 )
 from sglang.srt.environ import envs
+from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import (
+    pp_perf_decode_enabled,
+    pp_perf_spec_accept,
+    pp_span,
+)
 from sglang.srt.utils import (
     MultiprocessingSerializer,
     empty_context,
@@ -100,6 +105,22 @@ if is_cuda():
     from sgl_kernel import segment_packbits  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+
+def _pp_log_accept(worker, batch, verify_output) -> None:
+    """Log drafted/accepted tokens per decode step under pp_perf profiling."""
+    if not pp_perf_decode_enabled() or batch.forward_mode.is_idle():
+        return
+    per_req = getattr(verify_output, "num_accepted_drafts_per_req_cpu", None)
+    if per_req is None or len(per_req) == 0:
+        return
+    bs = len(per_req)
+    pp_perf_spec_accept(
+        worker.target_worker.tp_rank,
+        bs,
+        bs * worker.speculative_num_draft_tokens,
+        int(sum(per_req)),
+    )
 
 
 def gather_index_cpu(logits_output, accepted_indices):
@@ -622,14 +643,17 @@ class EAGLEWorker(TpModelWorker):
             with self.draft_tp_context(
                 self.draft_model_runner.tp_group
             ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
-                spec_info = self.draft(batch)
+                with pp_span("spec.draft"):
+                    spec_info = self.draft(batch)
 
             set_time_batch(batch.reqs, "set_spec_draft_end_time", trace_only=True)
             set_time_batch(batch.reqs, "set_spec_verify_start_time", trace_only=True)
 
-            logits_output, verify_output, model_worker_batch, can_run_cuda_graph = (
-                self.verify(batch, spec_info)
-            )
+            with pp_span("spec.verify"):
+                logits_output, verify_output, model_worker_batch, can_run_cuda_graph = (
+                    self.verify(batch, spec_info)
+                )
+            _pp_log_accept(self, batch, verify_output)
 
             if get_global_tracing_enabled():
                 for idx, req in enumerate(batch.reqs):
@@ -650,7 +674,8 @@ class EAGLEWorker(TpModelWorker):
                     or batch.spec_info.verified_id.shape[0] > 0
                 ):
                     # decode is not finished
-                    self.forward_draft_extend_after_decode(batch)
+                    with pp_span("spec.draft_extend"):
+                        self.forward_draft_extend_after_decode(batch)
 
             set_time_batch(
                 batch.reqs, "set_spec_draft_extend_end_time", trace_only=True
@@ -1097,9 +1122,10 @@ class EAGLEWorker(TpModelWorker):
             spec_info.hidden_states = hidden_states
 
             # Run forward
-            logits_output = self.draft_model_runner.forward(
-                forward_batch, skip_attn_backend_init=True
-            ).logits_output
+            with pp_span("spec.draft_step"):
+                logits_output = self.draft_model_runner.forward(
+                    forward_batch, skip_attn_backend_init=True
+                ).logits_output
             maybe_detect_nan(logits_output.next_token_logits, f"draft_forward step {i}")
             topk_p, topk_index = self._softmax_topk(logits_output.next_token_logits)
             maybe_detect_oob(
@@ -1221,13 +1247,14 @@ class EAGLEWorker(TpModelWorker):
         maybe_detect_nan(logits_output.next_token_logits, "verify: target model logits")
 
         spec_info.hidden_states = logits_output.hidden_states
-        res: EagleVerifyOutput = spec_info.verify(
-            batch,
-            logits_output,
-            self.token_to_kv_pool_allocator,
-            self.page_size,
-            vocab_mask,
-        )
+        with pp_span("spec.verify_sample"):
+            res: EagleVerifyOutput = spec_info.verify(
+                batch,
+                logits_output,
+                self.token_to_kv_pool_allocator,
+                self.page_size,
+                vocab_mask,
+            )
 
         self._mtp_acceptance_record(res.num_accepted_drafts_per_req_cpu)
 

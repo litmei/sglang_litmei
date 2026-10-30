@@ -320,15 +320,20 @@ def pp_perf_window(root="prefill", tag="", flat=True):
         pp_perf_report()
 
 
-def pp_perf_event(message):
-    """Emit one standalone metric line in the pp-perf raw-message format.
+def pp_perf_spec_accept(tp_rank, batch_size, drafted, accepted):
+    """One-per-decode-step spec acceptance line (drafted vs accepted).
 
-    No-op unless a pp_perf switch is on, so callers can pay the cost of
-    computing the metric only when they check ``pp_perf_decode_enabled()``.
+    No-op unless a pp_perf switch is on. ``accepted`` counts draft tokens
+    only; the bonus token per request is added back for ``out_tokens``.
     """
-    if not _enabled():
+    if not _enabled() or batch_size <= 0:
         return
-    logger.info(message)
+    logger.info(
+        f"[tp{tp_rank}][spec] bs={batch_size} drafted={drafted} "
+        f"accepted={accepted} accept_rate={accepted / max(drafted, 1):.3f} "
+        f"out_tokens={accepted + batch_size} "
+        f"avg_out_len={(accepted + batch_size) / batch_size:.2f}"
+    )
 
 
 def pp_perf_is_decode_batch(batch) -> bool:

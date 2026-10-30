@@ -34,7 +34,7 @@ from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, Forw
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.hardware_backend.cpu_kunpeng.pp_perf import (
     pp_perf_decode_enabled,
-    pp_perf_event,
+    pp_perf_spec_accept,
     pp_span,
 )
 from sglang.srt.speculative.base_spec_worker import BaseDraftWorker, BaseSpecWorker
@@ -94,12 +94,11 @@ def _pp_log_accept_stats(worker, batch_output) -> None:
         return
     bs = int(accept_lens.numel())
     out_tokens = int(accept_lens.sum().item())
-    drafted = bs * worker.speculative_num_draft_tokens
-    accepted = out_tokens - bs
-    pp_perf_event(
-        f"[tp{worker.target_worker.tp_rank}][spec] bs={bs} drafted={drafted} "
-        f"accepted={accepted} accept_rate={accepted / max(drafted, 1):.3f} "
-        f"out_tokens={out_tokens} avg_out_len={out_tokens / bs:.2f}"
+    pp_perf_spec_accept(
+        worker.target_worker.tp_rank,
+        bs,
+        bs * worker.speculative_num_draft_tokens,
+        out_tokens - bs,
     )
 
 
