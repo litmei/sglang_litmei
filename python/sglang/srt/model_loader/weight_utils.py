@@ -279,7 +279,15 @@ def get_quant_config(
     if model_config.quantization == "gguf":
         return quant_cls.from_config({})
 
-    checkpoint_quant_spec = resolve_checkpoint_quant_spec(model_config.hf_config)
+    # ModelSlim keeps its per-layer description in quant_model_description.json.
+    # config.json may still carry a coarse marker from other Ascend runtimes
+    # (e.g. quant_method="ascend"); honoring it here would shadow the real
+    # description, so fall through to the file-based path below.
+    checkpoint_quant_spec = (
+        None
+        if model_config.quantization == "modelslim"
+        else resolve_checkpoint_quant_spec(model_config.hf_config)
+    )
     if checkpoint_quant_spec is not None:
         hf_quant_config = checkpoint_quant_spec.config
         # For modelopt_mixed, config.json's quantization_config may not
