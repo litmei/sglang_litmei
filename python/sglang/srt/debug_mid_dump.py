@@ -5,14 +5,20 @@ Usage:
     SGLANG_DEBUG_MID_DUMP_TOKENS=<prefill_token_count> \
     python -m sglang.launch_server ...
 
-Each rank writes ``<prefix>.rank<rank>.txt``.  Only the first forward whose
-input token count matches ``SGLANG_DEBUG_MID_DUMP_TOKENS`` (or the very first
-forward when it is unset) is recorded.  One line per tensor::
+Each rank writes ``<prefix>.rank<rank>.txt``.  Only forwards whose input token
+count matches ``SGLANG_DEBUG_MID_DUMP_TOKENS`` (or the first
+``SGLANG_DEBUG_MID_DUMP_CALLS`` forwards when it is unset) are recorded.  One
+line per tensor::
 
     call|name|shape|dtype|sum=..|mean=..|std=..|absmax=..|first=<N values>
 
-Set ``SGLANG_DEBUG_MID_DUMP_CALLS`` to record more than one matching forward.
 The dump is a no-op when ``SGLANG_DEBUG_MID_DUMP`` is unset.
+
+NOTE: SGLang's model runner calls ``model.forward(...)`` directly, which
+bypasses ``nn.Module.__call__`` and therefore the outer model's hooks.  The
+recording window is opened in ``embed_tokens``'s pre-hook and closed in
+``logits_processor``'s post-hook, because both are invoked through
+``__call__`` from inside the forward.
 """
 
 import os
@@ -80,12 +86,12 @@ def _dump(name, obj):
         fh.write(f"{_calls}|{name}|{_format(obj)}\n")
 
 
-def _model_pre_hook(module, args, kwargs):
+def _open_window(input_ids):
+    """Activate one recording window if this forward should be dumped."""
     global _active, _calls, _skip_logged
     if not _ENABLED or _calls >= _MAX_CALLS:
         _active = False
         return
-    input_ids = args[0] if args else kwargs.get("input_ids")
     n = int(input_ids.numel()) if isinstance(input_ids, torch.Tensor) else -1
     if _TOKENS is not None and n != _TOKENS:
         if not _skip_logged:
@@ -100,14 +106,17 @@ def _model_pre_hook(module, args, kwargs):
     _active = True
     _calls += 1
     print(f"[mid-dump] recording call={_calls} tokens={n}", flush=True)
-    _dump("input_ids", input_ids)
+    _dump("embed.input_ids", input_ids)
 
 
-def _model_post_hook(module, args, output):
+def _embed_pre_hook(module, args):
+    _open_window(args[0] if args else None)
+
+
+def _logits_post_hook(module, args, output):
     global _active
     if _active:
-        logits = getattr(output, "next_token_logits", output)
-        _dump("logits", logits)
+        _dump("logits", getattr(output, "next_token_logits", output))
     _active = False
 
 
@@ -128,8 +137,6 @@ def maybe_install_debug_hooks(model):
         f"calls={_MAX_CALLS}",
         flush=True,
     )
-    model.register_forward_pre_hook(_model_pre_hook, with_kwargs=True)
-    model.register_forward_hook(_model_post_hook)
 
     inner = getattr(model, "model", None)
     if inner is None:
@@ -137,9 +144,7 @@ def maybe_install_debug_hooks(model):
 
     embed = getattr(inner, "embed_tokens", None)
     if isinstance(embed, torch.nn.Module):
-        embed.register_forward_pre_hook(
-            lambda m, args: _dump("embed.input_ids", args[0] if args else None)
-        )
+        embed.register_forward_pre_hook(_embed_pre_hook)
         embed.register_forward_hook(_hook("embed.out"))
 
     for i, layer in enumerate(getattr(inner, "layers", []) or []):
@@ -169,3 +174,7 @@ def maybe_install_debug_hooks(model):
     norm = getattr(inner, "norm", None)
     if isinstance(norm, torch.nn.Module):
         norm.register_forward_hook(_hook("final_norm"))
+
+    logits_processor = getattr(model, "logits_processor", None)
+    if isinstance(logits_processor, torch.nn.Module):
+        logits_processor.register_forward_hook(_logits_post_hook)
