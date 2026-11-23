@@ -29,6 +29,7 @@ _FIRST = int(os.environ.get("SGLANG_DEBUG_MID_DUMP_FIRST", "8"))
 _active = False
 _calls = 0
 _path = None
+_skip_logged = False
 
 
 def _path_for_rank():
@@ -48,6 +49,7 @@ def _path_for_rank():
             os.makedirs(parent, exist_ok=True)
         with open(_path, "w") as f:
             f.write("# mid-dump\n")
+        print(f"[mid-dump] writing {_path}", flush=True)
     return _path
 
 
@@ -79,17 +81,25 @@ def _dump(name, obj):
 
 
 def _model_pre_hook(module, args, kwargs):
-    global _active, _calls
+    global _active, _calls, _skip_logged
     if not _ENABLED or _calls >= _MAX_CALLS:
         _active = False
         return
     input_ids = args[0] if args else kwargs.get("input_ids")
     n = int(input_ids.numel()) if isinstance(input_ids, torch.Tensor) else -1
     if _TOKENS is not None and n != _TOKENS:
+        if not _skip_logged:
+            _skip_logged = True
+            print(
+                f"[mid-dump] first forward tokens={n}, configured "
+                f"SGLANG_DEBUG_MID_DUMP_TOKENS={_TOKENS}; not dumping",
+                flush=True,
+            )
         _active = False
         return
     _active = True
     _calls += 1
+    print(f"[mid-dump] recording call={_calls} tokens={n}", flush=True)
     _dump("input_ids", input_ids)
 
 
@@ -113,6 +123,11 @@ def maybe_install_debug_hooks(model):
     if not _ENABLED:
         return
 
+    print(
+        f"[mid-dump] hooks installed prefix={_PREFIX} tokens={_TOKENS} "
+        f"calls={_MAX_CALLS}",
+        flush=True,
+    )
     model.register_forward_pre_hook(_model_pre_hook, with_kwargs=True)
     model.register_forward_hook(_model_post_hook)
 
