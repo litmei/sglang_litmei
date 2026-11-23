@@ -819,6 +819,10 @@ class Qwen3ForCausalLM(nn.Module):
         # For EAGLE3 support
         self.capture_aux_hidden_states = False
 
+        from sglang.srt.debug_mid_dump import maybe_install_debug_hooks
+
+        maybe_install_debug_hooks(self)
+
     def get_input_embeddings(self) -> nn.Embedding:
         return self.model.get_input_embeddings()
 
