@@ -299,6 +299,10 @@ def register_primitives():
         from .tilelang_gdn_verify import register_tilelang_verify
 
         register_tilelang_verify(bridge, _register_graph_dispatch)
+    if os.getenv("SGLANG_KUNPENG_GQA_ROWS_TILELANG", "0") == "1":
+        from .tilelang_gqa_rows import register_tilelang_gqa_rows
+
+        register_tilelang_gqa_rows(bridge, _register_graph_dispatch)
     if os.getenv("SGLANG_KUNPENG_QWEN_GDN_POSTCONV_STRIDED", "0") == "1":
         _register_p20(bridge)
     if os.getenv("SGLANG_KUNPENG_QWEN_GDN_HEAD_PARALLEL", "0") == "1":

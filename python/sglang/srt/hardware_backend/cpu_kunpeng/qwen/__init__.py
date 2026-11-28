@@ -50,5 +50,7 @@ def precompile_ops(model_runner):
     if not enabled():
         return
     from .tilelang_gdn_verify import precompile_gdn_verify
+    from .tilelang_gqa_rows import precompile_gqa_rows
 
     precompile_gdn_verify(model_runner)
+    precompile_gqa_rows(model_runner)

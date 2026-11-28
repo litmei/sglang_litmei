@@ -477,6 +477,36 @@ def _note_draft_extend_clip(tokens, loc, counts):
 # (`qwen_graph_limits::decode_tokens`, mirrored by the Python shape adapter).
 GQA_ROW_BLOCK = NATIVE_DECODE_MAX_TOKENS
 
+_TILELANG_GQA = os.environ.get("SGLANG_KUNPENG_GQA_ROWS_TILELANG", "0") == "1"
+
+if _TILELANG_GQA:
+    print(
+        "[Qwen] SGLANG_KUNPENG_GQA_ROWS_TILELANG=1: GQA decode/rows uses the TileLang kernel.",
+        flush=True,
+    )
+
+
+def _tilelang_gqa_rows(query, kb, vb, table, requests, lengths, scale):
+    """Run the TileLang GQA rows kernel; ``None`` means use the C++ path."""
+    from . import tilelang_gqa_rows as tlg
+
+    rows = int(query.shape[0])
+    if tlg.tilelang_disabled(rows):
+        return None
+    if not tlg.supported(query, kb, vb, table, requests, lengths, scale):
+        return None
+    try:
+        # Compiling must not leak its own torch calls into the captured graph.
+        with torch._C._DisableTorchDispatch():
+            tlg.prepare(query, kb, vb, table, requests, lengths, scale)
+    except Exception as exc:
+        # Keep serving: this row count degrades to the C++ kernel below.
+        tlg.mark_failed(rows, exc, query, kb, vb, table, requests, lengths)
+        return None
+    return ops.qwen_gqa_rows_tilelang(
+        query, kb, vb, table, requests, lengths, scale
+    )
+
 
 def rowwise_gqa(query, kb, vb, table, requests, lengths, scale):
     """Row-wise cache attention for an arbitrary number of rows.
@@ -488,6 +518,12 @@ def rowwise_gqa(query, kb, vb, table, requests, lengths, scale):
     free of a row-count limit above the kernel's single-call capacity.
     """
     rows = query.shape[0]
+    if _TILELANG_GQA and rows <= GQA_ROW_BLOCK:
+        output = _tilelang_gqa_rows(
+            query, kb, vb, table, requests, lengths, scale
+        )
+        if output is not None:
+            return output
     if not is_capturing() or rows <= GQA_ROW_BLOCK:
         op = ops.qwen_gqa_rows if is_capturing() else ops.qwen_gqa_decode
         output, _ = op(query, kb, vb, table, requests, lengths, scale)
@@ -497,15 +533,16 @@ def rowwise_gqa(query, kb, vb, table, requests, lengths, scale):
     ).view(query.shape)
     for begin in range(0, rows, GQA_ROW_BLOCK):
         stop = min(begin + GQA_ROW_BLOCK, rows)
-        piece, _ = ops.qwen_gqa_rows(
-            query[begin:stop],
-            kb,
-            vb,
-            table,
-            requests[begin:stop],
-            lengths[begin:stop],
-            scale,
-        )
+        chunk = (query[begin:stop], requests[begin:stop], lengths[begin:stop])
+        piece = None
+        if _TILELANG_GQA:
+            piece = _tilelang_gqa_rows(
+                chunk[0], kb, vb, table, chunk[1], chunk[2], scale
+            )
+        if piece is None:
+            piece, _ = ops.qwen_gqa_rows(
+                chunk[0], kb, vb, table, chunk[1], chunk[2], scale
+            )
         ops.copy_kunpeng(output[begin:stop], piece)
     return output
 
